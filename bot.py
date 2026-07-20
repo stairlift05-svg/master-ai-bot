@@ -168,16 +168,16 @@ DB_URL     = Cfg.s("DATABASE_URL")
 
 # ── 10 جفت‌ارز برتر فیوچرز Phemex ──────────────────────────────────────
 SYMBOLS = Cfg.lst("SYMBOLS", 
-    "BTC/USDT,"
-    "ETH/USDT,"
-    "SOL/USDT,"
-    "XRP/USDT,"
-    "BNB/USDT,"
-    "DOGE/USDT,"
-    "ADA/USDT,"
-    "AVAX/USDT,"
-    "DOT/USDT,"
-    "LINK/USDT"
+    "BTC/USDT:USDT,"
+    "ETH/USDT:USDT,"
+    "SOL/USDT:USDT,"
+    "XRP/USDT:USDT,"
+    "BNB/USDT:USDT,"
+    "DOGE/USDT:USDT,"
+    "ADA/USDT:USDT,"
+    "AVAX/USDT:USDT,"
+    "DOT/USDT:USDT,"
+    "LINK/USDT:USDT"
 )
 
 TF         = Cfg.s("TIMEFRAME", "5m")
@@ -185,12 +185,12 @@ RISK_PCT   = Cfg.f("RISK_PER_TRADE", 1.0)
 MAX_DD     = Cfg.f("MAX_DRAWDOWN", 10.0)
 MAX_POS    = Cfg.i("MAX_POSITIONS", 3)
 DRY_RUN    = Cfg.b("DRY_RUN", True)
-TESTNET    = Cfg.b("PHEMEX_TESTNET", True)
+TESTNET    = Cfg.b("PHEMEX_TESTNET", False)  # تغییر به False برای بازار واقعی
 PORT       = Cfg.i("PORT", 10000)
 
 log.info(
-    "Config: symbols=%d tf=%s risk=%.1f%% dd=%.1f%% dry=%s",
-    len(SYMBOLS), TF, RISK_PCT, MAX_DD, DRY_RUN
+    "Config: symbols=%d tf=%s risk=%.1f%% dd=%.1f%% dry=%s testnet=%s",
+    len(SYMBOLS), TF, RISK_PCT, MAX_DD, DRY_RUN, TESTNET
 )
 
 # ============================================================================
@@ -601,7 +601,7 @@ class Alerts:
 TG = Alerts()
 
 # ============================================================================
-# EXCHANGE - پشتیبانی از فیوچرز با فرمت صحیح
+# EXCHANGE - نسخه اصلاح شده برای فیوچرز
 # ============================================================================
 class Exchange:
     def __init__(self):
@@ -619,38 +619,56 @@ class Exchange:
                 "apiKey"          : API_KEY,
                 "secret"          : API_SECRET,
                 "enableRateLimit" : True,
-                "timeout"         : 20000,
+                "timeout"         : 30000,
                 "options"         : {
                     "defaultType": "swap",  # فیوچرز
-                    "adjustForTimeDifference": True,
                 },
             })
+            
+            # غیرفعال کردن Testnet برای دسترسی به بازارهای واقعی
             if TESTNET:
                 self._ex.set_sandbox_mode(True)
+                log.info("⚠️  حالت Testnet فعال است")
+            else:
+                log.info("🌐 حالت Mainnet (واقعی) فعال است")
             
-            # بارگذاری بازارها برای تأیید
-            self._ex.load_markets()
-            log.info("✅ Exchange: Phemex (testnet=%s) - %d بازار بارگذاری شد", 
-                     TESTNET, len(self._ex.markets))
+            # بارگذاری بازارها
+            markets = self._ex.load_markets()
+            log.info("✅ Exchange: Phemex - %d بازار بارگذاری شد", len(markets))
+            
+            # نمایش بازارهای موجود برای تأیید
+            swap_markets = [s for s in markets.keys() if s.endswith(":USDT")]
+            log.info("📊 %d بازار فیوچرز USDT یافت شد", len(swap_markets))
+            
+            # بررسی وجود نمادهای مورد نظر
+            for sym in SYMBOLS:
+                if sym in markets:
+                    log.info("   ✅ %s موجود است", sym)
+                else:
+                    log.warning("   ❌ %s موجود نیست", sym)
+                    
         except Exception as e:
             log.error("Exchange connect: %s", e)
             self._ex = None
 
     def _retry_ohlcv(self, sym: str, tf: str, lim: int) -> List:
-        for attempt in range(3):
+        for attempt in range(5):
             try:
                 if self._ex is None:
                     raise ConnectionError("Exchange نیست")
-                # اطمینان از وجود نماد در بازار
+                
+                # اطمینان از بارگذاری بازارها
                 if sym not in self._ex.markets:
-                    log.warning("نماد %s در بازار موجود نیست", sym)
-                    raise ValueError(f"Symbol {sym} not found")
+                    log.warning("بارگذاری مجدد بازارها...")
+                    self._ex.load_markets()
+                    
                 return self._ex.fetch_ohlcv(sym, tf, limit=lim)
+                
             except Exception as e:
-                log.warning("ohlcv attempt %d [%s]: %s", attempt+1, sym, e)
-                if attempt < 2:
+                log.warning("ohlcv attempt %d [%s]: %s", attempt+1, sym, str(e)[:100])
+                if attempt < 4:
                     time.sleep(2 ** attempt)
-        raise RuntimeError(f"ohlcv {sym} شکست")
+        raise RuntimeError(f"ohlcv {sym} شکست پس از 5 تلاش")
 
     def ohlcv(self, sym: str, tf: str, lim: int = 150) -> pd.DataFrame:
         raw = self._retry_ohlcv(sym, tf, lim)
@@ -1110,11 +1128,11 @@ TR = Trail(2.0)
 # ============================================================================
 class Corr:
     _G = [
-        {"BTC/USDT","ETH/USDT","BNB/USDT"},
-        {"SOL/USDT","AVAX/USDT"},
-        {"XRP/USDT","ADA/USDT"},
-        {"DOGE/USDT","SHIB/USDT"},
-        {"DOT/USDT","LINK/USDT"},
+        {"BTC/USDT:USDT","ETH/USDT:USDT","BNB/USDT:USDT"},
+        {"SOL/USDT:USDT","AVAX/USDT:USDT"},
+        {"XRP/USDT:USDT","ADA/USDT:USDT"},
+        {"DOGE/USDT:USDT","SHIB/USDT:USDT"},
+        {"DOT/USDT:USDT","LINK/USDT:USDT"},
     ]
 
     def ok(self, sym: str, open_s: set) -> bool:
@@ -1236,14 +1254,21 @@ class Engine:
                 log.error("[%s] analyze: %s", sym, e)
 
     def _analyze(self, sym: str, bal: float, n_open: int):
-        df = EX.ohlcv(sym, TF, 150)
+        try:
+            df = EX.ohlcv(sym, TF, 150)
+        except Exception as e:
+            log.error("[%s] دریافت داده شکست: %s", sym, e)
+            return
+            
         if len(df) < 40:
+            log.warning("[%s] داده کافی نیست: %d", sym, len(df))
             return
 
         tech = TECH.run(df)
         sig  = AI_ENG.analyze(df, sym, tech, n_open)
 
         if not sig.ok:
+            log.info("[%s] سیگنال ضعیف: %s (conf=%d%%)", sym, sig.action, sig.conf)
             return
 
         price = sig.ind.get("price") or float(df["close"].iloc[-1])
@@ -1260,6 +1285,7 @@ class Engine:
 
         sz = SZ.calc(bal, price, sl)
         if not SZ.ok(sz):
+            log.warning("[%s] حجم نامناسب: qty=%.6f val=%.2f", sym, sz["qty"], sz["val"])
             return
 
         self._open(sym, sig, price, sl, tp, sz)
