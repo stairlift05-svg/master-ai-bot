@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Test Script for Phemex Futures Trading (نسخه نهایی)
+Test Script for Phemex Futures Trading (نسخه نهایی با اصلاح حداقل حجم)
 ✅ دریافت موجودی
 ✅ انجام یک معامله خرید (لانگ) و بستن بعد ۳۰ ثانیه
 ✅ انجام یک معامله فروش (شورت) و بستن بعد ۳۰ ثانیه
 ✅ گزارش کامل نتایج
+✅ جلوگیری از خروج زودهنگام
 """
 
 import os
@@ -42,7 +43,7 @@ API_KEY    = os.getenv("PHEMEX_API_KEY", "").strip()
 API_SECRET = os.getenv("PHEMEX_API_SECRET", "").strip()
 TESTNET    = os.getenv("PHEMEX_TESTNET", "true").lower() == "true"
 SYMBOL     = os.getenv("TEST_SYMBOL", "BTC/USDT:USDT").strip()
-POSITION_SIZE_USD = 10.0  # حجم معامله به دلار
+POSITION_SIZE_USD = 100.0  # افزایش به ۱۰۰ دلار برای اطمینان از عبور از حداقل حجم
 
 if not API_KEY or not API_SECRET:
     log.error("❌ PHEMEX_API_KEY و PHEMEX_API_SECRET باید تنظیم شوند!")
@@ -91,22 +92,35 @@ def get_price(exchange, symbol):
         log.error(f"خطا در دریافت قیمت {symbol}: {e}")
         return None
 
-# ── محاسبه حجم بر اساس مبلغ دلاری (اصلاح شده) ──────────────────────
+# ── محاسبه حجم با اصلاح حداقل و دقت ──────────────────────────────────
 def calculate_quantity(exchange, symbol, usd_amount):
     market = exchange.market(symbol)
     price = get_price(exchange, symbol)
     if not price:
         return None
     
-    # دریافت حداقل حجم مجاز
+    # دریافت حداقل حجم مجاز از بازار
     min_qty = market.get("limits", {}).get("amount", {}).get("min")
+    # اگر None بود، مقدار پیش‌فرض بر اساس نماد تنظیم شود
     if min_qty is None:
-        min_qty = 0.0001  # پیش‌فرض برای BTC
+        # حداقل حجم برای بیت‌کوین 0.001 و برای سایر ارزها معمولاً 0.01 یا 1 است
+        if "BTC" in symbol:
+            min_qty = 0.001
+        elif "ETH" in symbol:
+            min_qty = 0.01
+        else:
+            min_qty = 1.0  # برای توکن‌های معمولی
     
     # دریافت دقت حجم (تعداد ارقام اعشار)
     precision = market.get("precision", {}).get("amount")
     if precision is None:
-        precision = 0.00001  # پیش‌فرض
+        # مقدار پیش‌فرض بر اساس نماد
+        if "BTC" in symbol:
+            precision = 0.001
+        elif "ETH" in symbol:
+            precision = 0.01
+        else:
+            precision = 1.0
     
     # محاسبه حجم اولیه
     qty = usd_amount / price
@@ -116,17 +130,12 @@ def calculate_quantity(exchange, symbol, usd_amount):
         qty = min_qty
     
     # گرد کردن به نزدیک‌ترین مضرب دقت
-    # اما اگر دقت خیلی بزرگ است (مثلاً 0.001)، ممکن است qty به صفر برسد
-    # بنابراین اگر پس از گرد کردن صفر شد، حداقل را انتخاب کن
     qty_rounded = round(qty / precision) * precision
+    # اگر پس از گرد کردن از حداقل کمتر شد، حداقل را انتخاب کن
     if qty_rounded < min_qty:
         qty_rounded = min_qty
     
-    # اطمینان از اینکه حجم از حداقل کمتر نشود
-    if qty_rounded < min_qty:
-        qty_rounded = min_qty
-    
-    log.info(f"حجم محاسبه‌شده: {qty_rounded:.8f} (حداقل مجاز: {min_qty})")
+    log.info(f"حجم محاسبه‌شده: {qty_rounded:.8f} (حداقل مجاز: {min_qty}, دقت: {precision})")
     return qty_rounded
 
 # ── باز کردن معامله ──────────────────────────────────────────────────
@@ -215,6 +224,10 @@ def run_test():
 if __name__ == "__main__":
     try:
         run_test()
+        # برای جلوگیری از خروج زودهنگام در Render، یک حلقه بی‌نهایت
+        log.info("🔄 برنامه در حالت انتظار باقی می‌ماند...")
+        while True:
+            time.sleep(60)
     except KeyboardInterrupt:
         log.info("🛑 تست توسط کاربر متوقف شد.")
     except Exception as e:
