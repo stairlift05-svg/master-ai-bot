@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master-AI Trading Bot Pro v5.1.0
-Python 3.11 | Render + GitHub + UptimeRobot
+Master-AI Trading Bot Pro v5.1.0 - Flask Edition
+قابل اجرا روی Render با پایداری بالا
 """
 
-# ============================================================================
-# IMPORTS
-# ============================================================================
 import os
 import sys
 import re
@@ -21,14 +18,13 @@ from datetime import datetime, timezone
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Tuple
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # ── بررسی Python version ──────────────────────────────────────────────────
 if sys.version_info < (3, 10):
     print("[CRITICAL] Python 3.10+ لازم است")
     sys.exit(1)
 
-# ── Third-party با بررسی وجود ────────────────────────────────────────────
+# ── Third-party ────────────────────────────────────────────────────────────
 _MISSING = []
 try:
     import pandas as pd
@@ -55,19 +51,25 @@ try:
     _TA_OK = True
 except ImportError:
     _TA_OK = False
-    print("[WARNING] pandas-ta نصب نیست - از indicators دستی استفاده می‌شود")
+    print("[WARNING] pandas-ta نصب نیست")
 
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass  # بدون dotenv هم کار می‌کند
+    pass
 
 try:
     from tenacity import retry, stop_after_attempt, wait_exponential
     _TENACITY_OK = True
 except ImportError:
     _TENACITY_OK = False
+
+# ── Flask ──────────────────────────────────────────────────────────────────
+try:
+    from flask import Flask, jsonify, render_template_string
+except ImportError:
+    _MISSING.append("flask")
 
 if _MISSING:
     print(f"[CRITICAL] پکیج‌های گمشده: {_MISSING}")
@@ -136,13 +138,11 @@ class Cfg:
     def validate():
         errs, warns = [], []
 
-        # API
         if not Cfg.s("PHEMEX_API_KEY"):
             warns.append("PHEMEX_API_KEY خالی (فقط DRY_RUN)")
         if not Cfg.s("PHEMEX_API_SECRET"):
             warns.append("PHEMEX_API_SECRET خالی (فقط DRY_RUN)")
 
-        # Risk
         r = Cfg.f("RISK_PER_TRADE", 1.0)
         if not 0.1 <= r <= 5.0:
             errs.append(f"RISK_PER_TRADE={r} باید 0.1-5.0 باشد")
@@ -151,14 +151,9 @@ class Cfg:
         if not 1.0 <= dd <= 50.0:
             errs.append(f"MAX_DRAWDOWN={dd} باید 1-50 باشد")
 
-        # TF
         tf = Cfg.s("TIMEFRAME", "5m")
         if tf not in ["1m","3m","5m","15m","30m","1h","4h","1d"]:
             errs.append(f"TIMEFRAME={tf} نامعتبر")
-
-        # Telegram
-        if not Cfg.s("TELEGRAM_BOT_TOKEN"):
-            warns.append("TELEGRAM_BOT_TOKEN خالی - هشدار غیرفعال")
 
         for w in warns:
             log.warning("⚠️  %s", w)
@@ -192,11 +187,9 @@ log.info(
 )
 
 # ============================================================================
-# INDICATORS - بدون pandas_ta (محاسبه دستی + pandas_ta اگر موجود بود)
+# INDICATORS
 # ============================================================================
 class Indicators:
-    """محاسبه indicators - دو حالت: pandas_ta یا دستی"""
-
     @staticmethod
     def rsi(close: pd.Series, n: int = 14) -> pd.Series:
         if _TA_OK:
@@ -206,7 +199,6 @@ class Indicators:
                     return r
             except Exception:
                 pass
-        # دستی
         delta = close.diff()
         up   = delta.clip(lower=0)
         down = (-delta).clip(lower=0)
@@ -235,7 +227,6 @@ class Indicators:
                     return r
             except Exception:
                 pass
-        # دستی
         tr = pd.concat([
             high - low,
             (high - close.shift()).abs(),
@@ -254,7 +245,6 @@ class Indicators:
                     return r.iloc[:,0], r.iloc[:,1], r.iloc[:,2]
             except Exception:
                 pass
-        # دستی
         e_fast = close.ewm(span=fast, adjust=False).mean()
         e_slow = close.ewm(span=slow, adjust=False).mean()
         line   = e_fast - e_slow
@@ -273,7 +263,6 @@ class Indicators:
                     return r.iloc[:,0], r.iloc[:,1], r.iloc[:,2]
             except Exception:
                 pass
-        # دستی
         mid = close.rolling(n).mean()
         sd  = close.rolling(n).std()
         return mid - std*sd, mid, mid + std*sd
@@ -289,7 +278,6 @@ class Indicators:
                     return r.iloc[:,0], r.iloc[:,1]
             except Exception:
                 pass
-        # دستی
         lo  = low.rolling(k).min()
         hi  = high.rolling(k).max()
         stk = 100 * (close - lo) / (hi - lo + 1e-10)
@@ -298,12 +286,11 @@ class Indicators:
 
     @staticmethod
     def safe(s, idx: int = -1) -> float:
-        """دریافت امن آخرین مقدار یک Series"""
         try:
             if s is None:
                 return 0.0
             v = s.iloc[idx]
-            return float(v) if not (v != v) else 0.0  # NaN check
+            return float(v) if not (v != v) else 0.0
         except Exception:
             return 0.0
 
@@ -427,7 +414,6 @@ class DB:
             log.error("DB: %s | %.50s", e, sql)
         return None
 
-    # ── Helpers ───────────────────────────────────────────────────────────
     def open_trades(self) -> List[Dict]:
         rows = self.run(
             "SELECT id,symbol,side,entry_price,quantity,"
@@ -514,41 +500,111 @@ class DB:
 database = DB()
 
 # ============================================================================
-# ALERTS
+# ALERTS - نسخه فارسی
 # ============================================================================
 class Alerts:
     def __init__(self):
         self._sent : Dict[str, float] = {}
         self._lock = threading.Lock()
+        self._chat_id = TG_CHAT
+
+    def _get_chat_id(self):
+        """دریافت خودکار Chat ID از تلگرام"""
+        if self._chat_id:
+            return self._chat_id
+        if not TG_TOKEN:
+            return None
+        try:
+            res = requests.get(
+                f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
+                timeout=5
+            ).json()
+            if res.get("ok") and res.get("result"):
+                self._chat_id = str(res["result"][-1]["message"]["chat"]["id"])
+                log.info(f"✅ Chat ID دریافت شد: {self._chat_id}")
+                return self._chat_id
+        except Exception as e:
+            log.warning(f"دریافت Chat ID: {e}")
+        return None
 
     def send(self, msg: str, key: str = "", force: bool = False):
+        """ارسال پیام به تلگرام با حذف خودکار"""
         log.info("📢 %s", msg[:100].replace("\n"," "))
-        if not (TG_TOKEN and TG_CHAT):
+        if not TG_TOKEN:
             return
+            
+        chat_id = self._get_chat_id()
+        if not chat_id:
+            return
+            
         if key and not force:
             with self._lock:
                 if time.time() - self._sent.get(key,0) < 30:
                     return
                 self._sent[key] = time.time()
+                
         threading.Thread(
-            target=self._post, args=(msg,), daemon=True
+            target=self._post, args=(msg, chat_id), daemon=True
         ).start()
 
-    def _post(self, msg: str):
+    def _post(self, msg: str, chat_id: str):
         try:
             requests.post(
                 f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                data={"chat_id":TG_CHAT,"text":msg,"parse_mode":"HTML"},
+                data={
+                    "chat_id": chat_id,
+                    "text": msg,
+                    "parse_mode": "HTML"
+                },
                 timeout=10
             )
         except Exception as e:
             log.warning("Telegram: %s", e)
 
+    def send_dashboard(self, engine_stats: Dict, balance: float):
+        """ارسال داشبورد کامل به فارسی"""
+        dd = engine_stats.get("dd", {})
+        td = engine_stats.get("today", {})
+        ai = engine_stats.get("ai", {})
+        pos = engine_stats.get("open_pos", 0)
+        
+        # محاسبه وین‌ریت کلی
+        total_trades = td.get("trades", 0)
+        wins = td.get("wins", 0)
+        win_rate = td.get("wr", 0)
+        
+        # وضعیت ربات
+        status = "🟢 فعال" if not dd.get("halted") else "🔴 متوقف"
+        dd_pct = dd.get("dd", 0)
+        
+        msg = (
+            f"🤖 <b>داشبورد Master-AI Bot</b>\n"
+            f"{'🔵 DRY-RUN' if DRY_RUN else '🟢 LIVE'} | {TF}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 <b>موجودی:</b> {balance:,.2f} USDT\n"
+            f"📊 <b>وضعیت:</b> {status}\n"
+            f"📉 <b>Drawdown:</b> {dd_pct:.1f}% / {MAX_DD}%\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📈 <b>آمار امروز:</b>\n"
+            f"   معاملات: {total_trades}\n"
+            f"   برد: {wins} | باخت: {total_trades - wins}\n"
+            f"   وین‌ریت: {win_rate:.1f}%\n"
+            f"   سود/زیان: {'+' if td.get('pnl',0) >= 0 else ''}{td.get('pnl',0):.2f} USDT\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 <b>پوزیشن‌های باز:</b> {pos}/{MAX_POS}\n"
+            f"🧠 <b>هوش مصنوعی:</b> {ai.get('calls', 0)} درخواست | هزینه: ${ai.get('cost', 0):.4f}\n"
+            f"⏱️ <b>آپتایم:</b> {engine_stats.get('uptime', '?')}\n"
+            f"🔄 <b>چرخه:</b> {engine_stats.get('cycles', 0)}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        self.send(msg, key="dashboard", force=True)
+
 
 TG = Alerts()
 
 # ============================================================================
-# EXCHANGE
+# EXCHANGE - پشتیبانی از فیوچرز
 # ============================================================================
 class Exchange:
     def __init__(self):
@@ -663,7 +719,7 @@ class Exchange:
             return o
         except Exception as e:
             log.error("Order [%s %s]: %s", side, sym, e)
-            TG.send(f"❌ Order خطا: {side} {sym}\n{e}", force=True)
+            TG.send(f"❌ سفارش خطا: {side} {sym}\n{e}", force=True)
             return None
 
 
@@ -698,7 +754,6 @@ class Tech:
         l = df["low"]
         v = df["vol"]
 
-        # ── Indicators ──────────────────────────────────────────────────
         try:
             rsi_s            = IND.rsi(c, 14)
             macd_l, macd_s, macd_h = IND.macd(c)
@@ -729,7 +784,6 @@ class Tech:
         avg_v = float(v.rolling(20).mean().iloc[-1]) or 1.0
         vr    = float(v.iloc[-1]) / avg_v
 
-        # ── Scoring ─────────────────────────────────────────────────────
         bs, ss = 0, 0
         tags   = []
 
@@ -753,10 +807,9 @@ class Tech:
         elif sk > 80: ss += 10; tags.append("Stoch_OB")
 
         if vr > 1.5:
-            if   bs > ss: bs += 8;  tags.append(f"Vol↑")
-            elif ss > bs: ss += 8;  tags.append(f"Vol↑")
+            if   bs > ss: bs += 8;  tags.append("Vol↑")
+            elif ss > bs: ss += 8;  tags.append("Vol↑")
 
-        # ── Result ──────────────────────────────────────────────────────
         ind = {
             "rsi":round(rsi,1), "macd_h":round(mh,5),
             "e20":round(e20,4), "e50":round(e50,4),
@@ -784,7 +837,7 @@ TECH = Tech()
 # AI ENGINE
 # ============================================================================
 class AI:
-    _CPK = 0.002  # cost per 1K tokens
+    _CPK = 0.002
 
     def __init__(self):
         self._c     = None
@@ -809,7 +862,6 @@ class AI:
         if not self._c:
             return tech
 
-        # cache
         ck = hashlib.md5(
             f"{sym}_{df['close'].iloc[-1]}_{df['ts'].iloc[-1]}".encode()
         ).hexdigest()
@@ -960,7 +1012,7 @@ class DDG:
         if dd >= self._mx and not self.halted:
             self.halted = True
             TG.send(
-                f"🚨 HALT! DD={dd:.1f}% ≥ {self._mx}%\n"
+                f"🚨 توقف! DD={dd:.1f}% ≥ {self._mx}%\n"
                 f"Peak=${self._peak:.0f} Now=${b:.0f}",
                 force=True
             )
@@ -1054,7 +1106,6 @@ class Corr:
         {"SOL/USDT:USDT","AVAX/USDT:USDT"},
         {"MATIC/USDT:USDT","ARB/USDT:USDT","OP/USDT:USDT"},
         {"DOGE/USDT:USDT","SHIB/USDT:USDT"},
-        # فرمت بدون :USDT هم پشتیبانی شود
         {"BTC/USDT","ETH/USDT","BNB/USDT"},
         {"SOL/USDT","AVAX/USDT"},
     ]
@@ -1099,10 +1150,32 @@ class Engine:
             f"Balance: ${bal:.2f}",
             force=True
         )
+        # ارسال داشبورد اولیه
+        time.sleep(2)
+        self._send_dashboard(bal)
+
+    def _send_dashboard(self, bal: float = None):
+        """ارسال داشبورد به تلگرام"""
+        if bal is None:
+            bal = EX.balance()
+        stats = self.stats
+        stats["uptime"] = self._uptime()
+        TG.send_dashboard(stats, bal)
+
+    def _uptime(self) -> str:
+        try:
+            d = datetime.now(timezone.utc) - \
+                datetime.fromisoformat(self._st["start"])
+            h,r = divmod(int(d.total_seconds()),3600)
+            m,s = divmod(r,60)
+            return f"{h}h {m}m {s}s"
+        except Exception:
+            return "?"
 
     # ── Main Loop ─────────────────────────────────────────────────────────
     def loop(self):
         log.info("▶️  Main loop شروع")
+        last_dashboard = 0
         while self._run:
             try:
                 self._st["cycles"] += 1
@@ -1115,6 +1188,11 @@ class Engine:
 
                 if can and TMR.is_new():
                     self._scan(bal)
+
+                # ارسال داشبورد هر 30 ثانیه
+                if time.time() - last_dashboard > 30:
+                    self._send_dashboard(bal)
+                    last_dashboard = time.time()
 
                 elapsed = time.time() - t0
                 sl_t    = max(5.0, min(20.0, TMR.left / 4.0))
@@ -1206,12 +1284,14 @@ class Engine:
         sp = abs(price-sl)/price*100
         tp_ = abs(tp-price)/price*100
         e  = "🟢" if side=="long" else "🔴"
+        
+        # پیام فارسی
         TG.send(
-            f"{e} <b>OPEN {side.upper()}</b> {sym}\n"
-            f"Entry:{price:.4f} SL:{sl:.4f}(-{sp:.1f}%)\n"
-            f"TP:{tp:.4f}(+{tp_:.1f}%) Qty:{sz['qty']:.5f}\n"
-            f"Risk:${sz['risk']:.1f} Conf:{sig.conf}%[{sig.src}]\n"
-            f"Why:{sig.reason[:55]}"
+            f"{e} <b>باز کردن {side.upper()}</b> {sym}\n"
+            f"ورود: {price:.4f} | حد ضرر: {sl:.4f}(-{sp:.1f}%)\n"
+            f"حد سود: {tp:.4f}(+{tp_:.1f}%) | حجم: {sz['qty']:.5f}\n"
+            f"ریسک: ${sz['risk']:.1f} | اطمینان: {sig.conf}%[{sig.src}]\n"
+            f"دلیل: {sig.reason[:55]}"
         )
         log.info("✅ OPEN %s %s | %s | %.4f", side, sym, pid, price)
 
@@ -1274,13 +1354,14 @@ class Engine:
         self._st["closed"] += 1
 
         e = "🎯" if reason=="TP" else "🛑"
-        w = "✅WIN" if pnl>0 else "❌LOSS"
+        w = "✅برد" if pnl>0 else "❌باخت"
+        
         TG.send(
             f"{e} <b>{reason}</b> {w} {pos['symbol']}\n"
             f"{pos['side'].upper()} "
             f"{pos['entry']:.4f}→{px:.4f}\n"
-            f"PnL:{'+'if pnl>0 else''}{pnl:.2f}$({pct:+.2f}%)\n"
-            f"DD:{DD.dd:.1f}%"
+            f"سود/زیان: {'+' if pnl>0 else ''}{pnl:.2f}$({pct:+.2f}%)\n"
+            f"Drawdown: {DD.dd:.1f}%"
         )
         log.info("%s %s %s | $%.2f (%.2f%%)",
                  e, pos["symbol"], reason, pnl, pct)
@@ -1301,229 +1382,79 @@ class Engine:
         }
 
 # ============================================================================
-# HTTP SERVER
+# FLASK APP - جایگزین HTTP Server داخلی
 # ============================================================================
-class H(BaseHTTPRequestHandler):
-    eng: Engine = None
+app = Flask(__name__)
+engine = None
 
-    def do_GET(self):
-        p = self.path.split("?")[0].rstrip("/") or "/"
-        {
-            "/health"    : self._health,
-            "/api/stats" : self._stats,
-            "/api/trades": self._trades,
-            "/api/history":self._history,
-            "/"          : self._dash,
-        }.get(p, self._404)()
+@app.route('/')
+def home():
+    return """
+    <html dir="rtl">
+    <head><title>Master-AI Bot</title></head>
+    <body style="font-family:Tahoma;background:#0d1117;color:#c9d1d9;text-align:center;padding:50px;">
+        <h1>🤖 Master-AI Trading Bot v5.1</h1>
+        <p>ربات در حال اجراست...</p>
+        <p>📊 <a href="/api/stats" style="color:#58a6ff;">مشاهده آمار</a></p>
+        <p>❤️ <a href="/health" style="color:#58a6ff;">وضعیت سلامت</a></p>
+    </body>
+    </html>
+    """
 
-    def do_HEAD(self):
-        """پشتیبانی از درخواست‌های HEAD برای Keep-Alive و UptimeRobot"""
-        self._health()
-
-    def _j(self, d: dict, c: int = 200):
-        b = json.dumps(d, default=str, ensure_ascii=False, indent=2).encode()
-        self.send_response(c)
-        self.send_header("Content-Type","application/json;charset=utf-8")
-        self.send_header("Content-Length", str(len(b)))
-        self.send_header("Access-Control-Allow-Origin","*")
-        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
-        self.end_headers()
-        self.wfile.write(b)
-
-    def _h(self, body: str):
-        b = body.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type","text/html;charset=utf-8")
-        self.send_header("Content-Length", str(len(b)))
-        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
-        self.end_headers()
-        self.wfile.write(b)
-
-    def _health(self):
-        """پاسخ سلامت برای UptimeRobot و Keep-Alive"""
-        uptime = self._up()
-        self._j({
+@app.route('/health')
+def health():
+    """پایپلاین سلامت برای UptimeRobot"""
+    if engine:
+        return {
             "status": "ok",
             "version": "5.1.0",
             "dry_run": DRY_RUN,
-            "up": uptime,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "open_positions": len(self.eng._pos) if self.eng else 0
-        })
+            "uptime": engine._uptime(),
+            "open_positions": len(engine._pos) if engine else 0,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    return {"status": "starting", "version": "5.1.0"}
 
-    def _stats(self):
-        self._j(self.eng.stats if self.eng else {})
+@app.route('/api/stats')
+def api_stats():
+    if engine:
+        stats = engine.stats
+        stats["uptime"] = engine._uptime()
+        return stats
+    return {"error": "Engine not ready"}
 
-    def _trades(self):
-        with self.eng._lock:
-            pl = list(self.eng._pos.values())
-        self._j({"open":pl,"count":len(pl)})
+@app.route('/api/trades')
+def api_trades():
+    if engine:
+        with engine._lock:
+            return {"open": list(engine._pos.values()), "count": len(engine._pos)}
+    return {"open": [], "count": 0}
 
-    def _history(self):
-        self._j({"history":database.history(30)})
-
-    def _404(self):
-        self._j({"error":"not found"},404)
-
-    def _up(self) -> str:
-        if not self.eng:
-            return "?"
-        try:
-            d = datetime.now(timezone.utc) - \
-                datetime.fromisoformat(self.eng.stats["start"])
-            h,r = divmod(int(d.total_seconds()),3600)
-            m,s = divmod(r,60)
-            return f"{h}h{m}m{s}s"
-        except Exception:
-            return "?"
-
-    def _dash(self):
-        st  = self.eng.stats if self.eng else {}
-        dd  = st.get("dd",{})
-        ai  = st.get("ai",{})
-        td  = st.get("today",{})
-        pos = st.get("positions",[])
-
-        dc  = "#b71c1c" if dd.get("halted") else "#1b5e20"
-        ht  = ("🚨 HALTED" if dd.get("halted") else "✅ فعال")
-
-        pr = "".join(
-            f"<tr>"
-            f"<td>{p.get('symbol','')}</td>"
-            f"<td>{'🟢' if p.get('side')=='long' else '🔴'}{p.get('side','')}</td>"
-            f"<td>{p.get('entry',0):.4f}</td>"
-            f"<td>{p.get('sl',0):.4f}</td>"
-            f"<td>{p.get('tp',0):.4f}</td>"
-            f"<td>{p.get('conf',0)}%</td>"
-            f"</tr>"
-            for p in pos
-        ) or "<tr><td colspan='6' style='text-align:center'>بدون پوزیشن باز</td></tr>"
-
-        pnl_c = "g" if td.get("pnl",0)>=0 else "r"
-        wr_c  = "g" if td.get("wr",0)>=50  else "r"
-
-        html = f"""<!DOCTYPE html>
-<html lang="fa" dir="rtl">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="20">
-<title>🤖 Master-AI Bot v5.1</title>
-<style>
-*{{box-sizing:border-box;margin:0;padding:0}}
-body{{font-family:Tahoma,sans-serif;background:#0d1117;
-     color:#c9d1d9;padding:12px}}
-.hdr{{background:linear-gradient(135deg,#1a237e,#0d47a1);
-      border-radius:10px;padding:16px;text-align:center;margin-bottom:12px}}
-.hdr h1{{color:#64b5f6;font-size:1.4em}}
-.hdr p{{color:#90a4ae;font-size:.85em;margin-top:4px}}
-.bar{{padding:8px 14px;border-radius:8px;margin-bottom:12px;
-      background:{dc};display:flex;justify-content:space-between}}
-.nav{{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}}
-.nav a{{background:#21262d;color:#58a6ff;padding:5px 12px;
-        border-radius:6px;text-decoration:none;font-size:.82em;
-        border:1px solid #30363d}}
-.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
-       gap:10px;margin-bottom:12px}}
-.c{{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px}}
-.c .lb{{color:#8b949e;font-size:.75em;margin-bottom:4px}}
-.c .v{{font-size:1.5em;font-weight:700;color:#58a6ff}}
-.g{{color:#3fb950!important}}.r{{color:#f85149!important}}
-table{{width:100%;border-collapse:collapse;background:#161b22;
-       border-radius:8px;overflow:hidden;font-size:.84em}}
-th{{background:#21262d;padding:8px;text-align:right;
-    color:#8b949e;border-bottom:1px solid #30363d}}
-td{{padding:7px 8px;border-bottom:1px solid #21262d}}
-.ft{{text-align:center;color:#484f58;font-size:.75em;margin-top:12px}}
-</style>
-</head>
-<body>
-<div class="hdr">
-  <h1>🤖 Master-AI Trading Bot v5.1.0</h1>
-  <p>{'🔵 DRY-RUN' if DRY_RUN else '🟢 LIVE'} | {TF} |
-     ⏰ {datetime.now().strftime('%H:%M:%S')}</p>
-</div>
-<div class="bar">
-  <b>{ht}</b>
-  <span>DD:{dd.get('dd',0):.1f}%/{dd.get('max',MAX_DD):.1f}%
-   Peak:${dd.get('peak') or 0:.0f}</span>
-</div>
-<div class="nav">
-  <a href="/">🏠 داشبورد</a>
-  <a href="/api/stats">📊 Stats</a>
-  <a href="/api/trades">📋 Trades</a>
-  <a href="/api/history">📜 History</a>
-  <a href="/health">❤️ Health</a>
-</div>
-<div class="grid">
-  <div class="c"><div class="lb">پوزیشن باز</div>
-    <div class="v">{st.get('open_pos',0)}/{MAX_POS}</div></div>
-  <div class="c"><div class="lb">معامله امروز</div>
-    <div class="v">{td.get('trades',0)}</div></div>
-  <div class="c"><div class="lb">Win Rate</div>
-    <div class="v {wr_c}">{td.get('wr',0):.0f}%</div></div>
-  <div class="c"><div class="lb">PnL امروز</div>
-    <div class="v {pnl_c}">${td.get('pnl',0):+.2f}</div></div>
-  <div class="c"><div class="lb">چرخه</div>
-    <div class="v">{st.get('cycles',0)}</div></div>
-  <div class="c"><div class="lb">هزینه AI</div>
-    <div class="v">${ai.get('cost',0):.4f}</div></div>
-  <div class="c"><div class="lb">کندل بعدی</div>
-    <div class="v">{st.get('secs_left',0)}s</div></div>
-  <div class="c"><div class="lb">آپتایم</div>
-    <div class="v" style="font-size:.9em">{self._up()}</div></div>
-</div>
-<table>
-  <thead><tr>
-    <th>Symbol</th><th>Side</th><th>Entry</th>
-    <th>SL</th><th>TP</th><th>Conf</th>
-  </tr></thead>
-  <tbody>{pr}</tbody>
-</table>
-<div class="ft">Master-AI v5.1.0 | بروزرسانی هر 20s</div>
-</body></html>"""
-        self._h(html)
-
-    def log_message(self, *a):
-        pass
-
+@app.route('/api/history')
+def api_history():
+    return {"history": database.history(30)}
 
 # ============================================================================
 # MAIN
 # ============================================================================
 def main():
+    global engine
     log.info("=" * 50)
-    log.info("  Master-AI Bot v5.1.0 - Production")
+    log.info("  Master-AI Bot v5.1.0 - Flask Edition")
     log.info("  Python %s", sys.version.split()[0])
-    log.info("  pandas_ta=%s", _TA_OK)
     log.info("=" * 50)
 
-    # اعتبارسنجی
     Cfg.validate()
 
-    # Engine
     engine = Engine()
 
-    # Server
-    H.eng = engine
-    srv   = ThreadingHTTPServer(("0.0.0.0", PORT), H)
-    threading.Thread(
-        target=srv.serve_forever, daemon=True, name="HTTP"
-    ).start()
-    log.info("🌐 http://0.0.0.0:%d | /health /api/stats", PORT)
+    # شروع ربات در ترد جداگانه
+    threading.Thread(target=engine.loop, daemon=True).start()
 
-    # Loop
-    try:
-        engine.loop()
-    except KeyboardInterrupt:
-        log.info("⛔ متوقف شد")
-    finally:
-        TG.send("⛔ ربات متوقف شد", force=True)
-        srv.shutdown()
+    # راه‌اندازی Flask
+    port = int(os.environ.get("PORT", 10000))
+    log.info("🌐 Flask Server on port %d", port)
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
 
 
 if __name__ == "__main__":
