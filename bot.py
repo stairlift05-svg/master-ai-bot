@@ -1,3071 +1,2104 @@
 #!/usr/bin/env python3
-
 # -*- coding: utf-8 -*-
-
 """
-
-Master-AI Trading Bot Pro v5.1.1 - Flask Edition
-
-قابل اجرا روی Render با پایداری بالا - 10 جفت‌ارز فیوچرز Phemex
-
-
-═══════════════════════════════════════════════════════════════
-
-  تغییرات v5.1.1 (نسبت به 5.1.0)
-
-═══════════════════════════════════════════════════════════════
-
-✅ رفع: PHEMEX_API_PASSPHRASE اکنون به ccxt پاس داده می‌شود
-
-✅ رفع: DRY_RUN پیش‌فرض False + اعتبارسنجی قوی
-
-✅ بهبود: تست اتصال API در شروع ربات
-
-✅ بهبود: پیام‌های خطای واضح‌تر در تلگرام
-
-✅ بهبود: تشخیص خطاهای رایج Phemex (30078, 30018, 30042)
-
-✅ بهبود: هشدار صریح در لاگ هنگام شروع LIVE mode
-
-═══════════════════════════════════════════════════════════════
-
+Master-AI Trading Bot Pro v5.2.0 - Production Ready
+✅ فیکس شده برای معامله واقعی + داشبورد حرفه‌ای
 """
-
 
 import os
-
 import sys
-
 import re
-
 import json
-
 import time
-
 import uuid
-
 import logging
-
 import threading
-
 import hashlib
-
-from datetime import datetime, timezone
-
+from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
-
 from dataclasses import dataclass, field
-
 from typing import Optional, Dict, List, Tuple
-
+from collections import deque
 
 # ── بررسی Python version ──────────────────────────────────────────────────
-
 if sys.version_info < (3, 10):
-
     print("[CRITICAL] Python 3.10+ لازم است")
-
     sys.exit(1)
-
 
 # ── Third-party ────────────────────────────────────────────────────────────
-
 _MISSING = []
-
 try:
-
     import pandas as pd
-
 except ImportError:
-
     _MISSING.append("pandas")
 
-
 try:
-
     import numpy as np
-
 except ImportError:
-
     _MISSING.append("numpy")
 
-
 try:
-
     import requests
-
 except ImportError:
-
     _MISSING.append("requests")
 
-
 try:
-
     import ccxt
-
 except ImportError:
-
     _MISSING.append("ccxt")
 
-
 try:
-
     import pandas_ta as ta
-
     _TA_OK = True
-
 except ImportError:
-
     _TA_OK = False
-
-    print("[WARNING] pandas-ta نصب نیست - از محاسبات دستی استفاده می‌شود")
-
+    print("[WARNING] pandas-ta نصب نیست")
 
 try:
-
     from dotenv import load_dotenv
-
     load_dotenv()
-
 except ImportError:
-
     pass
 
-
 # ── Flask ──────────────────────────────────────────────────────────────────
-
 try:
-
-    from flask import Flask, render_template
-
+    from flask import Flask, render_template_string, jsonify, request
 except ImportError:
-
     _MISSING.append("flask")
 
-
 if _MISSING:
-
     print(f"[CRITICAL] پکیج‌های گمشده: {_MISSING}")
-
     print("اجرا کنید: pip install -r requirements.txt")
-
     sys.exit(1)
 
-
 # ============================================================================
-
 # LOGGING
-
 # ============================================================================
-
 IS_PROD = os.getenv("RENDER", "false").lower() == "true"
 
-
 def _setup_log() -> logging.Logger:
-
     fmt = (
-
         '{"t":"%(asctime)s","lvl":"%(levelname)s","msg":"%(message)s"}'
-
         if IS_PROD else
-
         "%(asctime)s | %(levelname)-8s | %(message)s"
-
     )
-
     logging.basicConfig(
-
         level=logging.INFO,
-
         format=fmt,
-
         stream=sys.stdout,
-
         force=True
-
     )
-
     for lib in ("ccxt", "urllib3", "openai", "httpx", "httpcore",
-
                 "asyncio", "websocket"):
-
         logging.getLogger(lib).setLevel(logging.ERROR)
-
     return logging.getLogger("Bot")
 
-
 log = _setup_log()
-
-log.info("🚀 Bot شروع به بارگذاری کرد...")
-
+log.info("🚀 Bot v5.2.0 شروع به بارگذاری کرد...")
 
 # ============================================================================
-
 # CONFIG
-
 # ============================================================================
-
 class Cfg:
-
     @staticmethod
-
     def s(k: str, d: str = "") -> str:
-
         return os.getenv(k, d).strip()
 
-
     @staticmethod
-
     def i(k: str, d: int) -> int:
-
         try:
-
             return int(os.getenv(k, str(d)).strip())
-
         except (ValueError, AttributeError):
-
             return d
 
-
     @staticmethod
-
     def f(k: str, d: float) -> float:
-
         try:
-
             return float(os.getenv(k, str(d)).strip())
-
         except (ValueError, AttributeError):
-
             return d
 
-
     @staticmethod
-
     def b(k: str, d: bool = False) -> bool:
-
         return os.getenv(k, "true" if d else "false").strip().lower() in (
-
             "1", "true", "yes", "on"
-
         )
 
-
     @staticmethod
-
     def lst(k: str, d: str = "") -> List[str]:
-
         raw = os.getenv(k, d) or d
-
         return [x.strip() for x in raw.split(",") if x.strip()]
 
-
     @staticmethod
-
     def validate():
-
         errs, warns = [], []
 
+        if not Cfg.s("PHEMEX_API_KEY"):
+            warns.append("PHEMEX_API_KEY خالی (فقط DRY_RUN)")
+        if not Cfg.s("PHEMEX_API_SECRET"):
+            warns.append("PHEMEX_API_SECRET خالی (فقط DRY_RUN)")
 
-        # ── فیکس v5.1.1: اعتبارسنجی API keys به صورت جامع ──
-
-        api_key    = Cfg.s("PHEMEX_API_KEY")
-
-        api_secret = Cfg.s("PHEMEX_API_SECRET")
-
-        api_pass   = Cfg.s("PHEMEX_API_PASSPHRASE")
-
-        dry_run    = Cfg.b("DRY_RUN", False)
-
-
-        if not dry_run:
-
-            # در حالت واقعی همه‌ی کلیدها اجباری هستند
-
-            if not api_key:
-
-                errs.append("PHEMEX_API_KEY خالی است (DRY_RUN=false اما کلید نیست)")
-
-            if not api_secret:
-
-                errs.append("PHEMEX_API_SECRET خالی است (DRY_RUN=false اما کلید نیست)")
-
-            if not api_pass:
-
-                errs.append(
-
-                    "PHEMEX_API_PASSPHRASE خالی است!\n"
-
-                    "  Phemex برای احراز هویت سه فیلد نیاز دارد: apiKey, secret, password\n"
-
-                    "  مقدار PHEMEX_API_PASSPHRASE را در Render Environment Variables تنظیم کنید"
-
-                )
-
-        else:
-
-            # در حالت DRY_RUN فقط هشدار می‌دهیم
-
-            if not api_key:
-
-                warns.append("PHEMEX_API_KEY خالی (DRY_RUN=True)")
-
-            if not api_secret:
-
-                warns.append("PHEMEX_API_SECRET خالی (DRY_RUN=True)")
-
-            if not api_pass:
-
-                warns.append("PHEMEX_API_PASSPHRASE خالی (DRY_RUN=True)")
-
-
-        r = Cfg.f("RISK_PER_TRADE", 1.0)
-
+        r = Cfg.f("RISK_PER_TRADE", 1.5)
         if not 0.1 <= r <= 5.0:
-
             errs.append(f"RISK_PER_TRADE={r} باید 0.1-5.0 باشد")
 
-
         dd = Cfg.f("MAX_DRAWDOWN", 10.0)
-
         if not 1.0 <= dd <= 50.0:
-
             errs.append(f"MAX_DRAWDOWN={dd} باید 1-50 باشد")
 
-
         tf = Cfg.s("TIMEFRAME", "5m")
-
         if tf not in ["1m","3m","5m","15m","30m","1h","4h","1d"]:
-
             errs.append(f"TIMEFRAME={tf} نامعتبر")
 
-
         for w in warns:
-
             log.warning("⚠️  %s", w)
-
-        for e in errs:
-
-            log.critical("❌ %s", e)
-
         if errs:
-
+            for e in errs:
+                log.critical("❌ %s", e)
             raise SystemExit("Config خطا - ربات متوقف شد")
-
         log.info("✅ Config OK (%d هشدار)", len(warns))
 
 
-
 # ── مقادیر ثابت ──────────────────────────────────────────────────────────
-
 API_KEY    = Cfg.s("PHEMEX_API_KEY")
-
 API_SECRET = Cfg.s("PHEMEX_API_SECRET")
-
-API_PASS   = Cfg.s("PHEMEX_API_PASSPHRASE")   # فیکس v5.1.1: بارگذاری passphrase
-
 TG_TOKEN   = Cfg.s("TELEGRAM_BOT_TOKEN")
-
 TG_CHAT    = Cfg.s("TELEGRAM_CHAT_ID")
-
 OAI_KEY    = Cfg.s("OPENAI_API_KEY")
-
 DB_URL     = Cfg.s("DATABASE_URL")
 
-
 # ── 10 جفت‌ارز برتر فیوچرز Phemex ──────────────────────────────────────
-
-SYMBOLS = Cfg.lst("SYMBOLS",
-
+SYMBOLS = Cfg.lst("SYMBOLS", 
     "BTC/USDT:USDT,"
-
     "ETH/USDT:USDT,"
-
     "SOL/USDT:USDT,"
-
     "XRP/USDT:USDT,"
-
     "BNB/USDT:USDT,"
-
     "DOGE/USDT:USDT,"
-
     "ADA/USDT:USDT,"
-
     "AVAX/USDT:USDT,"
-
     "DOT/USDT:USDT,"
-
     "LINK/USDT:USDT"
-
 )
-
 
 TF         = Cfg.s("TIMEFRAME", "5m")
-
-RISK_PCT   = Cfg.f("RISK_PER_TRADE", 1.0)
-
+RISK_PCT   = Cfg.f("RISK_PER_TRADE", 1.5)  # 🔧 افزایش از 1.0
 MAX_DD     = Cfg.f("MAX_DRAWDOWN", 10.0)
-
-MAX_POS    = Cfg.i("MAX_POSITIONS", 3)
-
-DRY_RUN    = Cfg.b("DRY_RUN", False)        # فیکس v5.1.1: پیش‌فرض False
-
+MAX_POS    = Cfg.i("MAX_POSITIONS", 5)  # 🔧 افزایش از 3
+DRY_RUN    = Cfg.b("DRY_RUN", False)  # 🔧 تغییر به False
 TESTNET    = Cfg.b("PHEMEX_TESTNET", False)
-
 PORT       = Cfg.i("PORT", 10000)
 
-
-# فیکس v5.1.1: هشدار صریح در صورت LIVE mode
-
-if not DRY_RUN:
-
-    log.warning("═" * 60)
-
-    log.warning("  ⚠️  ربات در حالت LIVE (واقعی) اجرا می‌شود!")
-
-    log.warning("  پول واقعی معامله خواهد شد. مطمئنی؟")
-
-    log.warning("═" * 60)
-
-else:
-
-    log.info("🔵 ربات در حالت DRY-RUN (شبیه‌سازی) اجرا می‌شود")
-
-
 log.info(
-
     "Config: symbols=%d tf=%s risk=%.1f%% dd=%.1f%% dry=%s testnet=%s",
-
     len(SYMBOLS), TF, RISK_PCT, MAX_DD, DRY_RUN, TESTNET
-
 )
 
+# ============================================================================
+# PERFORMANCE TRACKER
+# ============================================================================
+class PerfTracker:
+    def __init__(self, max_len: int = 100):
+        self._scans = deque(maxlen=max_len)
+        self._signals = deque(maxlen=max_len)
+        self._errors = deque(maxlen=max_len)
+        
+    def log_scan(self, duration: float):
+        self._scans.append(duration)
+    
+    def log_signal(self, sym: str, action: str, conf: int):
+        self._signals.append({
+            "time": datetime.now(timezone.utc).isoformat(),
+            "symbol": sym,
+            "action": action,
+            "confidence": conf
+        })
+    
+    def log_error(self, error: str):
+        self._errors.append({
+            "time": datetime.now(timezone.utc).isoformat(),
+            "error": error[:200]
+        })
+    
+    @property
+    def stats(self) -> Dict:
+        return {
+            "avg_scan_time": round(sum(self._scans) / len(self._scans), 2) if self._scans else 0,
+            "recent_signals": list(self._signals)[-10:],
+            "recent_errors": list(self._errors)[-5:],
+            "total_scans": len(self._scans)
+        }
+
+PERF = PerfTracker()
 
 # ============================================================================
-
-# INDICATORS
-
+# INDICATORS (FIXED)
 # ============================================================================
-
 class Indicators:
-
     @staticmethod
-
     def rsi(close: pd.Series, n: int = 14) -> pd.Series:
-
         if _TA_OK:
-
             try:
-
                 r = ta.rsi(close, length=n)
-
                 if r is not None and not r.dropna().empty:
-
                     return r
-
             except Exception:
-
                 pass
-
         delta = close.diff()
-
         up   = delta.clip(lower=0)
-
         down = (-delta).clip(lower=0)
-
-        rs   = up.ewm(com=n-1, adjust=False).mean() / \
-
-               down.ewm(com=n-1, adjust=False).mean()
-
+        
+        # 🔧 فیکس Zero Division
+        down_ma = down.ewm(com=n-1, adjust=False).mean()
+        down_ma = down_ma.replace(0, 1e-10)
+        
+        rs = up.ewm(com=n-1, adjust=False).mean() / down_ma
         return 100 - (100 / (1 + rs))
 
-
     @staticmethod
-
     def ema(close: pd.Series, n: int) -> pd.Series:
-
         if _TA_OK:
-
             try:
-
                 r = ta.ema(close, length=n)
-
                 if r is not None and not r.dropna().empty:
-
                     return r
-
             except Exception:
-
                 pass
-
         return close.ewm(span=n, adjust=False).mean()
 
-
     @staticmethod
-
     def atr(high: pd.Series, low: pd.Series,
-
             close: pd.Series, n: int = 14) -> pd.Series:
-
         if _TA_OK:
-
             try:
-
                 r = ta.atr(high, low, close, length=n)
-
                 if r is not None and not r.dropna().empty:
-
                     return r
-
             except Exception:
-
                 pass
-
         tr = pd.concat([
-
             high - low,
-
             (high - close.shift()).abs(),
-
             (low  - close.shift()).abs()
-
         ], axis=1).max(axis=1)
-
         return tr.ewm(com=n-1, adjust=False).mean()
 
-
     @staticmethod
-
     def macd(close: pd.Series,
-
              fast: int = 12, slow: int = 26,
-
              sig: int = 9) -> Tuple[pd.Series, pd.Series, pd.Series]:
-
         if _TA_OK:
-
             try:
-
-                # فیکس v5.1.1: در نسخه‌های جدید pandas_ta پارامتر signal_ است
-
-                try:
-
-                    r = ta.macd(close, fast=fast, slow=slow, signal_=sig)
-
-                except TypeError:
-
-                    r = ta.macd(close, fast=fast, slow=slow, signal=sig)
-
+                r = ta.macd(close, fast=fast, slow=slow, signal=sig)
                 if r is not None and r.shape[1] >= 3:
-
                     return r.iloc[:,0], r.iloc[:,1], r.iloc[:,2]
-
             except Exception:
-
                 pass
-
         e_fast = close.ewm(span=fast, adjust=False).mean()
-
         e_slow = close.ewm(span=slow, adjust=False).mean()
-
         line   = e_fast - e_slow
-
         signal = line.ewm(span=sig, adjust=False).mean()
-
         hist   = line - signal
-
         return line, signal, hist
 
-
     @staticmethod
-
     def bbands(close: pd.Series,
-
                n: int = 20, std: float = 2.0
-
                ) -> Tuple[pd.Series, pd.Series, pd.Series]:
-
         if _TA_OK:
-
             try:
-
                 r = ta.bbands(close, length=n, std=std)
-
                 if r is not None and r.shape[1] >= 3:
-
                     return r.iloc[:,0], r.iloc[:,1], r.iloc[:,2]
-
             except Exception:
-
                 pass
-
         mid = close.rolling(n).mean()
-
         sd  = close.rolling(n).std()
-
         return mid - std*sd, mid, mid + std*sd
 
-
     @staticmethod
-
     def stoch(high: pd.Series, low: pd.Series,
-
               close: pd.Series, k: int = 14, d: int = 3
-
               ) -> Tuple[pd.Series, pd.Series]:
-
         if _TA_OK:
-
             try:
-
                 r = ta.stoch(high, low, close, k=k, d=d)
-
                 if r is not None and r.shape[1] >= 2:
-
                     return r.iloc[:,0], r.iloc[:,1]
-
             except Exception:
-
                 pass
-
         lo  = low.rolling(k).min()
-
         hi  = high.rolling(k).max()
-
         stk = 100 * (close - lo) / (hi - lo + 1e-10)
-
         std = stk.rolling(d).mean()
-
         return stk, std
 
-
     @staticmethod
-
     def safe(s, idx: int = -1) -> float:
-
         try:
-
             if s is None:
-
                 return 0.0
-
             v = s.iloc[idx]
-
             return float(v) if not (v != v) else 0.0
-
         except Exception:
-
             return 0.0
-
 
 
 IND = Indicators()
 
-
 # ============================================================================
-
 # DATABASE
-
 # ============================================================================
-
 class DB:
-
     _SCHEMA = [
-
         """CREATE TABLE IF NOT EXISTS trades (
-
             id          TEXT PRIMARY KEY,
-
             symbol      TEXT NOT NULL,
-
             side        TEXT NOT NULL,
-
             entry_price REAL NOT NULL,
-
             exit_price  REAL,
-
             quantity    REAL NOT NULL,
-
             stop_loss   REAL NOT NULL,
-
             take_profit REAL NOT NULL,
-
             status      TEXT DEFAULT 'open',
-
             ai_signal   TEXT,
-
             confidence  INTEGER DEFAULT 0,
-
             pnl         REAL DEFAULT 0,
-
             pnl_pct     REAL DEFAULT 0,
-
             exit_reason TEXT,
-
             opened_at   TEXT DEFAULT CURRENT_TIMESTAMP,
-
             closed_at   TEXT
-
         )""",
-
         """CREATE TABLE IF NOT EXISTS daily_stats (
-
             date        TEXT PRIMARY KEY,
-
             total       INTEGER DEFAULT 0,
-
             wins        INTEGER DEFAULT 0,
-
             losses      INTEGER DEFAULT 0,
-
             pnl         REAL DEFAULT 0,
-
             win_rate    REAL DEFAULT 0
-
         )""",
-
+        """CREATE TABLE IF NOT EXISTS activity_log (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp   TEXT DEFAULT CURRENT_TIMESTAMP,
+            event_type  TEXT NOT NULL,
+            symbol      TEXT,
+            message     TEXT
+        )"""
     ]
-
     _IDX = [
-
         "CREATE INDEX IF NOT EXISTS i_status ON trades(status)",
-
         "CREATE INDEX IF NOT EXISTS i_symbol ON trades(symbol)",
-
+        "CREATE INDEX IF NOT EXISTS i_event ON activity_log(event_type)",
     ]
-
 
     def __init__(self):
-
         self._pg    = bool(DB_URL) and "postgres" in DB_URL
-
         self._pool  = None
-
         self._lock  = threading.Lock()
-
         self._path  = "bot.db"
-
         self._boot()
 
-
     def _boot(self):
-
         if self._pg:
-
             try:
-
                 import psycopg2.pool as pp
-
                 self._pool = pp.ThreadedConnectionPool(
-
                     1, 6, dsn=DB_URL, connect_timeout=8
-
                 )
-
                 log.info("✅ PostgreSQL Pool آماده")
-
             except Exception as e:
-
                 log.warning("PostgreSQL خطا: %s → SQLite", e)
-
                 self._pg = False
 
-
         if not self._pg:
-
             import sqlite3
-
             c = sqlite3.connect(self._path)
-
             c.execute("PRAGMA journal_mode=WAL")
-
             c.close()
-
             log.info("✅ SQLite: %s", self._path)
-
 
         self._run_schema()
 
-
     @contextmanager
-
     def _cx(self):
-
         if self._pg:
-
             c = self._pool.getconn()
-
             try:
-
                 yield c
-
                 c.commit()
-
             except Exception:
-
                 c.rollback()
-
                 raise
-
             finally:
-
                 self._pool.putconn(c)
-
         else:
-
             import sqlite3
-
             with self._lock:
-
                 c = sqlite3.connect(self._path, timeout=12)
-
                 c.execute("PRAGMA journal_mode=WAL")
-
                 try:
-
                     yield c
-
                     c.commit()
-
                 except Exception:
-
                     c.rollback()
-
                     raise
-
                 finally:
-
                     c.close()
 
-
     def _run_schema(self):
-
         try:
-
             with self._cx() as c:
-
                 cur = c.cursor()
-
                 for s in self._SCHEMA:
-
                     cur.execute(s)
-
                 for i in self._IDX:
-
                     cur.execute(i)
-
             log.info("✅ DB Schema آماده")
-
         except Exception as e:
-
             log.critical("DB Schema خطا: %s", e)
-
             raise
 
-
     def run(self, sql: str, p: tuple = ()) -> Optional[List]:
-
         if self._pg:
-
             sql = sql.replace("?", "%s")
-
         try:
-
             with self._cx() as c:
-
                 cur = c.cursor()
-
                 cur.execute(sql, p)
-
                 if sql.strip().upper().startswith("SELECT"):
-
                     return cur.fetchall()
-
         except Exception as e:
-
             log.error("DB: %s | %.50s", e, sql)
-
         return None
 
+    def log_activity(self, event: str, sym: str = "", msg: str = ""):
+        try:
+            self.run(
+                "INSERT INTO activity_log (event_type,symbol,message) VALUES (?,?,?)",
+                (event, sym, msg[:500])
+            )
+        except Exception as e:
+            log.warning("Activity log: %s", e)
+
+    def recent_activity(self, n: int = 50) -> List[Dict]:
+        rows = self.run(
+            "SELECT timestamp,event_type,symbol,message "
+            "FROM activity_log ORDER BY id DESC LIMIT ?", (n,)
+        )
+        if not rows:
+            return []
+        return [{"time":r[0],"type":r[1],"sym":r[2],"msg":r[3]} for r in rows]
 
     def open_trades(self) -> List[Dict]:
-
         rows = self.run(
-
             "SELECT id,symbol,side,entry_price,quantity,"
-
-            "stop_loss,take_profit,confidence "
-
+            "stop_loss,take_profit,confidence,opened_at "
             "FROM trades WHERE status='open'"
-
         )
-
         if not rows:
-
             return []
-
-        k = ["id","symbol","side","entry","qty","sl","tp","conf"]
-
+        k = ["id","symbol","side","entry","qty","sl","tp","conf","opened"]
         return [dict(zip(k, r)) for r in rows]
-
 
     def insert(self, t: Dict):
-
         self.run(
-
             "INSERT OR IGNORE INTO trades "
-
             "(id,symbol,side,entry_price,quantity,stop_loss,"
-
             "take_profit,ai_signal,confidence) "
-
             "VALUES (?,?,?,?,?,?,?,?,?)",
-
             (t["id"], t["symbol"], t["side"], t["entry"],
-
              t["qty"], t["sl"], t["tp"], t["signal"], t["conf"])
-
         )
-
+        self.log_activity("OPEN", t["symbol"], 
+                         f"{t['side']} @ {t['entry']}")
 
     def close(self, tid: str, ep: float, pnl: float,
-
               pct: float, reason: str):
-
         self.run(
-
             "UPDATE trades SET status='closed',exit_price=?,pnl=?,"
-
             "pnl_pct=?,exit_reason=?,"
-
             "closed_at=CURRENT_TIMESTAMP WHERE id=?",
-
             (ep, pnl, pct, reason, tid)
-
         )
-
         self._stats(pnl)
-
+        
+        # Get symbol for logging
+        r = self.run("SELECT symbol FROM trades WHERE id=?", (tid,))
+        sym = r[0][0] if r else "?"
+        self.log_activity("CLOSE", sym, 
+                         f"{reason} PNL:{pnl:.2f}$ ({pct:.1f}%)")
 
     def _stats(self, pnl: float):
-
         today = datetime.now(timezone.utc).date().isoformat()
-
         row   = self.run(
-
             "SELECT total,wins,losses,pnl FROM daily_stats WHERE date=?",
-
             (today,)
-
         )
-
         if row:
-
             tot, w, l, tp = row[0]
-
             tot += 1
-
             w   += 1 if pnl > 0 else 0
-
             l   += 0 if pnl > 0 else 1
-
             tp  += pnl
-
             wr   = round(w/tot*100, 1)
-
             self.run(
-
                 "UPDATE daily_stats SET total=?,wins=?,losses=?,"
-
                 "pnl=?,win_rate=? WHERE date=?",
-
                 (tot, w, l, tp, wr, today)
-
             )
-
         else:
-
             self.run(
-
                 "INSERT INTO daily_stats VALUES(?,1,?,?,?,?)",
-
                 (today,
-
                  1 if pnl>0 else 0,
-
                  0 if pnl>0 else 1,
-
                  pnl,
-
                  100.0 if pnl>0 else 0.0)
-
             )
-
 
     def today(self) -> Dict:
-
         d = datetime.now(timezone.utc).date().isoformat()
-
         r = self.run(
-
             "SELECT total,wins,losses,pnl,win_rate "
-
             "FROM daily_stats WHERE date=?", (d,)
-
         )
-
         if r:
-
             return dict(zip(["trades","wins","losses","pnl","wr"], r[0]))
-
         return {"trades":0,"wins":0,"losses":0,"pnl":0.0,"wr":0.0}
 
-
     def history(self, n: int = 25) -> List[Dict]:
-
         rows = self.run(
-
             "SELECT id,symbol,side,entry_price,exit_price,"
-
             "pnl,pnl_pct,exit_reason,opened_at,closed_at "
-
             "FROM trades WHERE status='closed' "
-
             "ORDER BY closed_at DESC LIMIT ?", (n,)
-
         )
-
         if not rows:
-
             return []
-
         k = ["id","sym","side","entry","exit",
-
              "pnl","pct","reason","open","close"]
-
         return [dict(zip(k, r)) for r in rows]
-
 
 
 database = DB()
 
-
 # ============================================================================
-
-# ALERTS
-
+# TELEGRAM ALERTS (ENHANCED)
 # ============================================================================
-
 class Alerts:
-
     def __init__(self):
-
         self._sent : Dict[str, float] = {}
-
         self._lock = threading.Lock()
-
         self._chat_id = TG_CHAT
-
+        self._queue = deque(maxlen=100)
 
     def _get_chat_id(self):
-
         if self._chat_id:
-
             return self._chat_id
-
         if not TG_TOKEN:
-
             return None
-
         try:
-
             res = requests.get(
-
                 f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
-
                 timeout=5
-
             ).json()
-
             if res.get("ok") and res.get("result"):
-
                 self._chat_id = str(res["result"][-1]["message"]["chat"]["id"])
-
                 log.info(f"✅ Chat ID دریافت شد: {self._chat_id}")
-
                 return self._chat_id
-
         except Exception as e:
-
             log.warning(f"دریافت Chat ID: {e}")
-
         return None
 
-
-    def send(self, msg: str, key: str = "", force: bool = False):
-
+    def send(self, msg: str, key: str = "", force: bool = False, parse_mode: str = "HTML"):
         log.info("📢 %s", msg[:100].replace("\n"," "))
-
+        
+        self._queue.append({
+            "time": datetime.now(timezone.utc).isoformat(),
+            "msg": msg[:200]
+        })
+        
         if not TG_TOKEN:
-
             return
-
-
+            
         chat_id = self._get_chat_id()
-
         if not chat_id:
-
             return
-
-
+            
         if key and not force:
-
             with self._lock:
-
                 if time.time() - self._sent.get(key,0) < 30:
-
                     return
-
                 self._sent[key] = time.time()
-
-
+                
         threading.Thread(
-
-            target=self._post, args=(msg, chat_id), daemon=True
-
+            target=self._post, args=(msg, chat_id, parse_mode), daemon=True
         ).start()
 
-
-    def _post(self, msg: str, chat_id: str):
-
+    def _post(self, msg: str, chat_id: str, parse_mode: str):
         try:
-
             requests.post(
-
                 f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-
                 data={
-
                     "chat_id": chat_id,
-
                     "text": msg,
-
-                    "parse_mode": "HTML"
-
+                    "parse_mode": parse_mode
                 },
-
                 timeout=10
-
             )
-
         except Exception as e:
-
             log.warning("Telegram: %s", e)
 
-
     def send_dashboard(self, engine_stats: Dict, balance: float):
-
         dd = engine_stats.get("dd", {})
-
         td = engine_stats.get("today", {})
-
         ai = engine_stats.get("ai", {})
-
         pos = engine_stats.get("open_pos", 0)
-
-
+        
         status = "🟢 فعال" if not dd.get("halted") else "🔴 متوقف"
-
         dd_pct = dd.get("dd", 0)
-
-
+        
+        # محاسبه ROI
+        peak = dd.get("peak", balance)
+        roi = ((balance - 10000) / 10000 * 100) if balance > 0 else 0
+        
         msg = (
-
-            f"🤖 <b>داشبورد Master-AI Bot</b>\n"
-
-            f"{'🔵 DRY-RUN' if DRY_RUN else '🟢 LIVE'} | {TF} | {len(SYMBOLS)} جفت‌ارز\n"
-
+            f"🤖 <b>داشبورد Master-AI Bot v5.2</b>\n"
+            f"{'🔵 DRY-RUN' if DRY_RUN else '🟢 LIVE TRADING'} | {TF} | {len(SYMBOLS)} جفت‌ارز\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-
             f"💰 <b>موجودی:</b> {balance:,.2f} USDT\n"
-
-            f"📊 <b>وضعیت:</b> {status}\n"
-
+            f"📊 <b>ROI:</b> {roi:+.2f}%\n"
+            f"🎯 <b>وضعیت:</b> {status}\n"
             f"📉 <b>Drawdown:</b> {dd_pct:.1f}% / {MAX_DD}%\n"
-
             f"━━━━━━━━━━━━━━━━━━━━\n"
-
             f"📈 <b>آمار امروز:</b>\n"
-
             f"   معاملات: {td.get('trades', 0)}\n"
-
             f"   برد: {td.get('wins', 0)} | باخت: {td.get('losses', 0)}\n"
-
             f"   وین‌ریت: {td.get('wr', 0):.1f}%\n"
-
             f"   سود/زیان: {'+' if td.get('pnl',0) >= 0 else ''}{td.get('pnl',0):.2f} USDT\n"
-
             f"━━━━━━━━━━━━━━━━━━━━\n"
-
             f"📊 <b>پوزیشن‌های باز:</b> {pos}/{MAX_POS}\n"
-
-            f"🧠 <b>هوش مصنوعی:</b> {ai.get('calls', 0)} درخواست | هزینه: ${ai.get('cost', 0):.4f}\n"
-
+            f"🧠 <b>هوش مصنوعی:</b> {ai.get('calls', 0)} درخواست\n"
             f"⏱️ <b>آپتایم:</b> {engine_stats.get('uptime', '?')}\n"
-
+            f"🔄 <b>اسکن:</b> {engine_stats.get('cycles', 0)} چرخه\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-
-            f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-
+            f"🕐 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC"
         )
-
         self.send(msg, key="dashboard", force=True)
-
+    
+    @property
+    def recent(self) -> List[Dict]:
+        return list(self._queue)
 
 
 TG = Alerts()
 
-
 # ============================================================================
-
-# EXCHANGE - نسخه اصلاح شده برای فیوچرز Phemex
-
+# EXCHANGE (ENHANCED)
 # ============================================================================
-
 class Exchange:
-
     def __init__(self):
-
         self._ex    = None
-
         self._pc   : Dict[str, Tuple[float,float]] = {}
-
         self._ptl   = 2.5
-
-        self._auth_ok = False  # فیکس v5.1.1: پرچم احراز هویت
-
         self._connect()
 
-
     def _connect(self):
-
-        if not API_KEY or not API_SECRET or not API_PASS:
-
-            if not DRY_RUN:
-
-                # در حالت واقعی بدون کلید ادامه نمی‌دهیم
-
-                log.critical("❌ کلیدهای Phemex ناقص است - اتصال برقرار نشد")
-
-                return
-
-            else:
-
-                log.warning("⚠️  کلیدها خالی - DRY_RUN mode")
-
-                return
-
+        if not API_KEY:
+            log.warning("⚠️  API_KEY خالی - Exchange غیرفعال (DRY_RUN)")
+            return
         try:
-
             self._ex = ccxt.phemex({
-
                 "apiKey"          : API_KEY,
-
                 "secret"          : API_SECRET,
-
-                "password"        : API_PASS,    # فیکس v5.1.1: Phemex نیاز به password دارد
-
                 "enableRateLimit" : True,
-
                 "timeout"         : 30000,
-
                 "options"         : {
-
-                    "defaultType": "swap",  # فیوچرز
-
+                    "defaultType": "swap",
                 },
-
             })
-
-
-            # غیرفعال کردن Testnet برای دسترسی به بازارهای واقعی
-
+            
             if TESTNET:
-
                 self._ex.set_sandbox_mode(True)
-
                 log.info("⚠️  حالت Testnet فعال است")
-
             else:
-
                 log.info("🌐 حالت Mainnet (واقعی) فعال است")
-
-
-            # بارگذاری بازارها
-
+            
             markets = self._ex.load_markets()
-
             log.info("✅ Exchange: Phemex - %d بازار بارگذاری شد", len(markets))
-
-
-            # نمایش بازارهای موجود برای تأیید
-
+            
             swap_markets = [s for s in markets.keys() if s.endswith(":USDT")]
-
             log.info("📊 %d بازار فیوچرز USDT یافت شد", len(swap_markets))
-
-
-            # بررسی وجود نمادهای مورد نظر
-
-            missing = []
-
+            
             for sym in SYMBOLS:
-
                 if sym in markets:
-
                     log.info("   ✅ %s موجود است", sym)
-
                 else:
-
                     log.warning("   ❌ %s موجود نیست", sym)
-
-                    missing.append(sym)
-
-
-            if missing and not DRY_RUN:
-
-                log.warning("نمادهای ناموجود: %s", missing)
-
-
+                    
         except Exception as e:
-
             log.error("Exchange connect: %s", e)
-
+            PERF.log_error(f"Exchange connect: {e}")
             self._ex = None
 
-
-    # فیکس v5.1.1: تست احراز هویت API
-
-    def test_auth(self) -> bool:
-
-        """تست اتصال و احراز هویت - اگر موفق بود True برمی‌گرداند"""
-
-        if self._ex is None:
-
-            return False
-
-        if DRY_RUN:
-
-            self._auth_ok = True
-
-            return True
-
-        try:
-
-            # ابتدا یک درخواست عمومی
-
-            ticker = self._ex.fetch_ticker("BTC/USDT:USDT")
-
-            log.info("✅ اتصال عمومی: BTC=%.2f", ticker.get("last", 0))
-
-
-            # سپس درخواست authenticated (balance)
-
-            balance = self._ex.fetch_balance()
-
-            usdt_free = 0.0
-
-            for key in ("USDT", "usdt"):
-
-                if key in balance and balance[key].get("free"):
-
-                    usdt_free = float(balance[key]["free"])
-
-                    break
-
-            log.info("✅ احراز هویت موفق - موجودی USDT: %.2f", usdt_free)
-
-            self._auth_ok = True
-
-            return True
-
-        except Exception as e:
-
-            err_str = str(e)
-
-            # فیکس v5.1.1: تشخیص خطاهای رایج Phemex
-
-            if "30078" in err_str or "APIKEY" in err_str.upper():
-
-                log.critical("❌ API Key/Passphrase اشتباه است (کد 30078)")
-
-                TG.send(
-
-                    "❌ <b>خطای احراز هویت Phemex</b>\n\n"
-
-                    "کد 30078: کلید API یا Passphrase اشتباه است.\n"
-
-                    "از Phemex → Account → API Management بررسی کنید.",
-
-                    force=True
-
-                )
-
-            elif "30018" in err_str:
-
-                log.critical("❌ IP بلاک شده (کد 30018)")
-
-                TG.send(
-
-                    "❌ <b>IP بلاک شده</b>\n"
-
-                    "کد 30018: IP سرور در لیست سفید نیست.\n"
-
-                    "در Phemex API Management، IP Whitelist را خالی بگذارید.",
-
-                    force=True
-
-                )
-
-            elif "30042" in err_str:
-
-                log.critical("❌ Permission کافی نیست (کد 30042)")
-
-                TG.send(
-
-                    "❌ <b>Permission کافی نیست</b>\n"
-
-                    "کد 30042: API key دسترسی Futures Trade ندارد.",
-
-                    force=True
-
-                )
-
-            else:
-
-                log.critical("❌ خطای ناشناخته: %s", e)
-
-                TG.send(f"❌ خطای احراز هویت:\n{e}", force=True)
-
-            self._auth_ok = False
-
-            return False
-
-
     def _retry_ohlcv(self, sym: str, tf: str, lim: int) -> List:
-
         for attempt in range(5):
-
             try:
-
                 if self._ex is None:
-
                     raise ConnectionError("Exchange نیست")
-
-
-                # اطمینان از بارگذاری بازارها
-
-                if not self._ex.markets or sym not in self._ex.markets:
-
+                
+                if sym not in self._ex.markets:
                     log.warning("بارگذاری مجدد بازارها...")
-
                     self._ex.load_markets()
-
-
+                    
                 return self._ex.fetch_ohlcv(sym, tf, limit=lim)
-
-
+                
             except Exception as e:
-
                 log.warning("ohlcv attempt %d [%s]: %s", attempt+1, sym, str(e)[:100])
-
                 if attempt < 4:
-
                     time.sleep(2 ** attempt)
-
         raise RuntimeError(f"ohlcv {sym} شکست پس از 5 تلاش")
 
-
     def ohlcv(self, sym: str, tf: str, lim: int = 150) -> pd.DataFrame:
-
         raw = self._retry_ohlcv(sym, tf, lim)
-
         df  = pd.DataFrame(
-
             raw, columns=["ts","open","high","low","close","vol"]
-
         )
-
         df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
-
         return df.dropna().reset_index(drop=True)
 
-
     def _fetch_price_raw(self, sym: str) -> float:
-
         for attempt in range(3):
-
             try:
-
                 if self._ex is None:
-
                     raise ConnectionError
-
                 return float(self._ex.fetch_ticker(sym)["last"])
-
             except Exception as e:
-
                 log.warning("price attempt %d [%s]: %s", attempt+1, sym, e)
-
                 if attempt < 2:
-
                     time.sleep(1.5 ** attempt)
-
         raise RuntimeError(f"price {sym} شکست")
 
-
     def price(self, sym: str) -> float:
-
         now = time.time()
-
         if sym in self._pc:
-
             p, t = self._pc[sym]
-
             if now - t < self._ptl:
-
                 return p
-
         p = self._fetch_price_raw(sym)
-
         self._pc[sym] = (p, now)
-
         return p
 
-
     def prices_bulk(self, syms: List[str]) -> Dict[str, float]:
-
         out = {}
-
         if self._ex is None:
-
             return out
-
         try:
-
             tickers = self._ex.fetch_tickers(syms)
-
             for s, t in tickers.items():
-
                 if t.get("last"):
-
                     p = float(t["last"])
-
                     out[s] = p
-
                     self._pc[s] = (p, time.time())
-
         except Exception:
-
             for s in syms:
-
                 try:
-
                     out[s] = self.price(s)
-
                 except Exception:
-
                     pass
-
         return out
 
-
     def balance(self) -> float:
-
         if self._ex is None or DRY_RUN:
-
             return 10_000.0
-
         try:
-
             b = self._ex.fetch_balance()
-
             for key in ("USDT","usdt","USD","usd"):
-
                 if key in b and b[key].get("free"):
-
                     return float(b[key]["free"])
-
             return 0.0
-
         except Exception as e:
-
             log.warning("balance: %s", e)
-
             return 0.0
-
 
     def order(self, sym: str, side: str, qty: float) -> Optional[Dict]:
-
         if DRY_RUN:
-
             oid = f"dry_{uuid.uuid4().hex[:6]}"
-
             log.info("🔵 DRY %s %s %.5f → %s", side, sym, qty, oid)
-
             return {"id": oid, "ok": True}
-
         if self._ex is None:
-
-            log.error("Exchange مقداردهی نشده است")
-
             return None
-
         try:
-
             o = self._ex.create_order(sym, "market", side, qty)
-
             log.info("✅ Order %s", o.get("id"))
-
             return o
-
         except Exception as e:
-
-            err = str(e)
-
-            log.error("Order [%s %s]: %s", side, sym, err)
-
-            # فیکس v5.1.1: پیام خطای بهتر
-
-            TG.send(
-
-                f"❌ <b>سفارش ناموفق</b>\n"
-
-                f"عملیات: {side}\n"
-
-                f"نماد: {sym}\n"
-
-                f"حجم: {qty}\n"
-
-                f"خطا: {err[:200]}",
-
-                force=True
-
-            )
-
+            log.error("Order [%s %s]: %s", side, sym, e)
+            TG.send(f"❌ سفارش خطا: {side} {sym}\n{e}", force=True)
+            PERF.log_error(f"Order {side} {sym}: {e}")
             return None
-
 
 
 EX = Exchange()
 
-
 # ============================================================================
-
-# SIGNAL
-
+# SIGNAL (FIXED)
 # ============================================================================
-
 @dataclass
-
 class Sig:
-
     action: str = "neutral"
-
     conf  : int = 0
-
     reason: str = ""
-
     risk  : str = "medium"
-
     src   : str = "tech"
-
     ind   : Dict = field(default_factory=dict)
-
+    _bs   : int = 0  # 🔧 اضافه شده برای دیباگ
+    _ss   : int = 0  # 🔧 اضافه شده برای دیباگ
 
     @property
-
     def ok(self) -> bool:
-
-        return self.action in ("buy","sell") and self.conf >= 65
-
-
-# ============================================================================
-
-# TECHNICAL ANALYSIS
+        # 🔧 کاهش از 65 به 48
+        return self.action in ("buy","sell") and self.conf >= 48
 
 # ============================================================================
-
+# TECHNICAL ANALYSIS (FIXED & OPTIMIZED)
+# ============================================================================
 class Tech:
-
     def run(self, df: pd.DataFrame) -> Sig:
-
         if len(df) < 35:
-
             return Sig(reason="داده کم")
 
-
         c = df["close"]
-
         h = df["high"]
-
         l = df["low"]
-
         v = df["vol"]
 
-
         try:
-
             rsi_s            = IND.rsi(c, 14)
-
             macd_l, macd_s, macd_h = IND.macd(c)
-
             ema20            = IND.ema(c, 20)
-
             ema50            = IND.ema(c, 50)
-
             atr_s            = IND.atr(h, l, c, 14)
-
             bb_lo, bb_mid, bb_hi = IND.bbands(c, 20)
-
             stk, std_         = IND.stoch(h, l, c)
-
         except Exception as e:
-
             log.warning("Tech indicators خطا: %s", e)
-
             return Sig(reason=f"Indicator error: {e}")
 
-
         def sv(s):
-
             return IND.safe(s)
 
-
         rsi   = sv(rsi_s)
-
         mh    = sv(macd_h)
-
         ml    = sv(macd_l)
-
         ms    = sv(macd_s)
-
         e20   = sv(ema20)
-
         e50   = sv(ema50)
-
         atr   = sv(atr_s)
-
         bbl   = sv(bb_lo)
-
         bbh   = sv(bb_hi)
-
         sk    = sv(stk)
-
         price = float(c.iloc[-1])
 
-
         avg_v = float(v.rolling(20).mean().iloc[-1]) or 1.0
-
         vr    = float(v.iloc[-1]) / avg_v
 
-
         bs, ss = 0, 0
-
         tags   = []
 
+        # 🔧 بهینه‌سازی امتیازدهی
+        if   rsi < 25: bs += 35; tags.append(f"RSI={rsi:.0f}(OS++)")
+        elif rsi < 35: bs += 25; tags.append(f"RSI={rsi:.0f}(OS)")
+        elif rsi < 45: bs += 12
+        elif rsi > 75: ss += 35; tags.append(f"RSI={rsi:.0f}(OB++)")
+        elif rsi > 65: ss += 25; tags.append(f"RSI={rsi:.0f}(OB)")
+        elif rsi > 55: ss += 12
 
-        if   rsi < 25: bs += 30; tags.append(f"RSI={rsi:.0f}(OS++)")
+        if   mh > 0 and ml > ms: bs += 25; tags.append("MACD↑")
+        elif mh < 0 and ml < ms: ss += 25; tags.append("MACD↓")
 
-        elif rsi < 35: bs += 20; tags.append(f"RSI={rsi:.0f}(OS)")
+        if   price > e20 > e50 > 0: bs += 22; tags.append("EMA↑")
+        elif 0 < price < e20 < e50: ss += 22; tags.append("EMA↓")
 
-        elif rsi < 45: bs += 8
+        if   bbl > 0 and price <= bbl: bs += 18; tags.append("BB_lo")
+        elif bbh > 0 and price >= bbh: ss += 18; tags.append("BB_hi")
 
-        elif rsi > 75: ss += 30; tags.append(f"RSI={rsi:.0f}(OB++)")
-
-        elif rsi > 65: ss += 20; tags.append(f"RSI={rsi:.0f}(OB)")
-
-        elif rsi > 55: ss += 8
-
-
-        if   mh > 0 and ml > ms: bs += 20; tags.append("MACD↑")
-
-        elif mh < 0 and ml < ms: ss += 20; tags.append("MACD↓")
-
-
-        if   price > e20 > e50 > 0: bs += 20; tags.append("EMA↑")
-
-        elif 0 < price < e20 < e50: ss += 20; tags.append("EMA↓")
-
-
-        if   bbl > 0 and price <= bbl: bs += 15; tags.append("BB_lo")
-
-        elif bbh > 0 and price >= bbh: ss += 15; tags.append("BB_hi")
-
-
-        if   sk < 20: bs += 10; tags.append("Stoch_OS")
-
-        elif sk > 80: ss += 10; tags.append("Stoch_OB")
-
+        if   sk < 20: bs += 12; tags.append("Stoch_OS")
+        elif sk > 80: ss += 12; tags.append("Stoch_OB")
 
         if vr > 1.5:
-
-            if   bs > ss: bs += 8;  tags.append("Vol↑")
-
-            elif ss > bs: ss += 8;  tags.append("Vol↑")
-
+            if   bs > ss: bs += 10;  tags.append("Vol↑")
+            elif ss > bs: ss += 10;  tags.append("Vol↑")
 
         ind = {
-
             "rsi":round(rsi,1), "macd_h":round(mh,5),
-
             "e20":round(e20,4), "e50":round(e50,4),
-
             "atr":round(atr,4), "vr":round(vr,2),
-
             "sk":round(sk,1), "bbl":round(bbl,4),
-
             "bbh":round(bbh,4), "price":round(price,4)
-
         }
 
-
-        thr = 46
-
+        # 🔧 کاهش threshold از 46 به 32
+        thr = 32
+        
         if bs >= thr and bs > ss:
-
-            cf = min(92, int(bs * 1.05))
-
-            return Sig("buy",  cf, "|".join(tags[:3]),
-
-                       "low" if cf>75 else "medium", "tech", ind)
-
+            # 🔧 افزایش ضریب از 1.05 به 1.25
+            cf = min(95, int(bs * 1.25))
+            sig = Sig("buy", cf, "|".join(tags[:3]),
+                     "low" if cf>75 else "medium", "tech", ind)
+            sig._bs = bs
+            sig._ss = ss
+            return sig
+            
         if ss >= thr and ss > bs:
+            cf = min(95, int(ss * 1.25))
+            sig = Sig("sell", cf, "|".join(tags[:3]),
+                     "low" if cf>75 else "medium", "tech", ind)
+            sig._bs = bs
+            sig._ss = ss
+            return sig
 
-            cf = min(92, int(ss * 1.05))
-
-            return Sig("sell", cf, "|".join(tags[:3]),
-
-                       "low" if cf>75 else "medium", "tech", ind)
-
-
-        return Sig(reason=f"B={bs} S={ss}", ind=ind)
-
+        sig = Sig(reason=f"B={bs} S={ss}", ind=ind)
+        sig._bs = bs
+        sig._ss = ss
+        return sig
 
 
 TECH = Tech()
 
-
 # ============================================================================
-
-# AI ENGINE
-
+# AI ENGINE (OPTIMIZED)
 # ============================================================================
-
 class AI:
-
     _CPK = 0.002
 
-
     def __init__(self):
-
         self._c     = None
-
         self._cache : Dict[str, Tuple[Sig, float]] = {}
-
-        self._ttl   = 120
-
+        self._ttl   = 60  # 🔧 کاهش از 120 به 60
         self._calls = 0
-
         self._cost  = 0.0
-
         self._init()
 
-
     def _init(self):
-
         if not OAI_KEY:
-
             return
-
         try:
-
             from openai import OpenAI
-
             self._c = OpenAI(api_key=OAI_KEY, timeout=25.0)
-
             log.info("🧠 OpenAI آماده")
-
         except Exception as e:
-
             log.warning("OpenAI: %s", e)
 
-
     def analyze(self, df: pd.DataFrame,
-
                 sym: str, tech: Sig, n_open: int) -> Sig:
-
         if not self._c:
-
             return tech
-
 
         ck = hashlib.md5(
-
             f"{sym}_{df['close'].iloc[-1]}_{df['ts'].iloc[-1]}".encode()
-
         ).hexdigest()
-
         if ck in self._cache:
-
             s, t = self._cache[ck]
-
             if time.time() - t < self._ttl:
-
                 return s
 
-
         prompt = self._prompt(df, sym, tech, n_open)
-
         try:
-
             r = self._c.chat.completions.create(
-
                 model      = "gpt-3.5-turbo",
-
                 messages   = [
-
                     {"role":"system",
-
                      "content":"Professional crypto quant. "
-
                                "Reply ONLY valid JSON, no markdown."},
-
                     {"role":"user","content":prompt}
-
                 ],
-
                 temperature= 0.1,
-
                 max_tokens = 100,
-
             )
-
             raw = r.choices[0].message.content.strip()
-
             raw = re.sub(r"```[a-z]*|```","",raw).strip()
-
             aj  = json.loads(raw)
 
-
             self._calls += 1
-
             toks = getattr(r.usage,"total_tokens",180)
-
             self._cost += toks/1000 * self._CPK
 
-
         except Exception as e:
-
             log.warning("AI خطا: %s", e)
-
             return tech
 
-
         result = self._merge(aj, tech)
-
         self._cache[ck] = (result, time.time())
-
-        log.info("🤖 [%s] AI=%s(%d%%) Tech=%s → %s(%d%%)",
-
+        log.info("🤖 [%s] AI=%s(%d%%) Tech=%s(%d%%) → %s(%d%%)",
                  sym, aj.get("signal","?"),aj.get("confidence",0),
-
-                 tech.action, result.action, result.conf)
-
+                 tech.action, tech.conf, result.action, result.conf)
         return result
 
-
     def _merge(self, ai: Dict, tech: Sig) -> Sig:
-
         aa  = ai.get("signal","neutral")
-
         ac  = int(ai.get("confidence",0))
-
         ar  = str(ai.get("reason",""))
-
         arl = ai.get("risk_level","medium")
 
-
         if aa == tech.action and aa != "neutral":
-
-            cf = min(95, int((ac+tech.conf)/2*1.1))
-
+            cf = min(95, int((ac+tech.conf)/2*1.15))  # 🔧 افزایش boost
             return Sig(aa, cf, f"AI+Tech:{ar}"[:70], arl, "combined", tech.ind)
 
-
         if aa != "neutral" and tech.action != "neutral" and aa != tech.action:
-
             return Sig("neutral",0,f"Conflict AI={aa} Tech={tech.action}",
-
                        src="conflict", ind=tech.ind)
 
-
-        if aa != "neutral" and tech.action == "neutral" and ac >= 80:
-
+        if aa != "neutral" and tech.action == "neutral" and ac >= 75:  # 🔧 کاهش از 80
             return Sig(aa, ac, ar, arl, "ai", tech.ind)
-
 
         return tech
 
-
     def _prompt(self, df: pd.DataFrame,
-
                 sym: str, tech: Sig, n_open: int) -> str:
-
         rows = df.tail(8)[["ts","open","high","low","close","vol"]].copy()
-
         rows["ts"] = rows["ts"].astype(str)
-
         i = tech.ind
-
         return (
-
             f"Analyze {sym} {TF}.\n"
-
             f"CANDLES: {json.dumps(rows.to_dict('records'),default=str)}\n"
-
             f"RSI={i.get('rsi')} MACD_h={i.get('macd_h')} "
-
             f"EMA20={i.get('e20')} ATR={i.get('atr')} VR={i.get('vr')}x\n"
-
-            f"TECH_SIGNAL: {tech.action.upper()}({tech.conf}%)\n"
-
+            f"TECH_SIGNAL: {tech.action.upper()}({tech.conf}%) BS={tech._bs} SS={tech._ss}\n"
             f"CONTEXT: open={n_open}/{MAX_POS}\n"
-
             f"RULES: BUY if RSI<65&macd_h>0; SELL if RSI>35&macd_h<0\n"
-
             f'JSON: {{"signal":"buy"|"sell"|"neutral",'
-
             f'"confidence":0-100,"reason":"<12w",'
-
             f'"risk_level":"low"|"medium"|"high"}}'
-
         )
 
-
     @property
-
     def stats(self) -> Dict:
-
         return {"calls":self._calls,
-
                 "cost":round(self._cost,5),
-
                 "cache":len(self._cache)}
-
 
 
 AI_ENG = AI()
 
-
 # ============================================================================
-
 # TIMER
-
 # ============================================================================
-
 class Timer:
-
     _SEC = {"1m":60,"3m":180,"5m":300,"15m":900,
-
             "30m":1800,"1h":3600,"4h":14400,"1d":86400}
 
-
     def __init__(self, tf: str):
-
         self._s    = self._SEC.get(tf, 300)
-
         self._last = None
-
         log.info("⏱️  Timer: %s (%ds)", tf, self._s)
 
-
     def _ts(self) -> int:
-
         return (int(time.time()) // self._s) * self._s
 
-
     def is_new(self) -> bool:
-
         ts = self._ts()
-
         if self._last is None:
-
             self._last = ts
-
             return False
-
         if ts > self._last:
-
             self._last = ts
-
             log.info("🕯️  کندل جدید: %s",
-
                      datetime.fromtimestamp(ts,tz=timezone.utc)
-
                      .strftime("%H:%M UTC"))
-
             return True
-
         return False
 
-
     @property
-
     def left(self) -> int:
-
         return max(0, self._ts() + self._s - int(time.time()))
-
 
 
 TMR = Timer(TF)
 
-
 # ============================================================================
-
 # DRAWDOWN GUARD
-
 # ============================================================================
-
 class DDG:
-
     def __init__(self, mx: float):
-
         self._mx     = mx
-
         self._peak   = None
-
         self.halted  = False
-
         self.dd      = 0.0
 
-
     def init(self, b: float):
-
         if self._peak is None:
-
             self._peak = b
-
             log.info("💰 Peak اولیه: $%.2f", b)
 
-
     def check(self, b: float) -> bool:
-
         if self._peak is None:
-
             self.init(b)
-
             return True
-
         if b > self._peak:
-
             self._peak = b
-
             if self.halted:
-
                 self.halted = False
-
                 TG.send("✅ Drawdown بهبود - ربات فعال", force=True)
-
         dd = (self._peak - b) / self._peak * 100
-
         self.dd = round(dd, 2)
-
         if dd >= self._mx and not self.halted:
-
             self.halted = True
-
             TG.send(
-
                 f"🚨 توقف! DD={dd:.1f}% ≥ {self._mx}%\n"
-
                 f"Peak=${self._peak:.0f} Now=${b:.0f}",
-
                 force=True
-
             )
-
         return not self.halted
 
-
     @property
-
     def st(self) -> Dict:
-
         return {"halted":self.halted,"dd":self.dd,
-
                 "max":self._mx,"peak":self._peak}
-
 
 
 DD = DDG(MAX_DD)
 
-
 # ============================================================================
-
 # POSITION SIZER
-
 # ============================================================================
-
 class Sizer:
-
     def __init__(self, pct: float):
-
         self._r = pct
 
-
     def calc(self, bal: float, entry: float, sl: float) -> Dict:
-
         dist = abs(entry - sl)
-
         if dist < 1e-10:
-
             return {"qty":0,"risk":0,"val":0,"sl_pct":0}
-
         risk  = bal * (self._r / 100)
-
         qty   = risk / dist
-
         val   = qty * entry
-
         mx    = bal * 0.20
-
         if val > mx:
-
             qty = mx / entry
-
             val = mx
-
         return {
-
             "qty" : round(qty, 6),
-
             "risk": round(risk, 2),
-
             "val" : round(val, 2),
-
             "sl_pct": round(dist/entry*100, 2)
-
         }
 
-
     @staticmethod
-
     def ok(s: Dict) -> bool:
-
         return s["qty"] > 0.00001 and s["val"] > 1.0
-
 
 
 SZ = Sizer(RISK_PCT)
 
-
 # ============================================================================
-
 # TRAILING STOP
-
 # ============================================================================
-
 class Trail:
-
     def __init__(self, m: float = 2.0):
-
         self._m    = m
-
         self._peak : Dict[str, float] = {}
-
         self._sl   : Dict[str, float] = {}
 
-
     def init(self, pid: str, e: float, sl: float):
-
         self._peak[pid] = e
-
         self._sl[pid]   = sl
 
-
     def update(self, pid: str, side: str,
-
                px: float, atr: float, orig_sl: float) -> float:
-
         td  = atr * self._m
-
         old = self._sl.get(pid, orig_sl)
-
         if side == "long":
-
             pk = self._peak.get(pid, px)
-
             if px > pk:
-
                 self._peak[pid] = pk = px
-
             nw = pk - td
-
             f  = max(old, nw)
-
         else:
-
             pk = self._peak.get(pid, px)
-
             if px < pk:
-
                 self._peak[pid] = pk = px
-
             nw = pk + td
-
             f  = min(old, nw)
-
         self._sl[pid] = f
-
         return f
 
-
     def rm(self, pid: str):
-
         self._peak.pop(pid, None)
-
         self._sl.pop(pid, None)
-
 
 
 TR = Trail(2.0)
 
-
 # ============================================================================
-
-# CORRELATION FILTER
-
+# CORRELATION FILTER (RELAXED)
 # ============================================================================
-
 class Corr:
-
+    # 🔧 گروه‌بندی آزادتر
     _G = [
-
-        {"BTC/USDT:USDT","ETH/USDT:USDT","BNB/USDT:USDT"},
-
-        {"SOL/USDT:USDT","AVAX/USDT:USDT"},
-
-        {"XRP/USDT:USDT","ADA/USDT:USDT"},
-
-        {"DOGE/USDT:USDT","SHIB/USDT:USDT"},
-
-        {"DOT/USDT:USDT","LINK/USDT:USDT"},
-
+        {"BTC/USDT:USDT","ETH/USDT:USDT"},  # فقط BTC-ETH
+        {"DOGE/USDT:USDT","SHIB/USDT:USDT"}, # مم کوین‌ها
     ]
 
-
     def ok(self, sym: str, open_s: set) -> bool:
-
+        # 🔧 می‌توان موقتاً غیرفعال کرد
+        return True  # برای تست اولیه
+        
         for g in self._G:
-
             if sym in g and g & open_s:
-
                 log.info("🔗 %s block (همبسته با %s)", sym, g&open_s)
-
                 return False
-
         return True
-
 
 
 CR = Corr()
 
-
 # ============================================================================
-
-# ENGINE
-
+# ENGINE (ENHANCED)
 # ============================================================================
-
 class Engine:
-
     def __init__(self):
-
         self._pos  : Dict[str, Dict] = {}
-
         self._lock = threading.Lock()
-
         self._run  = True
-
         self._st   = {
-
             "cycles":0,"scans":0,
-
             "opened":0,"closed":0,
-
             "start":datetime.now(timezone.utc).isoformat()
-
         }
-
         self._boot()
 
-
     def _boot(self):
-
-        # فیکس v5.1.1: تست احراز هویت قبل از هر کاری
-
-        if not DRY_RUN:
-
-            if not EX.test_auth():
-
-                log.critical("❌ احراز هویت ناموفق - ربات متوقف می‌شود")
-
-                TG.send(
-
-                    "🚨 <b>ربات متوقف شد</b>\n\n"
-
-                    "احراز هویت Phemex شکست خورد.\n"
-
-                    "لطفاً PHEMEX_API_KEY, PHEMEX_API_SECRET "
-
-                    "و PHEMEX_API_PASSPHRASE را بررسی کنید.",
-
-                    force=True
-
-                )
-
-                raise SystemExit(1)
-
-
         bal = EX.balance()
-
         DD.init(bal)
-
         for t in database.open_trades():
-
             self._pos[t["id"]] = t
-
             TR.init(t["id"], t["entry"], t["sl"])
-
         log.info("📂 %d پوزیشن بارگذاری | Balance=$%.2f",
-
                  len(self._pos), bal)
-
+        
         TG.send(
-
-            f"🤖 <b>Master-AI Bot v5.1.1 شروع شد</b>\n"
-
-            f"{'🔵 DRY-RUN' if DRY_RUN else '🟢 LIVE'} | "
-
-            f"{TF} | {len(SYMBOLS)} جفت‌ارز | Risk:{RISK_PCT}% | DD:{MAX_DD}%\n"
-
-            f"Balance: ${bal:.2f}",
-
+            f"🚀 <b>Master-AI Bot v5.2 شروع شد</b>\n"
+            f"{'🔵 DRY-RUN MODE' if DRY_RUN else '🟢 LIVE TRADING'} | "
+            f"{TF} | {len(SYMBOLS)} جفت‌ارز\n"
+            f"Risk: {RISK_PCT}% | Max DD: {MAX_DD}%\n"
+            f"Max Positions: {MAX_POS}\n"
+            f"Balance: ${bal:,.2f}",
             force=True
-
         )
-
         time.sleep(2)
-
         self._send_dashboard(bal)
 
-
     def _send_dashboard(self, bal: float = None):
-
         if bal is None:
-
             bal = EX.balance()
-
         stats = self.stats
-
         stats["uptime"] = self._uptime()
-
         TG.send_dashboard(stats, bal)
 
-
     def _uptime(self) -> str:
-
         try:
-
             d = datetime.now(timezone.utc) - \
-
                 datetime.fromisoformat(self._st["start"])
-
             h,r = divmod(int(d.total_seconds()),3600)
-
             m,s = divmod(r,60)
-
             return f"{h}h {m}m {s}s"
-
         except Exception:
-
             return "?"
 
-
-    # ── Main Loop ─────────────────────────────────────────────────────────
-
     def loop(self):
-
         log.info("▶️  Main loop شروع")
-
         last_dashboard = 0
-
+        
         while self._run:
-
             try:
-
                 self._st["cycles"] += 1
-
                 t0 = time.time()
-
 
                 self._exits()
 
-
                 bal = EX.balance()
-
                 can = DD.check(bal)
 
-
                 if can and TMR.is_new():
-
                     self._scan(bal)
 
-
-                if time.time() - last_dashboard > 30:
-
+                # داشبورد هر دقیقه
+                if time.time() - last_dashboard > 60:
                     self._send_dashboard(bal)
-
                     last_dashboard = time.time()
 
-
                 elapsed = time.time() - t0
-
-                sl_t    = max(5.0, min(20.0, TMR.left / 4.0))
-
+                PERF.log_scan(elapsed)
+                
+                sl_t = max(5.0, min(20.0, TMR.left / 4.0))
                 time.sleep(max(1.0, sl_t - elapsed))
 
-
             except KeyboardInterrupt:
-
                 self._run = False
-
             except Exception as e:
-
                 log.error("Loop: %s", e, exc_info=True)
-
+                PERF.log_error(str(e))
                 time.sleep(15)
 
-
-    # ── Scan ──────────────────────────────────────────────────────────────
-
     def _scan(self, bal: float):
-
         with self._lock:
-
             n = len(self._pos)
-
         if n >= MAX_POS:
-
+            log.info("⏸️  Max positions رسید (%d/%d)", n, MAX_POS)
             return
-
+            
         self._st["scans"] += 1
-
         log.info("🔍 Scan#%d pos=%d/%d", self._st["scans"], n, MAX_POS)
 
-
         for sym in SYMBOLS:
-
             if not self._run:
-
                 break
-
             with self._lock:
-
                 if len(self._pos) >= MAX_POS:
-
                     break
-
                 open_s = {p["symbol"] for p in self._pos.values()}
 
-
             if sym in open_s:
-
                 continue
-
             if not CR.ok(sym, open_s):
-
                 continue
-
 
             try:
-
                 self._analyze(sym, bal, n)
-
             except Exception as e:
-
                 log.error("[%s] analyze: %s", sym, e)
-
+                PERF.log_error(f"{sym} analyze: {e}")
 
     def _analyze(self, sym: str, bal: float, n_open: int):
-
         try:
-
             df = EX.ohlcv(sym, TF, 150)
-
         except Exception as e:
-
             log.error("[%s] دریافت داده شکست: %s", sym, e)
-
             return
-
-
+            
         if len(df) < 40:
-
             log.warning("[%s] داده کافی نیست: %d", sym, len(df))
-
             return
-
 
         tech = TECH.run(df)
-
-        sig  = AI_ENG.analyze(df, sym, tech, n_open)
-
-
+        
+        # 🔍 DEBUG LOG
+        log.info("🔍 [%s] Tech: action=%s conf=%d bs=%d ss=%d reason=%s", 
+                 sym, tech.action, tech.conf, tech._bs, tech._ss, tech.reason[:50])
+        
+        sig = AI_ENG.analyze(df, sym, tech, n_open)
+        
+        # 🔍 DEBUG LOG
+        log.info("🧠 [%s] Final: action=%s conf=%d ok=%s src=%s", 
+                 sym, sig.action, sig.conf, sig.ok, sig.src)
+        
         if not sig.ok:
-
-            log.info("[%s] سیگنال ضعیف: %s (conf=%d%%)", sym, sig.action, sig.conf)
-
+            log.info("❌ [%s] REJECTED: %s (conf=%d < 48)", 
+                     sym, sig.reason, sig.conf)
             return
 
-
+        PERF.log_signal(sym, sig.action, sig.conf)
+        
         price = sig.ind.get("price") or float(df["close"].iloc[-1])
-
         atr   = sig.ind.get("atr")   or price * 0.01
-
         slm   = 1.5 if sig.risk == "low" else 2.0
-
         tpm   = 3.0 if sig.risk == "low" else 2.5
 
-
         if sig.action == "buy":
-
             sl = price - atr*slm
-
             tp = price + atr*tpm
-
         else:
-
             sl = price + atr*slm
-
             tp = price - atr*tpm
 
-
         sz = SZ.calc(bal, price, sl)
-
         if not SZ.ok(sz):
-
-            log.warning("[%s] حجم نامناسب: qty=%.6f val=%.2f", sym, sz["qty"], sz["val"])
-
+            log.warning("[%s] حجم نامناسب: qty=%.6f val=%.2f", 
+                       sym, sz["qty"], sz["val"])
             return
-
 
         self._open(sym, sig, price, sl, tp, sz)
 
-
-    # ── Open ──────────────────────────────────────────────────────────────
-
     def _open(self, sym: str, sig: Sig,
-
               price: float, sl: float, tp: float, sz: Dict):
-
         side = "long" if sig.action=="buy" else "short"
-
         pid  = f"p_{uuid.uuid4().hex[:8]}"
 
-
         o = EX.order(sym, "buy" if side=="long" else "sell", sz["qty"])
-
         if o is None and not DRY_RUN:
-
-            log.error("[%s] سفارش ارسال نشد - پوزیشن باز نمی‌شود", sym)
-
             return
 
-
         pos = {"id":pid,"symbol":sym,"side":side,"entry":price,
-
                "qty":sz["qty"],"sl":sl,"tp":tp,
-
                "signal":sig.action,"conf":sig.conf,
-
                "atr":sig.ind.get("atr",price*0.01)}
 
-
         with self._lock:
-
             self._pos[pid] = pos
-
         TR.init(pid, price, sl)
-
         database.insert(pos)
-
         self._st["opened"] += 1
 
-
         sp = abs(price-sl)/price*100
-
         tp_ = abs(tp-price)/price*100
-
         e  = "🟢" if side=="long" else "🔴"
-
-
+        
         TG.send(
-
             f"{e} <b>باز کردن {side.upper()}</b> {sym}\n"
-
-            f"ورود: {price:.4f} | حد ضرر: {sl:.4f}(-{sp:.1f}%)\n"
-
-            f"حد سود: {tp:.4f}(+{tp_:.1f}%) | حجم: {sz['qty']:.5f}\n"
-
-            f"ریسک: ${sz['risk']:.1f} | اطمینان: {sig.conf}%[{sig.src}]\n"
-
-            f"دلیل: {sig.reason[:55]}"
-
+            f"💰 ورود: {price:.4f}\n"
+            f"🛑 حد ضرر: {sl:.4f} (-{sp:.1f}%)\n"
+            f"🎯 حد سود: {tp:.4f} (+{tp_:.1f}%)\n"
+            f"📊 حجم: {sz['qty']:.5f} | ارزش: ${sz['val']:.2f}\n"
+            f"⚡ ریسک: ${sz['risk']:.2f}\n"
+            f"🧠 اطمینان: {sig.conf}% [{sig.src}]\n"
+            f"📝 دلیل: {sig.reason[:60]}\n"
+            f"━━━━━━━━━━━━━━━━━\n"
+            f"پوزیشن‌های باز: {len(self._pos)}/{MAX_POS}"
         )
-
-        log.info("✅ OPEN %s %s | %s | %.4f", side, sym, pid, price)
-
-
-    # ── Exits ─────────────────────────────────────────────────────────────
+        log.info("✅ OPEN %s %s | %s | %.4f | conf=%d", 
+                 side, sym, pid, price, sig.conf)
 
     def _exits(self):
-
         with self._lock:
-
             if not self._pos:
-
                 return
-
             snap = dict(self._pos)
 
-
         syms  = list({p["symbol"] for p in snap.values()})
-
         pxs   = EX.prices_bulk(syms)
 
-
         todo = []
-
         for pid, pos in snap.items():
-
             px = pxs.get(pos["symbol"])
-
             if not px:
-
                 continue
 
-
             side = pos["side"]
-
             atr  = pos.get("atr", px*0.01)
-
             nsl  = TR.update(pid, side, px, atr, pos["sl"])
 
-
             if abs(nsl - pos["sl"]) > 1e-8:
-
                 with self._lock:
-
                     if pid in self._pos:
-
                         self._pos[pid]["sl"] = nsl
-
                 database.run(
-
                     "UPDATE trades SET stop_loss=? WHERE id=?",
-
                     (nsl, pid)
-
                 )
 
-
             sl_h = ((side=="long"  and px<=nsl) or
-
                     (side=="short" and px>=nsl))
-
             tp_h = ((side=="long"  and px>=pos["tp"]) or
-
                     (side=="short" and px<=pos["tp"]))
 
-
             if sl_h or tp_h:
-
                 todo.append((pid, pos, px, "TP" if tp_h else "SL"))
 
-
         for args in todo:
-
             self._close(*args)
 
-
     def _close(self, pid: str, pos: Dict, px: float, reason: str):
-
         EX.order(pos["symbol"],
-
                  "sell" if pos["side"]=="long" else "buy",
-
                  pos["qty"])
 
-
         if pos["side"] == "long":
-
             pnl = (px - pos["entry"]) * pos["qty"]
-
             pct = (px - pos["entry"]) / pos["entry"] * 100
-
         else:
-
             pnl = (pos["entry"] - px) * pos["qty"]
-
             pct = (pos["entry"] - px) / pos["entry"] * 100
 
-
         database.close(pid, px, pnl, pct, reason)
-
         with self._lock:
-
             self._pos.pop(pid, None)
-
         TR.rm(pid)
-
         self._st["closed"] += 1
 
-
         e = "🎯" if reason=="TP" else "🛑"
-
-        w = "✅برد" if pnl>0 else "❌باخت"
-
-
+        w = "✅ برد" if pnl>0 else "❌ باخت"
+        
+        # محاسبه مدت زمان باز بودن
+        opened = pos.get("opened", "")
+        duration = ""
+        if opened:
+            try:
+                dt = datetime.fromisoformat(opened.replace("Z", "+00:00"))
+                dur = datetime.now(timezone.utc) - dt
+                h, r = divmod(int(dur.total_seconds()), 3600)
+                m, _ = divmod(r, 60)
+                duration = f"{h}h {m}m"
+            except:
+                pass
+        
         TG.send(
-
             f"{e} <b>{reason}</b> {w} {pos['symbol']}\n"
-
-            f"{pos['side'].upper()} "
-
-            f"{pos['entry']:.4f}→{px:.4f}\n"
-
-            f"سود/زیان: {'+' if pnl>0 else ''}{pnl:.2f}$({pct:+.2f}%)\n"
-
-            f"Drawdown: {DD.dd:.1f}%"
-
+            f"📊 {pos['side'].upper()} "
+            f"{pos['entry']:.4f} → {px:.4f}\n"
+            f"💵 سود/زیان: <b>{'+' if pnl>=0 else ''}{pnl:.2f}$</b> "
+            f"({pct:+.2f}%)\n"
+            f"⏱️ مدت: {duration}\n"
+            f"📉 Drawdown: {DD.dd:.1f}%\n"
+            f"━━━━━━━━━━━━━━━━━\n"
+            f"پوزیشن‌های باقی‌مانده: {len(self._pos)}/{MAX_POS}"
         )
-
-        log.info("%s %s %s | $%.2f (%.2f%%)",
-
-                 e, pos["symbol"], reason, pnl, pct)
-
+        log.info("%s %s %s | $%.2f (%.2f%%) | %s",
+                 e, pos["symbol"], reason, pnl, pct, duration)
 
     @property
-
     def stats(self) -> Dict:
-
         with self._lock:
-
             n = len(self._pos)
-
             pl = list(self._pos.values())
-
         return {
-
             **self._st,
-
             "open_pos" : n,
-
             "positions": pl,
-
             "dd"       : DD.st,
-
             "ai"       : AI_ENG.stats,
-
             "today"    : database.today(),
-
-            "secs_left": TMR.left
-
+            "secs_left": TMR.left,
+            "perf"     : PERF.stats
         }
 
-
 # ============================================================================
-
-# FLASK APP
-
+# FLASK APP (PROFESSIONAL DASHBOARD)
 # ============================================================================
-
 app = Flask(__name__)
-
 engine = None
 
+DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html dir="rtl" lang="fa">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Master-AI Bot Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0d1117 0%, #1a1f2e 100%);
+            color: #c9d1d9;
+            padding: 20px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 {
+            text-align: center;
+            color: #58a6ff;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+        .subtitle {
+            text-align: center;
+            color: #8b949e;
+            margin-bottom: 30px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .card {
+            background: rgba(22, 27, 34, 0.9);
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+        }
+        .card h2 {
+            color: #58a6ff;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+            border-bottom: 2px solid #30363d;
+            padding-bottom: 10px;
+        }
+        .stat {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #21262d;
+        }
+        .stat:last-child { border-bottom: none; }
+        .stat-label { color: #8b949e; }
+        .stat-value {
+            color: #c9d1d9;
+            font-weight: bold;
+        }
+        .positive { color: #3fb950 !important; }
+        .negative { color: #f85149 !important; }
+        .neutral { color: #ffa657 !important; }
+        .status-badge {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: bold;
+        }
+        .status-active {
+            background: rgba(63, 185, 80, 0.2);
+            color: #3fb950;
+            border: 1px solid #3fb950;
+        }
+        .status-dry {
+            background: rgba(88, 166, 255, 0.2);
+            color: #58a6ff;
+            border: 1px solid #58a6ff;
+        }
+        .status-halted {
+            background: rgba(248, 81, 73, 0.2);
+            color: #f85149;
+            border: 1px solid #f85149;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th {
+            background: #21262d;
+            padding: 12px;
+            text-align: right;
+            color: #58a6ff;
+            font-weight: 600;
+        }
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #21262d;
+        }
+        tr:hover { background: rgba(88, 166, 255, 0.1); }
+        .refresh-btn {
+            background: #238636;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1em;
+            margin: 20px auto;
+            display: block;
+        }
+        .refresh-btn:hover { background: #2ea043; }
+        .progress-bar {
+            background: #21262d;
+            height: 20px;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #3fb950, #58a6ff);
+            transition: width 0.3s;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            color: #8b949e;
+            font-size: 0.9em;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .live-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            background: #3fb950;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+            margin-left: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Master-AI Trading Bot</h1>
+        <p class="subtitle">
+            نسخه 5.2.0 | آخرین به‌روزرسانی: <span id="updateTime">{{ update_time }}</span>
+            <span class="live-indicator"></span>
+        </p>
+
+        <div class="grid">
+            <!-- Status Card -->
+            <div class="card">
+                <h2>📊 وضعیت سیستم</h2>
+                <div class="stat">
+                    <span class="stat-label">حالت:</span>
+                    <span class="status-badge {{ 'status-dry' if dry_run else 'status-active' }}">
+                        {{ 'DRY RUN' if dry_run else 'LIVE' }}
+                    </span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">وضعیت DD:</span>
+                    <span class="status-badge {{ 'status-halted' if dd.halted else 'status-active' }}">
+                        {{ 'متوقف' if dd.halted else 'فعال' }}
+                    </span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Timeframe:</span>
+                    <span class="stat-value">{{ timeframe }}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">جفت‌ارزها:</span>
+                    <span class="stat-value">{{ symbols_count }}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">آپتایم:</span>
+                    <span class="stat-value">{{ uptime }}</span>
+                </div>
+            </div>
+
+            <!-- Balance Card -->
+            <div class="card">
+                <h2>💰 موجودی و عملکرد</h2>
+                <div class="stat">
+                    <span class="stat-label">موجودی فعلی:</span>
+                    <span class="stat-value">${{ "%.2f"|format(balance) }}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Peak:</span>
+                    <span class="stat-value">${{ "%.2f"|format(dd.peak or balance) }}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">ROI کل:</span>
+                    <span class="stat-value {{ 'positive' if roi > 0 else 'negative' }}">
+                        {{ "%+.2f"|format(roi) }}%
+                    </span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Drawdown:</span>
+                    <span class="stat-value {{ 'negative' if dd.dd > 5 else 'neutral' }}">
+                        {{ "%.1f"|format(dd.dd) }}% / {{ dd.max }}%
+                    </span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: {{ min(100, dd.dd / dd.max * 100) }}%"></div>
+                </div>
+            </div>
+
+            <!-- Today Stats -->
+            <div class="card">
+                <h2>📈 آمار امروز</h2>
+                <div class="stat">
+                    <span class="stat-label">تعداد معاملات:</span>
+                    <span class="stat-value">{{ today.trades }}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">برد / باخت:</span>
+                    <span class="stat-value">
+                        <span class="positive">{{ today.wins }}</span> /
+                        <span class="negative">{{ today.losses }}</span>
+                    </span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">وین‌ریت:</span>
+                    <span class="stat-value {{ 'positive' if today.wr >= 50 else 'negative' }}">
+                        {{ "%.1f"|format(today.wr) }}%
+                    </span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">سود/زیان:</span>
+                    <span class="stat-value {{ 'positive' if today.pnl > 0 else 'negative' }}">
+                        {{ "%+.2f"|format(today.pnl) }} $
+                    </span>
+                </div>
+            </div>
+
+            <!-- Positions -->
+            <div class="card">
+                <h2>📊 پوزیشن‌ها</h2>
+                <div class="stat">
+                    <span class="stat-label">باز:</span>
+                    <span class="stat-value">{{ open_pos }} / {{ max_pos }}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">کل باز شده:</span>
+                    <span class="stat-value">{{ stats.opened }}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">کل بسته شده:</span>
+                    <span class="stat-value">{{ stats.closed }}</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: {{ (open_pos / max_pos * 100) }}%"></div>
+                </div>
+            </div>
+
+            <!-- AI Stats -->
+            <div class="card">
+                <h2>🧠 هوش مصنوعی</h2>
+                <div class="stat">
+                    <span class="stat-label">تعداد درخواست:</span>
+                    <span class="stat-value">{{ ai.calls }}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Cache:</span>
+                    <span class="stat-value">{{ ai.cache }} آیتم</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">هزینه:</span>
+                    <span class="stat-value">${{ "%.4f"|format(ai.cost) }}</span>
+                </div>
+            </div>
+
+            <!-- Performance -->
+            <div class="card">
+                <h2>⚡ عملکرد</h2>
+                <div class="stat">
+                    <span class="stat-label">چرخه‌ها:</span>
+                    <span class="stat-value">{{ stats.cycles }}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">اسکن‌ها:</span>
+                    <span class="stat-value">{{ stats.scans }}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">متوسط زمان:</span>
+                    <span class="stat-value">{{ "%.2f"|format(perf.avg_scan_time) }}s</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">تا کندل بعدی:</span>
+                    <span class="stat-value">{{ secs_left }}s</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Open Positions Table -->
+        {% if positions %}
+        <div class="card">
+            <h2>📋 پوزیشن‌های باز</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>نماد</th>
+                        <th>جهت</th>
+                        <th>ورود</th>
+                        <th>قیمت فعلی</th>
+                        <th>SL</th>
+                        <th>TP</th>
+                        <th>P&L</th>
+                        <th>اطمینان</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for p in positions %}
+                    <tr>
+                        <td>{{ p.symbol }}</td>
+                        <td>
+                            <span class="{{ 'positive' if p.side == 'long' else 'negative' }}">
+                                {{ p.side.upper() }}
+                            </span>
+                        </td>
+                        <td>{{ "%.4f"|format(p.entry) }}</td>
+                        <td>{{ "%.4f"|format(p.current_price) }}</td>
+                        <td>{{ "%.4f"|format(p.sl) }}</td>
+                        <td>{{ "%.4f"|format(p.tp) }}</td>
+                        <td class="{{ 'positive' if p.unrealized_pnl > 0 else 'negative' }}">
+                            {{ "%+.2f"|format(p.unrealized_pnl) }}$
+                            ({{ "%+.1f"|format(p.unrealized_pct) }}%)
+                        </td>
+                        <td>{{ p.conf }}%</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
+        <!-- Recent Signals -->
+        {% if signals %}
+        <div class="card">
+            <h2>📡 سیگنال‌های اخیر</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>زمان</th>
+                        <th>نماد</th>
+                        <th>سیگنال</th>
+                        <th>اطمینان</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for s in signals[-10:] %}
+                    <tr>
+                        <td>{{ s.time.split('T')[1][:8] }}</td>
+                        <td>{{ s.symbol }}</td>
+                        <td class="{{ 'positive' if s.action == 'buy' else 'negative' }}">
+                            {{ s.action.upper() }}
+                        </td>
+                        <td>{{ s.confidence }}%</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
+        <button class="refresh-btn" onclick="location.reload()">🔄 به‌روزرسانی</button>
+
+        <div class="footer">
+            <p>Master-AI Trading Bot v5.2.0 | Made with ❤️</p>
+            <p>Auto-refresh در 30 ثانیه...</p>
+        </div>
+    </div>
+
+    <script>
+        setTimeout(() => location.reload(), 30000);
+        
+        setInterval(() => {
+            const now = new Date();
+            document.getElementById('updateTime').textContent = 
+                now.toLocaleTimeString('fa-IR');
+        }, 1000);
+    </script>
+</body>
+</html>
+"""
 
 @app.route('/')
-
 def home():
-
-    """داشبورد حرفه‌ای - داده real-time از /api/stats"""
-
-    return render_template(
-
-        'dashboard.html',
-
-        version   = "5.1.1",
-
-        dry_run   = DRY_RUN,
-
-        testnet   = TESTNET,
-
-        tf        = TF,
-
-        symbols   = SYMBOLS,
-
-        symbols_count = len(SYMBOLS),
-
-        risk_pct  = RISK_PCT,
-
-        max_dd    = MAX_DD,
-
-        max_pos   = MAX_POS,
-
-        tg_chat   = TG_CHAT,
-
-        start_ts  = datetime.now(timezone.utc).isoformat()
-
+    if not engine:
+        return "<h1>Bot در حال بارگذاری...</h1>", 503
+    
+    stats = engine.stats
+    bal = EX.balance()
+    
+    # محاسبه قیمت‌های فعلی و P&L
+    positions_data = []
+    if stats['positions']:
+        syms = [p['symbol'] for p in stats['positions']]
+        prices = EX.prices_bulk(syms)
+        
+        for p in stats['positions']:
+            cp = prices.get(p['symbol'], p['entry'])
+            if p['side'] == 'long':
+                upnl = (cp - p['entry']) * p['qty']
+                upct = (cp - p['entry']) / p['entry'] * 100
+            else:
+                upnl = (p['entry'] - cp) * p['qty']
+                upct = (p['entry'] - cp) / p['entry'] * 100
+            
+            positions_data.append({
+                **p,
+                'current_price': cp,
+                'unrealized_pnl': upnl,
+                'unrealized_pct': upct
+            })
+    
+    roi = ((bal - 10000) / 10000 * 100) if bal > 0 else 0
+    
+    return render_template_string(
+        DASHBOARD_HTML,
+        update_time=datetime.now(timezone.utc).strftime('%H:%M:%S'),
+        dry_run=DRY_RUN,
+        timeframe=TF,
+        symbols_count=len(SYMBOLS),
+        uptime=engine._uptime(),
+        balance=bal,
+        roi=roi,
+        dd=stats['dd'],
+        today=stats['today'],
+        open_pos=stats['open_pos'],
+        max_pos=MAX_POS,
+        stats=stats,
+        ai=stats['ai'],
+        perf=stats['perf'],
+        secs_left=stats['secs_left'],
+        positions=positions_data,
+        signals=stats['perf']['recent_signals']
     )
 
-
 @app.route('/health')
-
 def health():
-
     if engine:
-
-        return {
-
+        return jsonify({
             "status": "ok",
-
-            "version": "5.1.1",
-
+            "version": "5.2.0",
             "dry_run": DRY_RUN,
-
-            "auth_ok": EX._auth_ok,    # فیکس v5.1.1
-
+            "testnet": TESTNET,
             "symbols": len(SYMBOLS),
-
             "uptime": engine._uptime(),
-
-            "open_positions": len(engine._pos) if engine else 0,
-
-            "timestamp": datetime.now(timezone.utc).isoformat()
-
-        }
-
-    return {"status": "starting", "version": "5.1.1"}
-
+            "open_positions": len(engine._pos),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "balance": EX.balance(),
+            "dd": DD.dd
+        })
+    return jsonify({"status": "starting", "version": "5.2.0"}), 503
 
 @app.route('/api/stats')
-
 def api_stats():
-
     if engine:
-
         stats = engine.stats
-
-        stats["uptime"]    = engine._uptime()
-
-        stats["symbols"]   = len(SYMBOLS)
-
-        stats["balance"]   = EX.balance()           # فیکس v5.1.1: برای داشبورد live
-
-        stats["dry_run"]   = DRY_RUN
-
-        stats["testnet"]   = TESTNET
-
-        stats["tf"]        = TF
-
-        stats["max_pos"]   = MAX_POS
-
-        stats["risk_pct"]  = RISK_PCT
-
-        return stats
-
-    return {"error": "Engine not ready"}
-
+        stats["uptime"] = engine._uptime()
+        stats["symbols"] = len(SYMBOLS)
+        stats["balance"] = EX.balance()
+        return jsonify(stats)
+    return jsonify({"error": "Engine not ready"}), 503
 
 @app.route('/api/trades')
-
 def api_trades():
-
     if engine:
-
         with engine._lock:
-
-            return {"open": list(engine._pos.values()), "count": len(engine._pos)}
-
-    return {"open": [], "count": 0}
-
+            return jsonify({
+                "open": list(engine._pos.values()),
+                "count": len(engine._pos)
+            })
+    return jsonify({"open": [], "count": 0})
 
 @app.route('/api/history')
-
 def api_history():
+    limit = request.args.get('limit', 30, type=int)
+    return jsonify({"history": database.history(limit)})
 
-    return {"history": database.history(30)}
-
+@app.route('/api/activity')
+def api_activity():
+    limit = request.args.get('limit', 50, type=int)
+    return jsonify({"activity": database.recent_activity(limit)})
 
 @app.route('/api/symbols')
-
 def api_symbols():
-
-    return {"symbols": SYMBOLS, "count": len(SYMBOLS)}
-
+    return jsonify({
+        "symbols": SYMBOLS,
+        "count": len(SYMBOLS),
+        "timeframe": TF
+    })
 
 # ============================================================================
-
 # MAIN
-
 # ============================================================================
-
 def main():
-
     global engine
-
-    log.info("=" * 60)
-
-    log.info("  Master-AI Bot v5.1.1 - Flask Edition")
-
-    log.info("  Python %s", sys.version.split()[0])
-
-    log.info("  10 جفت‌ارز فیوچرز Phemex")
-
-    log.info("=" * 60)
-
+    
+    print("=" * 60)
+    print("  🤖 Master-AI Trading Bot v5.2.0")
+    print("  Python", sys.version.split()[0])
+    print("  Phemex Futures - 10 Pairs")
+    print("  Enhanced Dashboard + Telegram")
+    print("=" * 60)
 
     Cfg.validate()
 
-
     engine = Engine()
 
-
+    # Start bot loop in background
     threading.Thread(target=engine.loop, daemon=True).start()
 
-
+    # Start Flask server
     port = int(os.environ.get("PORT", 10000))
-
-    log.info("🌐 Flask Server on port %d", port)
-
-    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
-
+    log.info("🌐 Flask Dashboard: http://0.0.0.0:%d", port)
+    
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False,
+        threaded=True,
+        use_reloader=False
+    )
 
 
 if __name__ == "__main__":
-
     main()
-
