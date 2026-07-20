@@ -1316,12 +1316,19 @@ class H(BaseHTTPRequestHandler):
             "/"          : self._dash,
         }.get(p, self._404)()
 
+    def do_HEAD(self):
+        """پشتیبانی از درخواست‌های HEAD برای Keep-Alive و UptimeRobot"""
+        self._health()
+
     def _j(self, d: dict, c: int = 200):
         b = json.dumps(d, default=str, ensure_ascii=False, indent=2).encode()
         self.send_response(c)
         self.send_header("Content-Type","application/json;charset=utf-8")
         self.send_header("Content-Length", str(len(b)))
         self.send_header("Access-Control-Allow-Origin","*")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.end_headers()
         self.wfile.write(b)
 
@@ -1330,12 +1337,23 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type","text/html;charset=utf-8")
         self.send_header("Content-Length", str(len(b)))
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.end_headers()
         self.wfile.write(b)
 
     def _health(self):
-        self._j({"status":"ok","version":"5.1.0",
-                 "dry_run":DRY_RUN,"up":self._up()})
+        """پاسخ سلامت برای UptimeRobot و Keep-Alive"""
+        uptime = self._up()
+        self._j({
+            "status": "ok",
+            "version": "5.1.0",
+            "dry_run": DRY_RUN,
+            "up": uptime,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "open_positions": len(self.eng._pos) if self.eng else 0
+        })
 
     def _stats(self):
         self._j(self.eng.stats if self.eng else {})
