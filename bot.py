@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master-AI Trading Bot Pro v5.4.2 - Bulletproof Edition
-✅ فیکس حساسیت به اشتباه تایپی در TIMEFRAME
-✅ فیکس Phemex OHLCV (Error 30000)
-✅ داشبورد حرفه‌ای
+=========================================================
+🔥 ALMASI TRAD v177 - High-Frequency Quant Scalper 🔥
+Architecture: 7-Expert Ensemble Engine + Volume Booster
+=========================================================
 """
 
 import os
@@ -15,11 +15,10 @@ import time
 import uuid
 import logging
 import threading
-import hashlib
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List
 from collections import deque
 
 if sys.version_info < (3, 10):
@@ -36,37 +35,32 @@ except ImportError: _MISSING.append("requests")
 try: import ccxt
 except ImportError: _MISSING.append("ccxt")
 try:
-    import pandas_ta as ta
-    _TA_OK = True
-except ImportError:
-    _TA_OK = False
-try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError: pass
 try:
-    from flask import Flask, render_template_string, jsonify, request
+    from flask import Flask, render_template_string
 except ImportError: _MISSING.append("flask")
 
 if _MISSING:
+    print(f"[CRITICAL] Missing libraries: {', '.join(_MISSING)}")
     sys.exit(1)
 
 # ============================================================================
 # LOGGING
 # ============================================================================
 IS_PROD = os.getenv("RENDER", "false").lower() == "true"
-
 def _setup_log() -> logging.Logger:
     fmt = '{"t":"%(asctime)s","lvl":"%(levelname)s","msg":"%(message)s"}' if IS_PROD else "%(asctime)s | %(levelname)-8s | %(message)s"
     logging.basicConfig(level=logging.INFO, format=fmt, stream=sys.stdout, force=True)
-    for lib in ("ccxt", "urllib3", "openai", "httpx", "httpcore"):
+    for lib in ("ccxt", "urllib3", "openai", "httpx", "httpcore", "werkzeug"):
         logging.getLogger(lib).setLevel(logging.ERROR)
-    return logging.getLogger("Bot")
+    return logging.getLogger("Almasi")
 
 log = _setup_log()
 
 # ============================================================================
-# CONFIG
+# CONFIGURATION
 # ============================================================================
 class Cfg:
     @staticmethod
@@ -92,100 +86,28 @@ API_SECRET = Cfg.s("PHEMEX_API_SECRET")
 TG_TOKEN   = Cfg.s("TELEGRAM_BOT_TOKEN")
 TG_CHAT    = Cfg.s("TELEGRAM_CHAT_ID")
 OAI_KEY    = Cfg.s("OPENAI_API_KEY")
-DB_URL     = Cfg.s("DATABASE_URL")
 
-SYMBOLS = Cfg.lst("SYMBOLS", 
-    "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT,BNB/USDT:USDT,"
-    "DOGE/USDT:USDT,ADA/USDT:USDT,AVAX/USDT:USDT,DOT/USDT:USDT,LINK/USDT:USDT"
-)
-
-# 🚀 FIX: اگر کاربر به اشتباه چند تایم‌فریم وارد کرد، فقط اولی را بگیر
-_raw_tf    = Cfg.s("TIMEFRAME", "5m")
+# Optimized for Almasi Scalper
+SYMBOLS    = Cfg.lst("SYMBOLS", "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT")
+_raw_tf    = Cfg.s("TIMEFRAME", "3m") # Default to 3m for scalping
 TF         = _raw_tf.split(",")[0].strip()
-if TF not in ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"]:
-    TF = "5m" # مقدار پیش‌فرض در صورت اشتباه تایپی
+if TF not in ["1m", "3m", "5m", "15m"]: TF = "3m"
 
-RISK_PCT   = Cfg.f("RISK_PER_TRADE", 1.5)
-MAX_DD     = Cfg.f("MAX_DRAWDOWN", 10.0)
+RISK_PCT   = Cfg.f("RISK_PER_TRADE", 2.0)
+MAX_DD     = Cfg.f("MAX_DRAWDOWN", 15.0)
 MAX_POS    = Cfg.i("MAX_POSITIONS", 5)
 DRY_RUN    = Cfg.b("DRY_RUN", False)
 TESTNET    = Cfg.b("PHEMEX_TESTNET", False)
 PORT       = Cfg.i("PORT", 10000)
 
-log.info("Config: TF=%s | Risk=%.1f%% | MaxDD=%.1f%% | Dry=%s", TF, RISK_PCT, MAX_DD, DRY_RUN)
-
-# ============================================================================
-# PERFORMANCE TRACKER
-# ============================================================================
-class PerfTracker:
-    def __init__(self, max_len: int = 100):
-        self._scans = deque(maxlen=max_len)
-        self._signals = deque(maxlen=max_len)
-    def log_scan(self, duration: float): self._scans.append(duration)
-    def log_signal(self, sym: str, action: str, conf: int):
-        self._signals.append({"time": datetime.now(timezone.utc).isoformat(), "symbol": sym, "action": action, "confidence": conf})
-    @property
-    def stats(self) -> Dict:
-        return {"avg_scan_time": round(sum(self._scans)/len(self._scans), 2) if self._scans else 0, "recent_signals": list(self._signals)[-10:]}
-
-PERF = PerfTracker()
-
-# ============================================================================
-# INDICATORS
-# ============================================================================
-class Indicators:
-    @staticmethod
-    def rsi(close: pd.Series, n: int = 14) -> pd.Series:
-        delta = close.diff()
-        up   = delta.clip(lower=0)
-        down = (-delta).clip(lower=0)
-        down_ma = down.ewm(com=n-1, adjust=False).mean().replace(0, 1e-10)
-        rs = up.ewm(com=n-1, adjust=False).mean() / down_ma
-        return 100 - (100 / (1 + rs))
-
-    @staticmethod
-    def ema(close: pd.Series, n: int) -> pd.Series:
-        return close.ewm(span=n, adjust=False).mean()
-
-    @staticmethod
-    def atr(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
-        tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
-        return tr.ewm(com=n-1, adjust=False).mean()
-
-    @staticmethod
-    def macd(close: pd.Series, fast: int = 12, slow: int = 26, sig: int = 9):
-        e_fast = close.ewm(span=fast, adjust=False).mean()
-        e_slow = close.ewm(span=slow, adjust=False).mean()
-        line   = e_fast - e_slow
-        signal = line.ewm(span=sig, adjust=False).mean()
-        return line, signal, line - signal
-
-    @staticmethod
-    def bbands(close: pd.Series, n: int = 20, std: float = 2.0):
-        mid = close.rolling(n).mean()
-        sd  = close.rolling(n).std()
-        return mid - std*sd, mid, mid + std*sd
-
-    @staticmethod
-    def stoch(high: pd.Series, low: pd.Series, close: pd.Series, k: int = 14, d: int = 3):
-        lo  = low.rolling(k).min()
-        hi  = high.rolling(k).max()
-        stk = 100 * (close - lo) / (hi - lo + 1e-10)
-        return stk, stk.rolling(d).mean()
-
-    @staticmethod
-    def safe(s, idx: int = -1) -> float:
-        try: v = s.iloc[idx]; return float(v) if not (v != v) else 0.0
-        except Exception: return 0.0
-
-IND = Indicators()
+log.info("💎 ALMASI TRAD v177 CONFIG | TF: %s | Risk: %.1f%% | DryRun: %s", TF, RISK_PCT, DRY_RUN)
 
 # ============================================================================
 # DATABASE
 # ============================================================================
 class DB:
     def __init__(self):
-        self._path  = "bot.db"
+        self._path  = "almasi_v177.db"
         self._lock  = threading.Lock()
         self._boot()
 
@@ -247,9 +169,7 @@ database = DB()
 # TELEGRAM ALERTS
 # ============================================================================
 class Alerts:
-    def __init__(self):
-        self._chat_id = TG_CHAT
-
+    def __init__(self): self._chat_id = TG_CHAT
     def _get_chat_id(self):
         if self._chat_id: return self._chat_id
         if not TG_TOKEN: return None
@@ -258,17 +178,11 @@ class Alerts:
             if res.get("ok") and res.get("result"): return str(res["result"][-1]["message"]["chat"]["id"])
         except: pass
         return None
-
-    def send(self, msg: str, key: str = "", force: bool = False):
+    def send(self, msg: str, force: bool = False):
         if not TG_TOKEN: return
         chat_id = self._get_chat_id()
         if not chat_id: return
         threading.Thread(target=lambda: requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=10), daemon=True).start()
-
-    def send_dashboard(self, engine_stats: Dict, balance: float):
-        dd, td, pos = engine_stats.get("dd", {}), engine_stats.get("today", {}), engine_stats.get("open_pos", 0)
-        msg = f"🤖 <b>Bot v5.4.2</b>\n{'🔵 DRY' if DRY_RUN else '🟢 LIVE'} | {TF}\n💰 Bal: {balance:,.2f}\n📉 DD: {dd.get('dd',0):.1f}%\n📊 Pos: {pos}/{MAX_POS}\n📈 Today: {td.get('pnl',0):+.2f}$"
-        self.send(msg, force=True)
 
 TG = Alerts()
 
@@ -284,32 +198,24 @@ class Exchange:
     def _connect(self):
         if not API_KEY: return
         try:
-            self._ex = ccxt.phemex({"apiKey": API_KEY, "secret": API_SECRET, "enableRateLimit": True, "timeout": 30000, "options": {"defaultType": "swap"}})
+            self._ex = ccxt.phemex({"apiKey": API_KEY, "secret": API_SECRET, "enableRateLimit": True, "options": {"defaultType": "swap"}})
             if TESTNET: self._ex.set_sandbox_mode(True)
             self._ex.load_markets()
-            log.info("✅ Exchange connected.")
+            log.info("✅ Phemex connected.")
         except Exception as e: log.error("Exchange connect: %s", e)
 
-    def _retry_ohlcv(self, sym: str, tf: str, lim: int) -> List:
-        for attempt in range(4):
+    def ohlcv(self, sym: str, tf: str, lim: int = 100) -> pd.DataFrame:
+        for _ in range(3):
             try:
-                tf_ms = self._ex.parse_timeframe(tf) * 1000
-                since = self._ex.milliseconds() - (lim * tf_ms)
-                return self._ex.fetch_ohlcv(sym, tf, since=since, limit=lim, params={'type': 'swap'})
-            except Exception as e:
-                log.warning("ohlcv retry %d [%s]: %s", attempt+1, sym, str(e)[:100])
-                time.sleep(2)
-        raise RuntimeError(f"Failed to fetch {sym}")
-
-    def ohlcv(self, sym: str, tf: str, lim: int = 250) -> pd.DataFrame:
-        raw = self._retry_ohlcv(sym, tf, lim)
-        df  = pd.DataFrame(raw, columns=["ts","open","high","low","close","vol"])
-        df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
-        return df.dropna().reset_index(drop=True)
+                raw = self._ex.fetch_ohlcv(sym, tf, limit=lim, params={'type': 'swap'})
+                df = pd.DataFrame(raw, columns=["ts","open","high","low","close","vol"])
+                return df.dropna().reset_index(drop=True)
+            except: time.sleep(1)
+        raise RuntimeError(f"Fetch failed {sym}")
 
     def price(self, sym: str) -> float:
         now = time.time()
-        if sym in self._pc and now - self._pc[sym][1] < 2.5: return self._pc[sym][0]
+        if sym in self._pc and now - self._pc[sym][1] < 2: return self._pc[sym][0]
         try:
             p = float(self._ex.fetch_ticker(sym)["last"])
             self._pc[sym] = (p, now); return p
@@ -324,7 +230,7 @@ class Exchange:
         return out
 
     def balance(self) -> float:
-        if not self._ex or DRY_RUN: return 10000.0
+        if not self._ex or DRY_RUN: return 5000.0
         try:
             b = self._ex.fetch_balance()
             for key in ("USDT","USD"):
@@ -354,7 +260,60 @@ class Exchange:
 EX = Exchange()
 
 # ============================================================================
-# TECHNICAL ANALYSIS
+# INDICATORS (7-STAR SCALP ENGINE)
+# ============================================================================
+class Indicators:
+    @staticmethod
+    def ema(close: pd.Series, n: int) -> pd.Series: return close.ewm(span=n, adjust=False).mean()
+    
+    @staticmethod
+    def atr(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
+        tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
+        return tr.ewm(alpha=1/n, adjust=False).mean()
+
+    @staticmethod
+    def macd(close: pd.Series, fast: int = 12, slow: int = 26, sig: int = 9):
+        line = Indicators.ema(close, fast) - Indicators.ema(close, slow)
+        return line, Indicators.ema(line, sig), line - Indicators.ema(line, sig)
+
+    @staticmethod
+    def bbands(close: pd.Series, n: int = 20, std: float = 2.0):
+        mid = close.rolling(n).mean()
+        sd = close.rolling(n).std()
+        return mid - std*sd, mid, mid + std*sd
+
+    @staticmethod
+    def williams_r(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
+        hh = high.rolling(n).max()
+        ll = low.rolling(n).min()
+        return -100 * (hh - close) / (hh - ll + 1e-10)
+
+    @staticmethod
+    def adx(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
+        up, down = high.diff(), -low.diff()
+        pdm = pd.Series(np.where((up > down) & (up > 0), up, 0.0), index=high.index)
+        ndm = pd.Series(np.where((down > up) & (down > 0), down, 0.0), index=high.index)
+        tr = Indicators.atr(high, low, close, n)
+        pdi = 100 * pdm.ewm(alpha=1/n, adjust=False).mean() / (tr + 1e-10)
+        ndi = 100 * ndm.ewm(alpha=1/n, adjust=False).mean() / (tr + 1e-10)
+        dx = 100 * (pdi - ndi).abs() / (pdi + ndi + 1e-10)
+        return dx.ewm(alpha=1/n, adjust=False).mean()
+
+    @staticmethod
+    def keltner_channels(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 20, m: float = 1.5):
+        ema20 = Indicators.ema(close, n)
+        atr_val = Indicators.atr(high, low, close, n)
+        return ema20 - (m * atr_val), ema20 + (m * atr_val)
+
+    @staticmethod
+    def safe(s, idx: int = -1) -> float:
+        try: v = s.iloc[idx]; return float(v) if not pd.isna(v) else 0.0
+        except: return 0.0
+
+IND = Indicators()
+
+# ============================================================================
+# TECHNICAL ANALYSIS (ALMASI 7-EXPERT LOGIC)
 # ============================================================================
 @dataclass
 class Sig:
@@ -362,124 +321,135 @@ class Sig:
     conf  : int = 0
     reason: str = ""
     ind   : Dict = field(default_factory=dict)
-    
     @property
-    def ok(self) -> bool: return self.action in ("buy","sell") and self.conf >= 40
+    def ok(self) -> bool: return self.action in ("buy","sell") and self.conf >= 70
 
 class Tech:
     def run(self, df: pd.DataFrame) -> Sig:
-        if len(df) < 200: return Sig(reason="Data < 200")
+        if len(df) < 50: return Sig(reason="Data < 50")
         c, h, l, v = df["close"], df["high"], df["low"], df["vol"]
 
+        atr = IND.safe(IND.atr(h, l, c, 14))
+        price = float(c.iloc[-1])
+        ind_dict = {"price": price, "atr": atr}
+        w_sig = r_sig = c_sig = b_sig = e_sig = t_sig = m_sig = 0
+        experts = []
+
         try:
-            rsi = IND.safe(IND.rsi(c, 14))
-            ml, ms, mh = IND.macd(c)
-            mh = IND.safe(mh)
-            e20, e50, e200 = IND.safe(IND.ema(c, 20)), IND.safe(IND.ema(c, 50)), IND.safe(IND.ema(c, 200))
-            atr = IND.safe(IND.atr(h, l, c, 14))
-            bbl, bbm, bbh = IND.bbands(c, 20)
-            bbl, bbh = IND.safe(bbl), IND.safe(bbh)
-            sk, std = IND.stoch(h, l, c)
-            sk = IND.safe(sk)
-            price = float(c.iloc[-1])
-            vr = float(v.iloc[-1]) / (float(v.rolling(20).mean().iloc[-1]) or 1.0)
-        except Exception as e: return Sig(reason=f"Ind err: {e}")
+            # 1. Williams %R
+            wr = IND.williams_r(h, l, c, 14)
+            wr0, wr1 = IND.safe(wr, -1), IND.safe(wr, -2)
+            if wr1 < -80 and wr0 >= -80: w_sig = 1
+            elif wr1 > -20 and wr0 <= -20: w_sig = -1
 
-        bs, ss, tags = 0, 0, []
+            # 2. Raschke Holy Grail
+            adx_series = IND.adx(h, l, c, 14)
+            sma20 = c.rolling(20).mean()
+            if IND.safe(adx_series, -1) > 25:
+                if l.iloc[-1] <= IND.safe(sma20, -1) and c.iloc[-1] > IND.safe(sma20, -1): r_sig = 1
+                elif h.iloc[-1] >= IND.safe(sma20, -1) and c.iloc[-1] < IND.safe(sma20, -1): r_sig = -1
 
-        trend = "BULL" if price > e200 else "BEAR"
-        if trend == "BULL": bs += 15; ss -= 10; tags.append("Trend=UP")
-        else: ss += 15; bs -= 10; tags.append("Trend=DWN")
+            # 3. Carter TTM Squeeze
+            bbl, _, bbh = IND.bbands(c, 20, 2.0)
+            kcl, kcu = IND.keltner_channels(h, l, c, 20, 1.5)
+            _, _, macd_hist = IND.macd(c)
+            hist0, hist1 = IND.safe(macd_hist, -1), IND.safe(macd_hist, -2)
+            if (IND.safe(bbh, -1) < IND.safe(kcu, -1)) and (IND.safe(bbl, -1) > IND.safe(kcl, -1)):
+                if hist0 > 0 and hist0 > hist1: c_sig = 1
+                elif hist0 < 0 and hist0 < hist1: c_sig = -1
 
-        if rsi < 35: bs += 35; tags.append("RSI_OS")
-        elif rsi < 45: bs += 15
-        if rsi > 65: ss += 35; tags.append("RSI_OB")
-        elif rsi > 55: ss += 15
+            # 4. Al Brooks Gap Bar
+            ema20 = IND.ema(c, 20)
+            e0 = IND.safe(ema20, -1)
+            if all(l.iloc[i] > IND.safe(ema20, i) for i in range(-4, -1)) and l.iloc[-1] < e0 and c.iloc[-1] > df["open"].iloc[-1]: b_sig = 1
+            if all(h.iloc[i] < IND.safe(ema20, i) for i in range(-4, -1)) and h.iloc[-1] > e0 and c.iloc[-1] < df["open"].iloc[-1]: b_sig = -1
 
-        if mh > 0 and ml > ms: bs += 25
-        if mh < 0 and ml < ms: ss += 25
+            # 5. Elder Impulse
+            ema13 = IND.ema(c, 13)
+            ema13_0, ema13_1 = IND.safe(ema13, -1), IND.safe(ema13, -2)
+            if ema13_0 > ema13_1 and hist0 > hist1: e_sig = 1
+            elif ema13_0 < ema13_1 and hist0 < hist1: e_sig = -1
 
-        if price > e20 > e50: bs += 25
-        if price < e20 < e50: ss += 25
+            # 6. Turtle Micro Breakout
+            dh20 = h.rolling(20).max().shift(1)
+            dl20 = l.rolling(20).min().shift(1)
+            if c.iloc[-1] > IND.safe(dh20, -1): t_sig = 1
+            elif c.iloc[-1] < IND.safe(dl20, -1): t_sig = -1
+            
+            # 7. Fast Momentum Scalp (Almasi Special)
+            e3, e8 = IND.ema(c, 3), IND.ema(c, 8)
+            if e3.iloc[-1] > e8.iloc[-1] and e3.iloc[-2] <= e8.iloc[-2]: m_sig = 1
+            elif e3.iloc[-1] < e8.iloc[-1] and e3.iloc[-2] >= e8.iloc[-2]: m_sig = -1
 
-        if sk < 25: bs += 15
-        if sk > 75: ss += 15
+        except Exception as e:
+            return Sig(reason=f"Math Err: {e}", ind=ind_dict)
 
-        if vr > 1.3:
-            if bs > ss: bs += 15
-            else: ss += 15
-
-        ind = {"rsi":round(rsi,1), "macd_h":round(mh,4), "e200":round(e200,4), "atr":round(atr,4), "price":price}
+        total_score = w_sig + r_sig + c_sig + b_sig + e_sig + t_sig + m_sig
         
-        thr = 30 
-        if bs >= thr and bs > ss: return Sig("buy", min(95, int(bs * 1.3)), "|".join(tags[:3]), ind=ind)
-        if ss >= thr and ss > bs: return Sig("sell", min(95, int(ss * 1.3)), "|".join(tags[:3]), ind=ind)
+        # 🟢 VSA: Volume Surge Multiplier
+        vol_ma = v.rolling(20).mean()
+        if float(v.iloc[-1]) > float(IND.safe(vol_ma, -1)) * 1.5:
+            if total_score > 0: total_score += 1
+            elif total_score < 0: total_score -= 1
+            experts.append("Vol_Surge")
 
-        return Sig(reason=f"B={bs} S={ss}", ind=ind)
+        if w_sig: experts.append("Williams")
+        if r_sig: experts.append("Raschke")
+        if c_sig: experts.append("Carter")
+        if b_sig: experts.append("Brooks")
+        if e_sig: experts.append("Elder")
+        if t_sig: experts.append("Turtle")
+        if m_sig: experts.append("FastMom")
+
+        AGREEMENT_THRESHOLD = 3 
+        
+        if total_score >= AGREEMENT_THRESHOLD:
+            conf = min(99, 65 + (total_score * 5))
+            return Sig("buy", conf, f"Score:+{total_score} [{','.join(experts)}]", ind=ind_dict)
+        elif total_score <= -AGREEMENT_THRESHOLD:
+            conf = min(99, 65 + (abs(total_score) * 5))
+            return Sig("sell", conf, f"Score:{total_score} [{','.join(experts)}]", ind=ind_dict)
+
+        return Sig(reason=f"Neutral (Score: {total_score})", ind=ind_dict)
 
 TECH = Tech()
 
 # ============================================================================
-# AI ENGINE
+# AI ENGINE (Optional Final Check)
 # ============================================================================
 class AI:
     def __init__(self):
         self._c = None
-        self._calls = 0
         if OAI_KEY:
             try:
                 from openai import OpenAI
-                self._c = OpenAI(api_key=OAI_KEY, timeout=15.0)
+                self._c = OpenAI(api_key=OAI_KEY, timeout=10.0)
             except: pass
 
-    def analyze(self, sym, tech, n_open):
-        if not self._c: return tech
-        prompt = f"Sym:{sym} RSI:{tech.ind.get('rsi')} Tech:{tech.action}. Reply JSON {{\"signal\":\"buy\"|\"sell\"|\"neutral\",\"confidence\":0-100}}"
+    def analyze(self, sym, tech):
+        if not self._c or tech.conf < 70: return tech
+        prompt = f"Sym:{sym} Action:{tech.action} Conf:{tech.conf} Tech:{tech.reason}. JSON reply: {{\"signal\":\"buy\"|\"sell\"|\"neutral\",\"confidence\":0-100}}"
         try:
             r = self._c.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role":"user","content":prompt}], max_tokens=50, temperature=0.1)
             aj = json.loads(re.sub(r"```[a-z]*|```","", r.choices[0].message.content).strip())
-            aa = aj.get("signal","neutral")
-            ac = int(aj.get("confidence",0))
-            if aa == tech.action and aa != "neutral": tech.conf = min(95, int((ac+tech.conf)/2*1.15))
-            self._calls += 1
+            if aj.get("signal") == tech.action: tech.conf = min(99, int((aj.get("confidence", tech.conf) + tech.conf) / 2))
             return tech
         except: return tech
 
 AI_ENG = AI()
 
 # ============================================================================
-# ENGINE UTILS
+# TRAILING STOP & RISK MGT
 # ============================================================================
-class Timer:
-    def __init__(self, tf):
-        self._s = {"1m":60,"3m":180,"5m":300,"15m":900,"30m":1800,"1h":3600,"4h":14400,"1d":86400}.get(tf, 300)
-        self._last = None
-    def is_new(self):
-        ts = (int(time.time()) // self._s) * self._s
-        if self._last is None or ts > self._last:
-            self._last = ts; return True
-        return False
-
-TMR = Timer(TF)
-
-class DDG:
-    def __init__(self, mx): self.mx, self.pk, self.halted, self.dd = mx, None, False, 0.0
-    def check(self, b):
-        if self.pk is None: self.pk = b; return True
-        if b > self.pk: self.pk = b; self.halted = False
-        self.dd = round((self.pk - b) / self.pk * 100, 2)
-        if self.dd >= self.mx: self.halted = True
-        return not self.halted
-    @property
-    def st(self): return {"halted":self.halted,"dd":self.dd,"max":self.mx,"peak":self.pk}
-
-DD = DDG(MAX_DD)
-
 class Trail:
     def __init__(self): self._pk = {}; self._sl = {}
     def init(self, pid, e, sl): self._pk[pid] = e; self._sl[pid] = sl
-    def update(self, pid, side, px, atr, osl):
-        td = atr * 2.0
+    
+    def update(self, pid, side, px, entry, atr, osl):
+        # Almasi Aggressive Trailing for Scalping
+        in_profit = (px > entry + (atr*0.5)) if side == "long" else (px < entry - (atr*0.5))
+        td = atr * 1.0 if in_profit else atr * 2.0 # Tighten stop if in profit
+        
         if side == "long":
             self._pk[pid] = max(self._pk.get(pid, px), px)
             self._sl[pid] = max(self._sl.get(pid, osl), self._pk[pid] - td)
@@ -487,34 +457,34 @@ class Trail:
             self._pk[pid] = min(self._pk.get(pid, px), px)
             self._sl[pid] = min(self._sl.get(pid, osl), self._pk[pid] + td)
         return self._sl[pid]
+        
     def rm(self, pid): self._pk.pop(pid, None); self._sl.pop(pid, None)
 
 TR = Trail()
 
-# ============================================================================
-# CORE ENGINE
-# ============================================================================
 class Engine:
     def __init__(self):
         self._pos = {}
         self._lock = threading.Lock()
         self._run = True
-        self._st = {"cycles":0, "scans":0, "opened":0, "closed":0, "start":datetime.now(timezone.utc).isoformat()}
-        bal = EX.balance()
-        DD.check(bal)
+        self._st = {"cycles":0, "scans":0, "opened":0, "closed":0}
         for t in database.open_trades(): self._pos[t["id"]] = t; TR.init(t["id"], t["entry"], t["sl"])
-        TG.send(f"🚀 <b>Bot v5.4.2 Started</b>\nTF: {TF} | Bal: ${bal:,.2f}", force=True)
+        TG.send(f"💎 <b>Almasi Trad v177 Started</b>\nTF: {TF} | Mode: {'DRY' if DRY_RUN else 'LIVE'}", force=True)
 
     def loop(self):
+        last_scan = 0
+        scan_interval = {"1m": 45, "3m": 120, "5m": 240}.get(TF, 120)
+        
         while self._run:
             try:
                 self._st["cycles"] += 1
-                t0 = time.time()
                 self._exits()
-                bal = EX.balance()
-                if DD.check(bal) and TMR.is_new(): self._scan(bal)
-                time.sleep(max(1.0, 5.0 - (time.time() - t0)))
-            except Exception as e: log.error("Loop err: %s", e); time.sleep(10)
+                now = time.time()
+                if now - last_scan >= scan_interval:
+                    self._scan(EX.balance())
+                    last_scan = now
+                time.sleep(2)
+            except Exception as e: log.error("Loop err: %s", e); time.sleep(5)
 
     def _scan(self, bal):
         with self._lock: n = len(self._pos)
@@ -527,23 +497,20 @@ class Engine:
                 if sym in [p["symbol"] for p in self._pos.values()]: continue
             
             try:
-                df = EX.ohlcv(sym, TF, 250)
-                if len(df) < 200: continue
-                
+                df = EX.ohlcv(sym, TF, 100)
                 tech = TECH.run(df)
-                sig = AI_ENG.analyze(sym, tech, n) if tech.conf >= 30 else tech
+                sig = AI_ENG.analyze(sym, tech) if tech.conf >= 70 else tech
                 
                 if sig.ok:
                     px = sig.ind["price"]
                     atr = sig.ind["atr"]
-                    sl = px - atr*1.5 if sig.action=="buy" else px + atr*1.5
-                    tp = px + atr*3.0 if sig.action=="buy" else px - atr*3.0
+                    sl = px - (atr*1.5) if sig.action=="buy" else px + (atr*1.5)
+                    tp = px + (atr*3.5) if sig.action=="buy" else px - (atr*3.5)
                     
                     risk = bal * (RISK_PCT/100)
                     dist = abs(px - sl)
                     if dist > 0:
-                        val = (risk/dist) * px
-                        qty = EX.calculate_quantity(sym, val)
+                        qty = EX.calculate_quantity(sym, (risk/dist) * px)
                         if qty and qty > 0: self._open(sym, sig, px, sl, tp, qty)
             except Exception as e: log.error("Analyze %s: %s", sym, e)
 
@@ -558,7 +525,7 @@ class Engine:
             TR.init(pid, fpx, sl)
             database.insert(pos)
             self._st["opened"] += 1
-            TG.send(f"🟢 <b>OPEN {side.upper()}</b> {sym}\nEntry: {fpx:.4f}\nSL: {sl:.4f}\nQty: {qty}\nConf: {sig.conf}%")
+            TG.send(f"🟢 <b>ALMASI OPEN {side.upper()}</b> {sym}\nEntry: {fpx:.4f}\nSL: {sl:.4f}\nReason: {sig.reason}\nConf: {sig.conf}%")
 
     def _exits(self):
         with self._lock: snap = dict(self._pos)
@@ -569,128 +536,75 @@ class Engine:
             px = pxs.get(pos["symbol"])
             if not px: continue
             
-            nsl = TR.update(pid, pos["side"], px, pos.get("atr", px*0.01), pos["sl"])
+            nsl = TR.update(pid, pos["side"], px, pos["entry"], pos.get("atr", px*0.01), pos["sl"])
             if abs(nsl - pos["sl"]) > 1e-8:
                 with self._lock:
                     if pid in self._pos: self._pos[pid]["sl"] = nsl
                 database.run("UPDATE trades SET stop_loss=? WHERE id=?", (nsl, pid))
 
             if (pos["side"]=="long" and px>=pos["tp"]) or (pos["side"]=="short" and px<=pos["tp"]):
-                self._close(pid, pos, px, "TP")
+                self._close(pid, pos, px, "TP (Scalp Target)")
             elif (pos["side"]=="long" and px<=nsl) or (pos["side"]=="short" and px>=nsl):
-                self._close(pid, pos, px, "SL")
+                self._close(pid, pos, px, "Trailing SL")
 
     def _close(self, pid, pos, px, reason):
         o = EX.order(pos["symbol"], "sell" if pos["side"]=="long" else "buy", pos["qty"])
         if o: px = o.get("price", px)
-        
         pnl = (px - pos["entry"]) * pos["qty"] if pos["side"]=="long" else (pos["entry"] - px) * pos["qty"]
         pct = pnl / (pos["entry"] * pos["qty"]) * 100
-        
         database.close(pid, px, pnl, pct, reason)
         with self._lock: self._pos.pop(pid, None)
         TR.rm(pid)
         self._st["closed"] += 1
-        TG.send(f"🎯 <b>CLOSE {reason}</b> {pos['symbol']}\nP&L: {pnl:+.2f}$ ({pct:+.2f}%)")
+        icon = "💸" if pnl > 0 else "🩸"
+        TG.send(f"{icon} <b>ALMASI CLOSE</b> {pos['symbol']}\nReason: {reason}\nP&L: {pnl:+.2f}$ ({pct:+.2f}%)")
 
     @property
     def stats(self):
-        with self._lock: return {"cycles":self._st["cycles"], "scans":self._st["scans"], "opened":self._st["opened"], "closed":self._st["closed"], "open_pos": len(self._pos), "positions": list(self._pos.values()), "dd": DD.st, "today": database.today()}
+        with self._lock: return {"scans":self._st["scans"], "open_pos": len(self._pos), "positions": list(self._pos.values()), "today": database.today()}
 
 # ============================================================================
-# FULL FLASK DASHBOARD
+# FLASK DASHBOARD
 # ============================================================================
 app = Flask(__name__)
 engine = None
 
-DASHBOARD_HTML = """
-<!DOCTYPE html>
-<html dir="rtl" lang="fa">
-<head>
-    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Master-AI Dashboard</title>
-    <style>
-        body { font-family: Tahoma, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
-        .card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 20px; }
-        h1, h2 { color: #58a6ff; }
-        .stat { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #21262d; }
-        .pos { color: #3fb950; } .neg { color: #f85149; }
-        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #30363d; }
-        th { color: #58a6ff; }
-    </style>
-</head>
+HTML = """
+<!DOCTYPE html><html dir="rtl" lang="fa"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Almasi Trad v177</title>
+<style>body{font-family:Tahoma;background:#0d1117;color:#c9d1d9;padding:20px}.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:20px;margin-bottom:20px}h1,h2{color:#58a6ff;text-align:center}.pos{color:#3fb950}.neg{color:#f85149}table{width:100%;border-collapse:collapse}th,td{padding:10px;text-align:left;border-bottom:1px solid #30363d}</style></head>
 <body>
-    <h1 style="text-align:center">🤖 Master-AI Bot v5.4.2</h1>
-    <p style="text-align:center">Last Update: {{ time }}</p>
-    
-    <div class="grid">
-        <div class="card">
-            <h2>📊 Status</h2>
-            <div class="stat"><span>Mode:</span> <span>{{ 'DRY' if dry else 'LIVE FUTURES' }}</span></div>
-            <div class="stat"><span>Balance:</span> <span>${{ "%.2f"|format(bal) }}</span></div>
-            <div class="stat"><span>Drawdown:</span> <span class="{{ 'neg' if dd.dd>5 else '' }}">{{ dd.dd }}%</span></div>
-            <div class="stat"><span>Timeframe:</span> <span>{{ tf }}</span></div>
-        </div>
-        
-        <div class="card">
-            <h2>📈 Today</h2>
-            <div class="stat"><span>P&L:</span> <span class="{{ 'pos' if today.pnl>0 else 'neg' }}">{{ "%+.2f"|format(today.pnl) }}$</span></div>
-            <div class="stat"><span>Win Rate:</span> <span>{{ today.wr }}% ({{ today.wins }}W / {{ today.losses }}L)</span></div>
-            <div class="stat"><span>Positions:</span> <span>{{ open_pos }} / {{ max_pos }}</span></div>
-            <div class="stat"><span>Total Scans:</span> <span>{{ stats.scans }}</span></div>
-        </div>
+    <h1>💎 Almasi Trad v177 - Scalper</h1>
+    <div class="card"><h2>📈 Today's Performance</h2>
+        <p>P&L: <span class="{{ 'pos' if today.pnl>0 else 'neg' }}">{{ "%+.2f"|format(today.pnl) }}$</span> | Win Rate: {{ today.wr }}% | Trades: {{ today.trades }}</p>
+        <p>Mode: {{ 'DRY RUN' if dry else 'LIVE' }} | TF: {{ tf }} | Scans: {{ stats.scans }}</p>
     </div>
-
-    {% if positions %}
-    <div class="card" style="margin-top: 20px;">
-        <h2>📋 Open Positions</h2>
-        <table>
-            <tr><th>Symbol</th><th>Side</th><th>Entry</th><th>Current</th><th>SL</th><th>P&L</th><th>Conf</th></tr>
-            {% for p in positions %}
-            <tr>
-                <td>{{ p.symbol }}</td>
-                <td class="{{ 'pos' if p.side=='long' else 'neg' }}">{{ p.side.upper() }}</td>
-                <td>{{ "%.4f"|format(p.entry) }}</td>
-                <td>{{ "%.4f"|format(p.current_price) }}</td>
-                <td>{{ "%.4f"|format(p.sl) }}</td>
-                <td class="{{ 'pos' if p.unrealized_pnl>0 else 'neg' }}">{{ "%+.2f"|format(p.unrealized_pnl) }}$</td>
-                <td>{{ p.conf }}%</td>
-            </tr>
-            {% endfor %}
-        </table>
-    </div>
-    {% endif %}
-    
-    <script>setTimeout(() => location.reload(), 30000);</script>
-</body>
-</html>
-"""
+    {% if positions %}<div class="card"><h2>📋 Live Positions ({{ open_pos }}/{{ max_pos }})</h2><table>
+        <tr><th>Symbol</th><th>Side</th><th>Entry</th><th>Current</th><th>SL</th><th>P&L</th><th>Conf</th></tr>
+        {% for p in positions %}<tr><td>{{ p.symbol }}</td><td class="{{ 'pos' if p.side=='long' else 'neg' }}">{{ p.side.upper() }}</td><td>{{ "%.4f"|format(p.entry) }}</td><td>{{ "%.4f"|format(p.current_price) }}</td><td>{{ "%.4f"|format(p.sl) }}</td><td class="{{ 'pos' if p.unrealized_pnl>0 else 'neg' }}">{{ "%+.2f"|format(p.unrealized_pnl) }}$</td><td>{{ p.conf }}%</td></tr>{% endfor %}
+    </table></div>{% endif %}
+    <script>setTimeout(()=>location.reload(), 20000);</script>
+</body></html>"""
 
 @app.route('/')
 def home():
-    if not engine: return "Loading...", 503
+    if not engine: return "Starting Almasi Engine...", 503
     st = engine.stats
-    bal = EX.balance()
-    
-    positions_data = []
+    p_data = []
     if st['positions']:
-        prices = EX.prices_bulk([p['symbol'] for p in st['positions']])
+        pxs = EX.prices_bulk([p['symbol'] for p in st['positions']])
         for p in st['positions']:
-            cp = prices.get(p['symbol'], p['entry'])
+            cp = pxs.get(p['symbol'], p['entry'])
             upnl = (cp - p['entry']) * p['qty'] if p['side']=='long' else (p['entry'] - cp) * p['qty']
-            positions_data.append({**p, 'current_price': cp, 'unrealized_pnl': upnl})
-            
-    return render_template_string(DASHBOARD_HTML, time=datetime.now().strftime('%H:%M:%S'), dry=DRY_RUN, bal=bal, dd=st['dd'], tf=TF, today=st['today'], open_pos=st['open_pos'], max_pos=MAX_POS, stats=st, positions=positions_data)
+            p_data.append({**p, 'current_price': cp, 'unrealized_pnl': upnl})
+    return render_template_string(HTML, dry=DRY_RUN, tf=TF, today=st['today'], open_pos=st['open_pos'], max_pos=MAX_POS, stats=st, positions=p_data)
 
 def main():
     global engine
     log.info("="*50)
-    log.info(" MASTER-AI V5.4.2 BULLETPROOF EDITION")
+    log.info("💎 STARTING ALMASI TRAD V177 SCALPER 💎")
     log.info("="*50)
     engine = Engine()
     threading.Thread(target=engine.loop, daemon=True).start()
     app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
