@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Master-AI Trading Bot Pro v5.1.0 - Flask Edition
-قابل اجرا روی Render با پایداری بالا
+قابل اجرا روی Render با پایداری بالا - 10 جفت‌ارز
 """
 
 import os
@@ -67,7 +67,7 @@ except ImportError:
 
 # ── Flask ──────────────────────────────────────────────────────────────────
 try:
-    from flask import Flask, jsonify, render_template_string
+    from flask import Flask, jsonify
 except ImportError:
     _MISSING.append("flask")
 
@@ -172,7 +172,20 @@ TG_CHAT    = Cfg.s("TELEGRAM_CHAT_ID")
 OAI_KEY    = Cfg.s("OPENAI_API_KEY")
 DB_URL     = Cfg.s("DATABASE_URL")
 
-SYMBOLS    = Cfg.lst("SYMBOLS", "BTC/USDT:USDT,ETH/USDT:USDT")
+# ── 10 جفت‌ارز برتر فیوچرز Phemex ──────────────────────────────────────
+SYMBOLS = Cfg.lst("SYMBOLS", 
+    "BTC/USDT:USDT,"
+    "ETH/USDT:USDT,"
+    "SOL/USDT:USDT,"
+    "XRP/USDT:USDT,"
+    "BNB/USDT:USDT,"
+    "DOGE/USDT:USDT,"
+    "ADA/USDT:USDT,"
+    "AVAX/USDT:USDT,"
+    "DOT/USDT:USDT,"
+    "LINK/USDT:USDT"
+)
+
 TF         = Cfg.s("TIMEFRAME", "5m")
 RISK_PCT   = Cfg.f("RISK_PER_TRADE", 1.0)
 MAX_DD     = Cfg.f("MAX_DRAWDOWN", 10.0)
@@ -182,7 +195,7 @@ TESTNET    = Cfg.b("PHEMEX_TESTNET", True)
 PORT       = Cfg.i("PORT", 10000)
 
 log.info(
-    "Config: symbols=%s tf=%s risk=%.1f%% dd=%.1f%% dry=%s",
+    "Config: symbols=%d tf=%s risk=%.1f%% dd=%.1f%% dry=%s",
     len(SYMBOLS), TF, RISK_PCT, MAX_DD, DRY_RUN
 )
 
@@ -509,7 +522,6 @@ class Alerts:
         self._chat_id = TG_CHAT
 
     def _get_chat_id(self):
-        """دریافت خودکار Chat ID از تلگرام"""
         if self._chat_id:
             return self._chat_id
         if not TG_TOKEN:
@@ -528,7 +540,6 @@ class Alerts:
         return None
 
     def send(self, msg: str, key: str = "", force: bool = False):
-        """ارسال پیام به تلگرام با حذف خودکار"""
         log.info("📢 %s", msg[:100].replace("\n"," "))
         if not TG_TOKEN:
             return
@@ -562,24 +573,21 @@ class Alerts:
             log.warning("Telegram: %s", e)
 
     def send_dashboard(self, engine_stats: Dict, balance: float):
-        """ارسال داشبورد کامل به فارسی"""
         dd = engine_stats.get("dd", {})
         td = engine_stats.get("today", {})
         ai = engine_stats.get("ai", {})
         pos = engine_stats.get("open_pos", 0)
         
-        # محاسبه وین‌ریت کلی
         total_trades = td.get("trades", 0)
         wins = td.get("wins", 0)
         win_rate = td.get("wr", 0)
         
-        # وضعیت ربات
         status = "🟢 فعال" if not dd.get("halted") else "🔴 متوقف"
         dd_pct = dd.get("dd", 0)
         
         msg = (
             f"🤖 <b>داشبورد Master-AI Bot</b>\n"
-            f"{'🔵 DRY-RUN' if DRY_RUN else '🟢 LIVE'} | {TF}\n"
+            f"{'🔵 DRY-RUN' if DRY_RUN else '🟢 LIVE'} | {TF} | {len(SYMBOLS)} جفت‌ارز\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"💰 <b>موجودی:</b> {balance:,.2f} USDT\n"
             f"📊 <b>وضعیت:</b> {status}\n"
@@ -639,7 +647,7 @@ class Exchange:
                     raise ConnectionError("Exchange نیست")
                 return self._ex.fetch_ohlcv(sym, tf, limit=lim)
             except Exception as e:
-                log.warning("ohlcv attempt %d: %s", attempt+1, e)
+                log.warning("ohlcv attempt %d [%s]: %s", attempt+1, sym, e)
                 if attempt < 2:
                     time.sleep(2 ** attempt)
         raise RuntimeError(f"ohlcv {sym} شکست")
@@ -1104,10 +1112,9 @@ class Corr:
     _G = [
         {"BTC/USDT:USDT","ETH/USDT:USDT","BNB/USDT:USDT"},
         {"SOL/USDT:USDT","AVAX/USDT:USDT"},
-        {"MATIC/USDT:USDT","ARB/USDT:USDT","OP/USDT:USDT"},
+        {"XRP/USDT:USDT","ADA/USDT:USDT"},
         {"DOGE/USDT:USDT","SHIB/USDT:USDT"},
-        {"BTC/USDT","ETH/USDT","BNB/USDT"},
-        {"SOL/USDT","AVAX/USDT"},
+        {"DOT/USDT:USDT","LINK/USDT:USDT"},
     ]
 
     def ok(self, sym: str, open_s: set) -> bool:
@@ -1146,16 +1153,14 @@ class Engine:
         TG.send(
             f"🤖 <b>Master-AI Bot v5.1 شروع شد</b>\n"
             f"{'🔵 DRY-RUN' if DRY_RUN else '🟢 LIVE'} | "
-            f"{TF} | Risk:{RISK_PCT}% | DD:{MAX_DD}%\n"
+            f"{TF} | {len(SYMBOLS)} جفت‌ارز | Risk:{RISK_PCT}% | DD:{MAX_DD}%\n"
             f"Balance: ${bal:.2f}",
             force=True
         )
-        # ارسال داشبورد اولیه
         time.sleep(2)
         self._send_dashboard(bal)
 
     def _send_dashboard(self, bal: float = None):
-        """ارسال داشبورد به تلگرام"""
         if bal is None:
             bal = EX.balance()
         stats = self.stats
@@ -1189,7 +1194,6 @@ class Engine:
                 if can and TMR.is_new():
                     self._scan(bal)
 
-                # ارسال داشبورد هر 30 ثانیه
                 if time.time() - last_dashboard > 30:
                     self._send_dashboard(bal)
                     last_dashboard = time.time()
@@ -1285,7 +1289,6 @@ class Engine:
         tp_ = abs(tp-price)/price*100
         e  = "🟢" if side=="long" else "🔴"
         
-        # پیام فارسی
         TG.send(
             f"{e} <b>باز کردن {side.upper()}</b> {sym}\n"
             f"ورود: {price:.4f} | حد ضرر: {sl:.4f}(-{sp:.1f}%)\n"
@@ -1382,7 +1385,7 @@ class Engine:
         }
 
 # ============================================================================
-# FLASK APP - جایگزین HTTP Server داخلی
+# FLASK APP
 # ============================================================================
 app = Flask(__name__)
 engine = None
@@ -1394,7 +1397,7 @@ def home():
     <head><title>Master-AI Bot</title></head>
     <body style="font-family:Tahoma;background:#0d1117;color:#c9d1d9;text-align:center;padding:50px;">
         <h1>🤖 Master-AI Trading Bot v5.1</h1>
-        <p>ربات در حال اجراست...</p>
+        <p>ربات با 10 جفت‌ارز در حال اجراست...</p>
         <p>📊 <a href="/api/stats" style="color:#58a6ff;">مشاهده آمار</a></p>
         <p>❤️ <a href="/health" style="color:#58a6ff;">وضعیت سلامت</a></p>
     </body>
@@ -1403,12 +1406,12 @@ def home():
 
 @app.route('/health')
 def health():
-    """پایپلاین سلامت برای UptimeRobot"""
     if engine:
         return {
             "status": "ok",
             "version": "5.1.0",
             "dry_run": DRY_RUN,
+            "symbols": len(SYMBOLS),
             "uptime": engine._uptime(),
             "open_positions": len(engine._pos) if engine else 0,
             "timestamp": datetime.now(timezone.utc).isoformat()
@@ -1420,6 +1423,7 @@ def api_stats():
     if engine:
         stats = engine.stats
         stats["uptime"] = engine._uptime()
+        stats["symbols"] = len(SYMBOLS)
         return stats
     return {"error": "Engine not ready"}
 
@@ -1434,6 +1438,10 @@ def api_trades():
 def api_history():
     return {"history": database.history(30)}
 
+@app.route('/api/symbols')
+def api_symbols():
+    return {"symbols": SYMBOLS, "count": len(SYMBOLS)}
+
 # ============================================================================
 # MAIN
 # ============================================================================
@@ -1442,16 +1450,15 @@ def main():
     log.info("=" * 50)
     log.info("  Master-AI Bot v5.1.0 - Flask Edition")
     log.info("  Python %s", sys.version.split()[0])
+    log.info("  10 جفت‌ارز فیوچرز Phemex")
     log.info("=" * 50)
 
     Cfg.validate()
 
     engine = Engine()
 
-    # شروع ربات در ترد جداگانه
     threading.Thread(target=engine.loop, daemon=True).start()
 
-    # راه‌اندازی Flask
     port = int(os.environ.get("PORT", 10000))
     log.info("🌐 Flask Server on port %d", port)
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
