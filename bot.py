@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Master-AI Trading Bot Pro v5.1.0 - Flask Edition
-قابل اجرا روی Render با پایداری بالا - 10 جفت‌ارز
+قابل اجرا روی Render با پایداری بالا - 10 جفت‌ارز فیوچرز
 """
 
 import os
@@ -59,15 +59,9 @@ try:
 except ImportError:
     pass
 
-try:
-    from tenacity import retry, stop_after_attempt, wait_exponential
-    _TENACITY_OK = True
-except ImportError:
-    _TENACITY_OK = False
-
 # ── Flask ──────────────────────────────────────────────────────────────────
 try:
-    from flask import Flask, jsonify
+    from flask import Flask
 except ImportError:
     _MISSING.append("flask")
 
@@ -174,16 +168,16 @@ DB_URL     = Cfg.s("DATABASE_URL")
 
 # ── 10 جفت‌ارز برتر فیوچرز Phemex ──────────────────────────────────────
 SYMBOLS = Cfg.lst("SYMBOLS", 
-    "BTC/USDT:USDT,"
-    "ETH/USDT:USDT,"
-    "SOL/USDT:USDT,"
-    "XRP/USDT:USDT,"
-    "BNB/USDT:USDT,"
-    "DOGE/USDT:USDT,"
-    "ADA/USDT:USDT,"
-    "AVAX/USDT:USDT,"
-    "DOT/USDT:USDT,"
-    "LINK/USDT:USDT"
+    "BTC/USDT,"
+    "ETH/USDT,"
+    "SOL/USDT,"
+    "XRP/USDT,"
+    "BNB/USDT,"
+    "DOGE/USDT,"
+    "ADA/USDT,"
+    "AVAX/USDT,"
+    "DOT/USDT,"
+    "LINK/USDT"
 )
 
 TF         = Cfg.s("TIMEFRAME", "5m")
@@ -513,7 +507,7 @@ class DB:
 database = DB()
 
 # ============================================================================
-# ALERTS - نسخه فارسی
+# ALERTS
 # ============================================================================
 class Alerts:
     def __init__(self):
@@ -578,10 +572,6 @@ class Alerts:
         ai = engine_stats.get("ai", {})
         pos = engine_stats.get("open_pos", 0)
         
-        total_trades = td.get("trades", 0)
-        wins = td.get("wins", 0)
-        win_rate = td.get("wr", 0)
-        
         status = "🟢 فعال" if not dd.get("halted") else "🔴 متوقف"
         dd_pct = dd.get("dd", 0)
         
@@ -594,15 +584,14 @@ class Alerts:
             f"📉 <b>Drawdown:</b> {dd_pct:.1f}% / {MAX_DD}%\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📈 <b>آمار امروز:</b>\n"
-            f"   معاملات: {total_trades}\n"
-            f"   برد: {wins} | باخت: {total_trades - wins}\n"
-            f"   وین‌ریت: {win_rate:.1f}%\n"
+            f"   معاملات: {td.get('trades', 0)}\n"
+            f"   برد: {td.get('wins', 0)} | باخت: {td.get('losses', 0)}\n"
+            f"   وین‌ریت: {td.get('wr', 0):.1f}%\n"
             f"   سود/زیان: {'+' if td.get('pnl',0) >= 0 else ''}{td.get('pnl',0):.2f} USDT\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 <b>پوزیشن‌های باز:</b> {pos}/{MAX_POS}\n"
             f"🧠 <b>هوش مصنوعی:</b> {ai.get('calls', 0)} درخواست | هزینه: ${ai.get('cost', 0):.4f}\n"
             f"⏱️ <b>آپتایم:</b> {engine_stats.get('uptime', '?')}\n"
-            f"🔄 <b>چرخه:</b> {engine_stats.get('cycles', 0)}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
@@ -612,7 +601,7 @@ class Alerts:
 TG = Alerts()
 
 # ============================================================================
-# EXCHANGE - پشتیبانی از فیوچرز
+# EXCHANGE - پشتیبانی از فیوچرز با فرمت صحیح
 # ============================================================================
 class Exchange:
     def __init__(self):
@@ -631,11 +620,18 @@ class Exchange:
                 "secret"          : API_SECRET,
                 "enableRateLimit" : True,
                 "timeout"         : 20000,
-                "options"         : {"defaultType": "swap"},
+                "options"         : {
+                    "defaultType": "swap",  # فیوچرز
+                    "adjustForTimeDifference": True,
+                },
             })
             if TESTNET:
                 self._ex.set_sandbox_mode(True)
-            log.info("✅ Exchange: Phemex (testnet=%s)", TESTNET)
+            
+            # بارگذاری بازارها برای تأیید
+            self._ex.load_markets()
+            log.info("✅ Exchange: Phemex (testnet=%s) - %d بازار بارگذاری شد", 
+                     TESTNET, len(self._ex.markets))
         except Exception as e:
             log.error("Exchange connect: %s", e)
             self._ex = None
@@ -645,6 +641,10 @@ class Exchange:
             try:
                 if self._ex is None:
                     raise ConnectionError("Exchange نیست")
+                # اطمینان از وجود نماد در بازار
+                if sym not in self._ex.markets:
+                    log.warning("نماد %s در بازار موجود نیست", sym)
+                    raise ValueError(f"Symbol {sym} not found")
                 return self._ex.fetch_ohlcv(sym, tf, limit=lim)
             except Exception as e:
                 log.warning("ohlcv attempt %d [%s]: %s", attempt+1, sym, e)
@@ -1110,11 +1110,11 @@ TR = Trail(2.0)
 # ============================================================================
 class Corr:
     _G = [
-        {"BTC/USDT:USDT","ETH/USDT:USDT","BNB/USDT:USDT"},
-        {"SOL/USDT:USDT","AVAX/USDT:USDT"},
-        {"XRP/USDT:USDT","ADA/USDT:USDT"},
-        {"DOGE/USDT:USDT","SHIB/USDT:USDT"},
-        {"DOT/USDT:USDT","LINK/USDT:USDT"},
+        {"BTC/USDT","ETH/USDT","BNB/USDT"},
+        {"SOL/USDT","AVAX/USDT"},
+        {"XRP/USDT","ADA/USDT"},
+        {"DOGE/USDT","SHIB/USDT"},
+        {"DOT/USDT","LINK/USDT"},
     ]
 
     def ok(self, sym: str, open_s: set) -> bool:
@@ -1397,7 +1397,7 @@ def home():
     <head><title>Master-AI Bot</title></head>
     <body style="font-family:Tahoma;background:#0d1117;color:#c9d1d9;text-align:center;padding:50px;">
         <h1>🤖 Master-AI Trading Bot v5.1</h1>
-        <p>ربات با 10 جفت‌ارز در حال اجراست...</p>
+        <p>ربات با 10 جفت‌ارز فیوچرز در حال اجراست...</p>
         <p>📊 <a href="/api/stats" style="color:#58a6ff;">مشاهده آمار</a></p>
         <p>❤️ <a href="/health" style="color:#58a6ff;">وضعیت سلامت</a></p>
     </body>
