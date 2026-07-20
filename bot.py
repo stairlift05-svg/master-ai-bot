@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Test Script for Phemex Futures Trading (اصلاح شده)
+Test Script for Phemex Futures Trading (نسخه نهایی)
 ✅ دریافت موجودی
 ✅ انجام یک معامله خرید (لانگ) و بستن بعد ۳۰ ثانیه
 ✅ انجام یک معامله فروش (شورت) و بستن بعد ۳۰ ثانیه
@@ -11,6 +11,7 @@ Test Script for Phemex Futures Trading (اصلاح شده)
 import os
 import sys
 import time
+import math
 import logging
 from datetime import datetime
 
@@ -41,7 +42,7 @@ API_KEY    = os.getenv("PHEMEX_API_KEY", "").strip()
 API_SECRET = os.getenv("PHEMEX_API_SECRET", "").strip()
 TESTNET    = os.getenv("PHEMEX_TESTNET", "true").lower() == "true"
 SYMBOL     = os.getenv("TEST_SYMBOL", "BTC/USDT:USDT").strip()
-POSITION_SIZE_USD = 10.0  # حجم معامله به دلار (حداقل ۱۰ دلار برای فیوچرز)
+POSITION_SIZE_USD = 10.0  # حجم معامله به دلار
 
 if not API_KEY or not API_SECRET:
     log.error("❌ PHEMEX_API_KEY و PHEMEX_API_SECRET باید تنظیم شوند!")
@@ -58,7 +59,7 @@ def connect_exchange():
         "enableRateLimit": True,
         "timeout": 30000,
         "options": {
-            "defaultType": "swap",  # فیوچرز
+            "defaultType": "swap",
         },
     })
     if TESTNET:
@@ -90,22 +91,22 @@ def get_price(exchange, symbol):
         log.error(f"خطا در دریافت قیمت {symbol}: {e}")
         return None
 
-# ── محاسبه حجم بر اساس مبلغ دلاری ──────────────────────────────────
+# ── محاسبه حجم بر اساس مبلغ دلاری (اصلاح شده) ──────────────────────
 def calculate_quantity(exchange, symbol, usd_amount):
     market = exchange.market(symbol)
     price = get_price(exchange, symbol)
     if not price:
         return None
     
-    # حداقل حجم معامله (در صورت None بودن، مقدار پیش‌فرض 0.0001)
-    min_qty = market.get("limits", {}).get("amount", {}).get("min", 0.0001)
+    # دریافت حداقل حجم مجاز
+    min_qty = market.get("limits", {}).get("amount", {}).get("min")
     if min_qty is None:
-        min_qty = 0.0001  # مقدار پیش‌فرض برای BTC
+        min_qty = 0.0001  # پیش‌فرض برای BTC
     
-    # دقت حجم (تعداد ارقام اعشار)
-    precision = market.get("precision", {}).get("amount", 0.00001)
+    # دریافت دقت حجم (تعداد ارقام اعشار)
+    precision = market.get("precision", {}).get("amount")
     if precision is None:
-        precision = 0.00001
+        precision = 0.00001  # پیش‌فرض
     
     # محاسبه حجم اولیه
     qty = usd_amount / price
@@ -114,15 +115,22 @@ def calculate_quantity(exchange, symbol, usd_amount):
     if qty < min_qty:
         qty = min_qty
     
-    # گرد کردن بر اساس دقت
-    qty = round(qty / precision) * precision
+    # گرد کردن به نزدیک‌ترین مضرب دقت
+    # اما اگر دقت خیلی بزرگ است (مثلاً 0.001)، ممکن است qty به صفر برسد
+    # بنابراین اگر پس از گرد کردن صفر شد، حداقل را انتخاب کن
+    qty_rounded = round(qty / precision) * precision
+    if qty_rounded < min_qty:
+        qty_rounded = min_qty
     
-    log.info(f"حجم محاسبه‌شده: {qty:.8f} (حداقل مجاز: {min_qty})")
-    return qty
+    # اطمینان از اینکه حجم از حداقل کمتر نشود
+    if qty_rounded < min_qty:
+        qty_rounded = min_qty
+    
+    log.info(f"حجم محاسبه‌شده: {qty_rounded:.8f} (حداقل مجاز: {min_qty})")
+    return qty_rounded
 
 # ── باز کردن معامله ──────────────────────────────────────────────────
 def open_position(exchange, symbol, side, usd_amount):
-    """side: 'buy' یا 'sell'"""
     qty = calculate_quantity(exchange, symbol, usd_amount)
     if not qty or qty <= 0:
         log.error("حجم نامعتبر")
@@ -136,7 +144,6 @@ def open_position(exchange, symbol, side, usd_amount):
     try:
         order = exchange.create_order(symbol, "market", side, qty)
         log.info(f"✅ سفارش ثبت شد: {order['id']}")
-        # قیمت پر شدن را از پاسخ استخراج می‌کنیم (میانگین قیمت اجرا)
         filled_price = float(order.get("price", price))
         if "fills" in order and len(order["fills"]) > 0:
             filled_price = float(order["fills"][0]["price"])
@@ -154,7 +161,6 @@ def open_position(exchange, symbol, side, usd_amount):
 
 # ── بستن معامله ──────────────────────────────────────────────────────
 def close_position(exchange, symbol, side, qty):
-    """برای بستن لانگ: side='sell'، برای بستن شورت: side='buy'"""
     log.info(f"🔒 بستن پوزیشن {side.upper()} به مقدار {qty:.8f}")
     try:
         order = exchange.create_order(symbol, "market", side, qty)
@@ -170,43 +176,35 @@ def close_position(exchange, symbol, side, qty):
 
 # ── تابع اصلی تست ────────────────────────────────────────────────────
 def run_test():
-    # ۱. اتصال
     exchange = connect_exchange()
     
-    # ۲. موجودی اولیه
     initial_balance = get_balance(exchange)
     if initial_balance <= 0:
-        log.warning("موجودی صفر یا کمتر از حداقل – ممکن است در تستنت باشد و موجودی کافی نباشد.")
-        # برای تست، موجودی فرضی ۱۰۰ دلار در نظر گرفته می‌شود (اما سفارش واقعی نیست)
-        # در تستنت اگر موجودی واقعی صفر باشد، سفارش باز نمی‌شود.
-        log.info("ادامه با موجودی فرضی ۱۰۰ USDT برای تست (فقط در حالت DRY_RUN)...")
-        # اما برای اجرای واقعی، اگر موجودی صفر باشد بهتر است متوقف شود.
         log.error("موجودی کافی نیست، تست متوقف می‌شود.")
         return
     
-    # ۳. تست لانگ
+    # تست لانگ
     log.info("\n" + "="*50)
     log.info("🟢 تست معامله خرید (لانگ)")
     long_pos = open_position(exchange, SYMBOL, "buy", POSITION_SIZE_USD)
     if long_pos:
-        time.sleep(30)  # ۳۰ ثانیه نگه‌داری
+        time.sleep(30)
         close_price = close_position(exchange, SYMBOL, "sell", long_pos["qty"])
         if close_price:
             pnl = (close_price - long_pos["price"]) * long_pos["qty"]
             log.info(f"📊 سود/زیان لانگ: {pnl:.4f} USDT")
     
-    # ۴. تست شورت
+    # تست شورت
     log.info("\n" + "="*50)
     log.info("🔴 تست معامله فروش (شورت)")
     short_pos = open_position(exchange, SYMBOL, "sell", POSITION_SIZE_USD)
     if short_pos:
-        time.sleep(30)  # ۳۰ ثانیه نگه‌داری
+        time.sleep(30)
         close_price = close_position(exchange, SYMBOL, "buy", short_pos["qty"])
         if close_price:
             pnl = (short_pos["price"] - close_price) * short_pos["qty"]
             log.info(f"📊 سود/زیان شورت: {pnl:.4f} USDT")
     
-    # ۵. موجودی نهایی
     final_balance = get_balance(exchange)
     log.info("\n" + "="*50)
     log.info(f"💰 موجودی اولیه: {initial_balance:.2f}")
