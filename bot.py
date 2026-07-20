@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master-AI Trading Bot Pro v5.4.1 - Full Dashboard Edition
-✅ فیکس کامل Phemex OHLCV (Error 30000)
-✅ داشبورد حرفه‌ای حفظ شد
-✅ بهینه برای تایم‌فریم‌های پایین (1m, 3m, 5m)
+Master-AI Trading Bot Pro v5.4.2 - Bulletproof Edition
+✅ فیکس حساسیت به اشتباه تایپی در TIMEFRAME
+✅ فیکس Phemex OHLCV (Error 30000)
+✅ داشبورد حرفه‌ای
 """
 
 import os
@@ -57,18 +57,13 @@ if _MISSING:
 IS_PROD = os.getenv("RENDER", "false").lower() == "true"
 
 def _setup_log() -> logging.Logger:
-    fmt = (
-        '{"t":"%(asctime)s","lvl":"%(levelname)s","msg":"%(message)s"}'
-        if IS_PROD else
-        "%(asctime)s | %(levelname)-8s | %(message)s"
-    )
+    fmt = '{"t":"%(asctime)s","lvl":"%(levelname)s","msg":"%(message)s"}' if IS_PROD else "%(asctime)s | %(levelname)-8s | %(message)s"
     logging.basicConfig(level=logging.INFO, format=fmt, stream=sys.stdout, force=True)
     for lib in ("ccxt", "urllib3", "openai", "httpx", "httpcore"):
         logging.getLogger(lib).setLevel(logging.ERROR)
     return logging.getLogger("Bot")
 
 log = _setup_log()
-log.info("🚀 Bot v5.4.1 (Full Dashboard) starting...")
 
 # ============================================================================
 # CONFIG
@@ -104,13 +99,20 @@ SYMBOLS = Cfg.lst("SYMBOLS",
     "DOGE/USDT:USDT,ADA/USDT:USDT,AVAX/USDT:USDT,DOT/USDT:USDT,LINK/USDT:USDT"
 )
 
-TF         = Cfg.s("TIMEFRAME", "5m")
+# 🚀 FIX: اگر کاربر به اشتباه چند تایم‌فریم وارد کرد، فقط اولی را بگیر
+_raw_tf    = Cfg.s("TIMEFRAME", "5m")
+TF         = _raw_tf.split(",")[0].strip()
+if TF not in ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"]:
+    TF = "5m" # مقدار پیش‌فرض در صورت اشتباه تایپی
+
 RISK_PCT   = Cfg.f("RISK_PER_TRADE", 1.5)
 MAX_DD     = Cfg.f("MAX_DRAWDOWN", 10.0)
 MAX_POS    = Cfg.i("MAX_POSITIONS", 5)
 DRY_RUN    = Cfg.b("DRY_RUN", False)
 TESTNET    = Cfg.b("PHEMEX_TESTNET", False)
 PORT       = Cfg.i("PORT", 10000)
+
+log.info("Config: TF=%s | Risk=%.1f%% | MaxDD=%.1f%% | Dry=%s", TF, RISK_PCT, MAX_DD, DRY_RUN)
 
 # ============================================================================
 # PERFORMANCE TRACKER
@@ -119,28 +121,12 @@ class PerfTracker:
     def __init__(self, max_len: int = 100):
         self._scans = deque(maxlen=max_len)
         self._signals = deque(maxlen=max_len)
-        self._errors = deque(maxlen=max_len)
-        
-    def log_scan(self, duration: float):
-        self._scans.append(duration)
-    
+    def log_scan(self, duration: float): self._scans.append(duration)
     def log_signal(self, sym: str, action: str, conf: int):
-        self._signals.append({
-            "time": datetime.now(timezone.utc).isoformat(),
-            "symbol": sym, "action": action, "confidence": conf
-        })
-    
-    def log_error(self, error: str):
-        self._errors.append({"time": datetime.now(timezone.utc).isoformat(), "error": error[:200]})
-    
+        self._signals.append({"time": datetime.now(timezone.utc).isoformat(), "symbol": sym, "action": action, "confidence": conf})
     @property
     def stats(self) -> Dict:
-        return {
-            "avg_scan_time": round(sum(self._scans) / len(self._scans), 2) if self._scans else 0,
-            "recent_signals": list(self._signals)[-10:],
-            "recent_errors": list(self._errors)[-5:],
-            "total_scans": len(self._scans)
-        }
+        return {"avg_scan_time": round(sum(self._scans)/len(self._scans), 2) if self._scans else 0, "recent_signals": list(self._signals)[-10:]}
 
 PERF = PerfTracker()
 
@@ -163,39 +149,34 @@ class Indicators:
 
     @staticmethod
     def atr(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
-        tr = pd.concat([high - low, (high - close.shift()).abs(), (low  - close.shift()).abs()], axis=1).max(axis=1)
+        tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
         return tr.ewm(com=n-1, adjust=False).mean()
 
     @staticmethod
-    def macd(close: pd.Series, fast: int = 12, slow: int = 26, sig: int = 9) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    def macd(close: pd.Series, fast: int = 12, slow: int = 26, sig: int = 9):
         e_fast = close.ewm(span=fast, adjust=False).mean()
         e_slow = close.ewm(span=slow, adjust=False).mean()
         line   = e_fast - e_slow
         signal = line.ewm(span=sig, adjust=False).mean()
-        hist   = line - signal
-        return line, signal, hist
+        return line, signal, line - signal
 
     @staticmethod
-    def bbands(close: pd.Series, n: int = 20, std: float = 2.0) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    def bbands(close: pd.Series, n: int = 20, std: float = 2.0):
         mid = close.rolling(n).mean()
         sd  = close.rolling(n).std()
         return mid - std*sd, mid, mid + std*sd
 
     @staticmethod
-    def stoch(high: pd.Series, low: pd.Series, close: pd.Series, k: int = 14, d: int = 3) -> Tuple[pd.Series, pd.Series]:
+    def stoch(high: pd.Series, low: pd.Series, close: pd.Series, k: int = 14, d: int = 3):
         lo  = low.rolling(k).min()
         hi  = high.rolling(k).max()
         stk = 100 * (close - lo) / (hi - lo + 1e-10)
-        std = stk.rolling(d).mean()
-        return stk, std
+        return stk, stk.rolling(d).mean()
 
     @staticmethod
     def safe(s, idx: int = -1) -> float:
-        try:
-            v = s.iloc[idx]
-            return float(v) if not (v != v) else 0.0
-        except Exception:
-            return 0.0
+        try: v = s.iloc[idx]; return float(v) if not (v != v) else 0.0
+        except Exception: return 0.0
 
 IND = Indicators()
 
@@ -214,7 +195,6 @@ class DB:
             c.execute("PRAGMA journal_mode=WAL")
             c.execute("""CREATE TABLE IF NOT EXISTS trades (id TEXT PRIMARY KEY, symbol TEXT NOT NULL, side TEXT NOT NULL, entry_price REAL NOT NULL, exit_price REAL, quantity REAL NOT NULL, stop_loss REAL NOT NULL, take_profit REAL NOT NULL, status TEXT DEFAULT 'open', ai_signal TEXT, confidence INTEGER DEFAULT 0, pnl REAL DEFAULT 0, pnl_pct REAL DEFAULT 0, exit_reason TEXT, opened_at TEXT DEFAULT CURRENT_TIMESTAMP, closed_at TEXT)""")
             c.execute("""CREATE TABLE IF NOT EXISTS daily_stats (date TEXT PRIMARY KEY, total INTEGER DEFAULT 0, wins INTEGER DEFAULT 0, losses INTEGER DEFAULT 0, pnl REAL DEFAULT 0, win_rate REAL DEFAULT 0)""")
-            c.execute("""CREATE TABLE IF NOT EXISTS activity_log (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT DEFAULT CURRENT_TIMESTAMP, event_type TEXT NOT NULL, symbol TEXT, message TEXT)""")
 
     @contextmanager
     def _cx(self):
@@ -233,9 +213,6 @@ class DB:
                 if sql.strip().upper().startswith("SELECT"): return cur.fetchall()
         except Exception as e: log.error("DB: %s", e)
         return None
-
-    def log_activity(self, event: str, sym: str = "", msg: str = ""):
-        self.run("INSERT INTO activity_log (event_type,symbol,message) VALUES (?,?,?)", (event, sym, msg[:500]))
 
     def open_trades(self) -> List[Dict]:
         rows = self.run("SELECT id,symbol,side,entry_price,quantity,stop_loss,take_profit,confidence,opened_at FROM trades WHERE status='open'")
@@ -271,50 +248,32 @@ database = DB()
 # ============================================================================
 class Alerts:
     def __init__(self):
-        self._sent = {}
-        self._lock = threading.Lock()
         self._chat_id = TG_CHAT
-        self._queue = deque(maxlen=100)
 
     def _get_chat_id(self):
         if self._chat_id: return self._chat_id
         if not TG_TOKEN: return None
         try:
             res = requests.get(f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates", timeout=5).json()
-            if res.get("ok") and res.get("result"):
-                self._chat_id = str(res["result"][-1]["message"]["chat"]["id"])
-                return self._chat_id
+            if res.get("ok") and res.get("result"): return str(res["result"][-1]["message"]["chat"]["id"])
         except: pass
         return None
 
     def send(self, msg: str, key: str = "", force: bool = False):
-        log.info("📢 %s", msg[:100].replace("\n"," "))
-        self._queue.append({"time": datetime.now(timezone.utc).isoformat(), "msg": msg[:200]})
         if not TG_TOKEN: return
         chat_id = self._get_chat_id()
         if not chat_id: return
-        
-        if key and not force:
-            with self._lock:
-                if time.time() - self._sent.get(key,0) < 30: return
-                self._sent[key] = time.time()
-                
-        threading.Thread(target=self._post, args=(msg, chat_id), daemon=True).start()
-
-    def _post(self, msg: str, chat_id: str):
-        try: requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=10)
-        except: pass
+        threading.Thread(target=lambda: requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=10), daemon=True).start()
 
     def send_dashboard(self, engine_stats: Dict, balance: float):
-        dd, td, ai, pos = engine_stats.get("dd", {}), engine_stats.get("today", {}), engine_stats.get("ai", {}), engine_stats.get("open_pos", 0)
-        roi = ((balance - 10000) / 10000 * 100) if balance > 0 else 0
-        msg = f"🤖 <b>Dashboard v5.4.1</b>\n{'🔵 DRY' if DRY_RUN else '🟢 LIVE'} | {TF}\n💰 Bal: {balance:,.2f} ({roi:+.2f}%)\n📉 DD: {dd.get('dd',0):.1f}%\n📊 Pos: {pos}/{MAX_POS}\n📈 Today: {td.get('pnl',0):+.2f}$ ({td.get('trades',0)} trades)"
-        self.send(msg, key="dashboard", force=True)
+        dd, td, pos = engine_stats.get("dd", {}), engine_stats.get("today", {}), engine_stats.get("open_pos", 0)
+        msg = f"🤖 <b>Bot v5.4.2</b>\n{'🔵 DRY' if DRY_RUN else '🟢 LIVE'} | {TF}\n💰 Bal: {balance:,.2f}\n📉 DD: {dd.get('dd',0):.1f}%\n📊 Pos: {pos}/{MAX_POS}\n📈 Today: {td.get('pnl',0):+.2f}$"
+        self.send(msg, force=True)
 
 TG = Alerts()
 
 # ============================================================================
-# EXCHANGE (🔥 FIXED ERROR 30000)
+# EXCHANGE 
 # ============================================================================
 class Exchange:
     def __init__(self):
@@ -329,17 +288,13 @@ class Exchange:
             if TESTNET: self._ex.set_sandbox_mode(True)
             self._ex.load_markets()
             log.info("✅ Exchange connected.")
-        except Exception as e:
-            log.error("Exchange connect: %s", e)
+        except Exception as e: log.error("Exchange connect: %s", e)
 
     def _retry_ohlcv(self, sym: str, tf: str, lim: int) -> List:
-        for attempt in range(5):
+        for attempt in range(4):
             try:
-                # 🚀 FIX FOR PHEMEX ERROR 30000:
                 tf_ms = self._ex.parse_timeframe(tf) * 1000
                 since = self._ex.milliseconds() - (lim * tf_ms)
-                
-                # Send explicit 'since' parameter
                 return self._ex.fetch_ohlcv(sym, tf, since=since, limit=lim, params={'type': 'swap'})
             except Exception as e:
                 log.warning("ohlcv retry %d [%s]: %s", attempt+1, sym, str(e)[:100])
@@ -357,8 +312,7 @@ class Exchange:
         if sym in self._pc and now - self._pc[sym][1] < 2.5: return self._pc[sym][0]
         try:
             p = float(self._ex.fetch_ticker(sym)["last"])
-            self._pc[sym] = (p, now)
-            return p
+            self._pc[sym] = (p, now); return p
         except: return 0.0
 
     def prices_bulk(self, syms: List[str]) -> Dict[str, float]:
@@ -383,8 +337,7 @@ class Exchange:
             p = self.price(sym)
             min_q = m.get("limits", {}).get("amount", {}).get("min", 0.001)
             prec = m.get("precision", {}).get("amount", 0.001)
-            qty = max(min_q, round((usd_amount / p) / prec) * prec)
-            return qty
+            return max(min_q, round((usd_amount / p) / prec) * prec)
         except: return None
 
     def order(self, sym: str, side: str, qty: float):
@@ -401,7 +354,7 @@ class Exchange:
 EX = Exchange()
 
 # ============================================================================
-# TECHNICAL ANALYSIS (WITH MACRO TREND)
+# TECHNICAL ANALYSIS
 # ============================================================================
 @dataclass
 class Sig:
@@ -434,7 +387,6 @@ class Tech:
 
         bs, ss, tags = 0, 0, []
 
-        # Macro Trend
         trend = "BULL" if price > e200 else "BEAR"
         if trend == "BULL": bs += 15; ss -= 10; tags.append("Trend=UP")
         else: ss += 15; bs -= 10; tags.append("Trend=DWN")
@@ -473,9 +425,7 @@ TECH = Tech()
 class AI:
     def __init__(self):
         self._c = None
-        self._cache = {}
         self._calls = 0
-        self._cost = 0.0
         if OAI_KEY:
             try:
                 from openai import OpenAI
@@ -484,25 +434,16 @@ class AI:
 
     def analyze(self, sym, tech, n_open):
         if not self._c: return tech
-        ck = f"{sym}_{tech.ind.get('price')}"
-        if ck in self._cache: return self._cache[ck]
-        
         prompt = f"Sym:{sym} RSI:{tech.ind.get('rsi')} Tech:{tech.action}. Reply JSON {{\"signal\":\"buy\"|\"sell\"|\"neutral\",\"confidence\":0-100}}"
         try:
             r = self._c.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role":"user","content":prompt}], max_tokens=50, temperature=0.1)
-            raw = re.sub(r"```[a-z]*|```","", r.choices[0].message.content).strip()
-            aj = json.loads(raw)
+            aj = json.loads(re.sub(r"```[a-z]*|```","", r.choices[0].message.content).strip())
             aa = aj.get("signal","neutral")
             ac = int(aj.get("confidence",0))
-            
             if aa == tech.action and aa != "neutral": tech.conf = min(95, int((ac+tech.conf)/2*1.15))
-            self._calls += 1; self._cost += 0.0001
-            self._cache[ck] = tech
+            self._calls += 1
             return tech
         except: return tech
-        
-    @property
-    def stats(self): return {"calls":self._calls,"cost":round(self._cost,5),"cache":len(self._cache)}
 
 AI_ENG = AI()
 
@@ -518,8 +459,6 @@ class Timer:
         if self._last is None or ts > self._last:
             self._last = ts; return True
         return False
-    @property
-    def left(self): return max(0, ((self._last or 0) + self._s) - int(time.time()))
 
 TMR = Timer(TF)
 
@@ -564,7 +503,7 @@ class Engine:
         bal = EX.balance()
         DD.check(bal)
         for t in database.open_trades(): self._pos[t["id"]] = t; TR.init(t["id"], t["entry"], t["sl"])
-        TG.send(f"🚀 <b>Bot v5.4.1 Started</b>\nTF: {TF} | Bal: ${bal:,.2f}", force=True)
+        TG.send(f"🚀 <b>Bot v5.4.2 Started</b>\nTF: {TF} | Bal: ${bal:,.2f}", force=True)
 
     def loop(self):
         while self._run:
@@ -581,7 +520,6 @@ class Engine:
         with self._lock: n = len(self._pos)
         if n >= MAX_POS: return
         self._st["scans"] += 1
-        log.info("🔍 Scan #%d", self._st["scans"])
         
         for sym in SYMBOLS:
             with self._lock:
@@ -606,10 +544,10 @@ class Engine:
                     if dist > 0:
                         val = (risk/dist) * px
                         qty = EX.calculate_quantity(sym, val)
-                        if qty and qty > 0: self._open(sym, sig, px, sl, tp, qty, risk)
+                        if qty and qty > 0: self._open(sym, sig, px, sl, tp, qty)
             except Exception as e: log.error("Analyze %s: %s", sym, e)
 
-    def _open(self, sym, sig, px, sl, tp, qty, risk):
+    def _open(self, sym, sig, px, sl, tp, qty):
         side = "long" if sig.action=="buy" else "short"
         o = EX.order(sym, "buy" if side=="long" else "sell", qty)
         if o:
@@ -657,7 +595,7 @@ class Engine:
 
     @property
     def stats(self):
-        with self._lock: return {"cycles":self._st["cycles"], "scans":self._st["scans"], "opened":self._st["opened"], "closed":self._st["closed"], "open_pos": len(self._pos), "positions": list(self._pos.values()), "dd": DD.st, "today": database.today(), "ai": AI_ENG.stats, "secs_left": TMR.left}
+        with self._lock: return {"cycles":self._st["cycles"], "scans":self._st["scans"], "opened":self._st["opened"], "closed":self._st["closed"], "open_pos": len(self._pos), "positions": list(self._pos.values()), "dd": DD.st, "today": database.today()}
 
 # ============================================================================
 # FULL FLASK DASHBOARD
@@ -683,7 +621,7 @@ DASHBOARD_HTML = """
     </style>
 </head>
 <body>
-    <h1 style="text-align:center">🤖 Master-AI Bot v5.4.1</h1>
+    <h1 style="text-align:center">🤖 Master-AI Bot v5.4.2</h1>
     <p style="text-align:center">Last Update: {{ time }}</p>
     
     <div class="grid">
@@ -748,7 +686,7 @@ def home():
 def main():
     global engine
     log.info("="*50)
-    log.info(" MASTER-AI V5.4.1 FULL DASHBOARD")
+    log.info(" MASTER-AI V5.4.2 BULLETPROOF EDITION")
     log.info("="*50)
     engine = Engine()
     threading.Thread(target=engine.loop, daemon=True).start()
