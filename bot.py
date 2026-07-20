@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Test Script for Phemex Futures Trading
+Test Script for Phemex Futures Trading (اصلاح شده)
 ✅ دریافت موجودی
 ✅ انجام یک معامله خرید (لانگ) و بستن بعد ۳۰ ثانیه
 ✅ انجام یک معامله فروش (شورت) و بستن بعد ۳۰ ثانیه
@@ -96,15 +96,27 @@ def calculate_quantity(exchange, symbol, usd_amount):
     price = get_price(exchange, symbol)
     if not price:
         return None
-    # حجم = مبلغ / قیمت
-    qty = usd_amount / price
-    # رعایت حداقل حجم و دقت (برای فیوچرز معمولاً حداقل 0.001 بیت‌کوین)
+    
+    # حداقل حجم معامله (در صورت None بودن، مقدار پیش‌فرض 0.0001)
     min_qty = market.get("limits", {}).get("amount", {}).get("min", 0.0001)
+    if min_qty is None:
+        min_qty = 0.0001  # مقدار پیش‌فرض برای BTC
+    
+    # دقت حجم (تعداد ارقام اعشار)
+    precision = market.get("precision", {}).get("amount", 0.00001)
+    if precision is None:
+        precision = 0.00001
+    
+    # محاسبه حجم اولیه
+    qty = usd_amount / price
+    
+    # اگر کمتر از حداقل بود، به حداقل برسان
     if qty < min_qty:
         qty = min_qty
-    # گرد کردن به دقت مشخص
-    precision = market.get("precision", {}).get("amount", 0.00001)
+    
+    # گرد کردن بر اساس دقت
     qty = round(qty / precision) * precision
+    
     log.info(f"حجم محاسبه‌شده: {qty:.8f} (حداقل مجاز: {min_qty})")
     return qty
 
@@ -165,10 +177,12 @@ def run_test():
     initial_balance = get_balance(exchange)
     if initial_balance <= 0:
         log.warning("موجودی صفر یا کمتر از حداقل – ممکن است در تستنت باشد و موجودی کافی نباشد.")
-        # در تستنت می‌توان با موجودی مجازی کار کرد، ولی اگر صفر باشد خطا می‌دهد.
-        # برای تست می‌توان مقدار ۱۰۰ دلار را فرض کرد ولی بهتر است از موجودی واقعی استفاده شود.
-        log.info("ادامه با موجودی فرضی ۱۰۰ USDT برای تست...")
-        initial_balance = 100.0
+        # برای تست، موجودی فرضی ۱۰۰ دلار در نظر گرفته می‌شود (اما سفارش واقعی نیست)
+        # در تستنت اگر موجودی واقعی صفر باشد، سفارش باز نمی‌شود.
+        log.info("ادامه با موجودی فرضی ۱۰۰ USDT برای تست (فقط در حالت DRY_RUN)...")
+        # اما برای اجرای واقعی، اگر موجودی صفر باشد بهتر است متوقف شود.
+        log.error("موجودی کافی نیست، تست متوقف می‌شود.")
+        return
     
     # ۳. تست لانگ
     log.info("\n" + "="*50)
@@ -207,3 +221,4 @@ if __name__ == "__main__":
         log.info("🛑 تست توسط کاربر متوقف شد.")
     except Exception as e:
         log.critical(f"❌ خطای پیش‌بینی‌نشده: {e}", exc_info=True)
+        sys.exit(1)
