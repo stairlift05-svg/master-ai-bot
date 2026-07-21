@@ -457,20 +457,18 @@ class Exchange:
         sym: str,
         side: str,
         qty: float,
-        pos_side: str = "Long",
         is_close: bool = False,
     ) -> Optional[Dict]:
-        """ثبت مستقیم سفارشات مارکت مطابق با سناریوی استاندارد صرافی"""
+        """ثبت سفارش سازگار با تمام حالت‌های صرافی (جلوگیری از خطای 20004)"""
         if DRY_RUN:
             return {"id": f"dry_{uuid.uuid4().hex[:6]}", "ok": True}
         try:
-            # فرمت دقیق اعشار حجم متناسب با بازار صرافی
             amount = float(self._ex.amount_to_precision(sym, qty))
             if amount <= 0:
                 log.warning("Qty too small after formatting: %f", qty)
                 return None
 
-            params = {"posSide": pos_side}
+            params = {}
             if is_close:
                 params["reduceOnly"] = True
 
@@ -858,12 +856,9 @@ class Engine:
 
     def _open_position(self, sym: str, out: ThinkTankOutput, qty: float):
         side = "buy" if out.action == "buy" else "sell"
-        pos_side = "Long" if out.action == "buy" else "Short"
         pid = f"p_{uuid.uuid4().hex[:8]}"
 
-        order_res = EX.order(
-            sym, side, qty, pos_side=pos_side, is_close=False
-        )
+        order_res = EX.order(sym, side, qty, is_close=False)
         if not order_res:
             return
 
@@ -920,15 +915,8 @@ class Engine:
                     if tp1_hit:
                         half_qty = pos["qty"] / 2.0
                         close_side = "sell" if side == "long" else "buy"
-                        pos_side = "Long" if side == "long" else "Short"
 
-                        EX.order(
-                            pos["symbol"],
-                            close_side,
-                            half_qty,
-                            pos_side=pos_side,
-                            is_close=True,
-                        )
+                        EX.order(pos["symbol"], close_side, half_qty, is_close=True)
 
                         pos["sl"] = pos["entry"]
                         pos["qty"] = half_qty
@@ -944,15 +932,8 @@ class Engine:
 
     def _close_position(self, pid: str, pos: Dict, price: float, reason: str):
         close_side = "sell" if pos["side"] == "long" else "buy"
-        pos_side = "Long" if pos["side"] == "long" else "Short"
 
-        EX.order(
-            pos["symbol"],
-            close_side,
-            pos["qty"],
-            pos_side=pos_side,
-            is_close=True,
-        )
+        EX.order(pos["symbol"], close_side, pos["qty"], is_close=True)
 
         pnl = (
             (price - pos["entry"]) * pos["qty"]
