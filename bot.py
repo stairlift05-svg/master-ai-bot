@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master-AI Trading Bot Pro v8.0.0 - Full Telegram Control & Exchange History Integration
+Master-AI Trading Bot Pro v9.0.0 - Quant Master Edition
 ویژگی‌ها:
-- دریافت تاریخچه کلی معاملات مستقیماً از صرافی Phemex (دکمه جدید تلگرام)
-- گزارش لحظه‌ای شروع، توقف، خروج پله‌ای و بسته‌شدن معاملات در تلگرام
-- داشبورد مدیریتی کامل در وب (HTML/CSS) و تلگرام
-- مدیریت هوشمند افت حساب و بازیابی پوزیشن‌های صرافی
+- سیستم اتاق فکر فوق‌حرفه‌ای با ۳ استراتژی اصلاح‌شده برای افزایش تعداد معاملات
+- داشبورد وب گرافیکی فرانت‌اند (Chart.js + کارت‌های زنده)
+- پنل کامل تلگرام همراه با گزارشات زنده و تنظیمات پویا
+- مدیریت هوشمند افت حساب و هماهنگ‌سازی خودکار پوزیشن‌های صرافی
 """
 
 import os
@@ -41,7 +41,7 @@ from flask import Flask
 # LOGGING
 # ============================================================================
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(message)s", stream=sys.stdout)
-log = logging.getLogger("Bot")
+log = logging.getLogger("MasterQuant")
 
 # ============================================================================
 # CONFIG
@@ -54,6 +54,10 @@ class Cfg:
         try: return float(os.getenv(k, str(d)).strip())
         except: return d
     @staticmethod
+    def i(k: str, d: int) -> int:
+        try: return int(os.getenv(k, str(d)).strip())
+        except: return d
+    @staticmethod
     def b(k: str, d: bool = False) -> bool:
         return os.getenv(k, "true" if d else "false").strip().lower() in ("1", "true", "yes", "on")
 
@@ -64,12 +68,13 @@ TG_CHAT    = Cfg.s("TELEGRAM_CHAT_ID")
 
 SYMBOLS = [
     "BTC/USDT:USDT","ETH/USDT:USDT","SOL/USDT:USDT","XRP/USDT:USDT",
-    "BNB/USDT:USDT","DOGE/USDT:USDT","ADA/USDT:USDT","AVAX/USDT:USDT"
+    "BNB/USDT:USDT","DOGE/USDT:USDT","ADA/USDT:USDT","AVAX/USDT:USDT",
+    "DOT/USDT:USDT","LINK/USDT:USDT"
 ]
 
 RISK_PCT   = Cfg.f("RISK_PER_TRADE", 1.5)
 MAX_DD     = Cfg.f("MAX_DRAWDOWN", 10.0)
-MAX_POS    = 3
+MAX_POS    = Cfg.i("MAX_POSITIONS", 5) # افزایش ظرفیت هم‌زمان برای معامله بیشتر
 DRY_RUN    = Cfg.b("DRY_RUN", True)
 TESTNET    = Cfg.b("PHEMEX_TESTNET", False)
 PORT       = 10000
@@ -94,6 +99,15 @@ class Indicators:
     def atr(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
         tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
         return tr.ewm(com=n-1, adjust=False).mean()
+
+    @staticmethod
+    def macd(close: pd.Series, fast: int = 12, slow: int = 26, sig: int = 9):
+        e_fast = close.ewm(span=fast, adjust=False).mean()
+        e_slow = close.ewm(span=slow, adjust=False).mean()
+        line   = e_fast - e_slow
+        signal = line.ewm(span=sig, adjust=False).mean()
+        hist   = line - signal
+        return line, signal, hist
 
     @staticmethod
     def adx(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
@@ -125,7 +139,7 @@ class Indicators:
 IND = Indicators()
 
 # ============================================================================
-# DATABASE & ANALYTICS
+# DATABASE & ADVANCED ANALYTICS
 # ============================================================================
 class DB:
     _SCHEMA = [
@@ -206,6 +220,12 @@ class DB:
             (ep, pnl, pct, reason, tid)
         )
 
+    def get_recent_closed(self, limit: int = 10) -> List[Dict]:
+        rows = self.run("SELECT symbol, side, entry_price, exit_price, pnl, pnl_pct, exit_reason, closed_at FROM trades WHERE status='closed' ORDER BY closed_at DESC LIMIT ?", (limit,))
+        if not rows: return []
+        k = ["symbol", "side", "entry", "exit", "pnl", "pct", "reason", "time"]
+        return [dict(zip(k, r)) for r in rows]
+
     def get_advanced_analytics(self) -> Dict:
         rows = self.run("SELECT pnl, pnl_pct FROM trades WHERE status='closed'")
         if not rows:
@@ -243,7 +263,7 @@ class DB:
 database = DB()
 
 # ============================================================================
-# EXCHANGE (با قابلیت دریافت تاریخچه معاملات از صرافی)
+# EXCHANGE
 # ============================================================================
 class Exchange:
     def __init__(self):
@@ -294,13 +314,12 @@ class Exchange:
         except Exception: return []
 
     def fetch_exchange_trade_history(self) -> List[Dict]:
-        """دریافت گزارش کامل تاریخچه معاملات مستقیماً از صرافی Phemex"""
         if not self._ex or DRY_RUN: return []
         all_trades = []
         try:
-            for sym in SYMBOLS:
+            for sym in SYMBOLS[:5]:
                 try:
-                    trades = self._ex.fetch_my_trades(sym, limit=10)
+                    trades = self._ex.fetch_my_trades(sym, limit=5)
                     for t in trades:
                         all_trades.append({
                             "symbol": t.get("symbol"),
@@ -310,8 +329,7 @@ class Exchange:
                             "cost": t.get("cost"),
                             "time": datetime.fromtimestamp(t.get("timestamp", 0)/1000).strftime('%m-%d %H:%M')
                         })
-                except Exception:
-                    continue
+                except Exception: continue
             return all_trades
         except Exception as e:
             log.error("Fetch Exchange Trades Error: %s", e)
@@ -339,6 +357,117 @@ class Exchange:
 EX = Exchange()
 
 # ============================================================================
+# ADVANCED VIRTUAL THINK-TANK (اتاق فکر بازطراحی شده - افزایش تعداد معاملات)
+# ============================================================================
+@dataclass
+class ThinkTankOutput:
+    action: str = "neutral"
+    strategy: str = ""
+    conf: int = 0
+    reason: str = ""
+    sl: float = 0.0
+    tp1: float = 0.0
+    entry: float = 0.0
+
+class VirtualThinkTank:
+    def analyze(self, sym: str, dfs: Dict[str, pd.DataFrame]) -> ThinkTankOutput:
+        if not dfs or any(len(dfs[tf]) < 30 for tf in ["1m", "3m", "5m", "15m"]):
+            return ThinkTankOutput()
+
+        df1m, df3m, df5m, df15m = dfs["1m"], dfs["3m"], dfs["5m"], dfs["15m"]
+        
+        adx15 = IND.safe(IND.adx(df15m["high"], df15m["low"], df15m["close"]))
+        ema20_15 = IND.safe(IND.ema(df15m["close"], 20))
+        ema50_15 = IND.safe(IND.ema(df15m["close"], 50))
+        price15  = IND.safe(df15m["close"])
+
+        # --------------------------------------------------------------------
+        # استراتژی ۱: Trend Momentum Scalper (تعدیل شروط برای شکار بیشتر روندهای ۵m)
+        # --------------------------------------------------------------------
+        if adx15 > 20: # حد آستانه ADX انعطاف‌پذیرتر شد
+            trend = "long" if price15 > ema20_15 and ema20_15 > ema50_15 else ("short" if price15 < ema20_15 and ema20_15 < ema50_15 else None)
+            
+            if trend:
+                rsi3 = IND.safe(IND.rsi(df3m["close"], 14))
+                m_line, m_sig, m_hist = IND.macd(df3m["close"])
+                macd_h = IND.safe(m_hist)
+                
+                # شرط ورود: اصلاح RSI به محدوده خنثی + کراس مکدی
+                pullback_ok = (rsi3 < 48 and macd_h > 0) if trend == "long" else (rsi3 > 52 and macd_h < 0)
+                
+                if pullback_ok:
+                    c1 = IND.safe(df1m["close"])
+                    ema9_1 = IND.safe(IND.ema(df1m["close"], 9))
+                    trigger = (c1 > ema9_1) if trend == "long" else (c1 < ema9_1)
+                    
+                    if trigger:
+                        atr3 = IND.safe(IND.atr(df3m["high"], df3m["low"], df3m["close"])) or (c1 * 0.008)
+                        entry = c1
+                        sl = entry - (1.2 * atr3) if trend == "long" else entry + (1.2 * atr3)
+                        tp1 = entry + (1.5 * atr3) if trend == "long" else entry - (1.5 * atr3)
+                        return ThinkTankOutput(
+                            action="buy" if trend == "long" else "sell",
+                            strategy="Strat1_MomentumScalp", conf=85,
+                            reason=f"ADX15={adx15:.1f} Trend={trend} MACD/RSI Sync", sl=sl, tp1=tp1, entry=entry
+                        )
+
+        # --------------------------------------------------------------------
+        # استراتژی ۲: Mean Reversion Scalper (نوسان‌گیری فعال در بازار رنج)
+        # --------------------------------------------------------------------
+        if adx15 <= 20:
+            bb_lo5, _, bb_hi5 = IND.bbands(df5m["close"], 20, 2.0)
+            c5 = IND.safe(df5m["close"])
+            rsi5 = IND.safe(IND.rsi(df5m["close"], 14))
+
+            reach_lo = c5 <= IND.safe(bb_lo5) or rsi5 < 35
+            reach_hi = c5 >= IND.safe(bb_hi5) or rsi5 > 65
+
+            if reach_lo or reach_hi:
+                c1 = IND.safe(df1m["close"])
+                rsi1 = IND.safe(IND.rsi(df1m["close"], 7))
+                
+                if reach_lo and rsi1 > 30: # بازگشت صعودی از اشباع فروش
+                    atr1 = IND.safe(IND.atr(df1m["high"], df1m["low"], df1m["close"])) or (c1 * 0.006)
+                    entry = c1
+                    sl = entry - (1.3 * atr1)
+                    tp1 = entry + (1.6 * atr1)
+                    return ThinkTankOutput(
+                        action="buy", strategy="Strat2_MeanReversion", conf=80,
+                        reason=f"Range Reversion BB/RSI 5m", sl=sl, tp1=tp1, entry=entry
+                    )
+                elif reach_hi and rsi1 < 70: # بازگشت نزولی از اشباع خرید
+                    atr1 = IND.safe(IND.atr(df1m["high"], df1m["low"], df1m["close"])) or (c1 * 0.006)
+                    entry = c1
+                    sl = entry + (1.3 * atr1)
+                    tp1 = entry - (1.6 * atr1)
+                    return ThinkTankOutput(
+                        action="sell", strategy="Strat2_MeanReversion", conf=80,
+                        reason=f"Range Reversion BB/RSI 5m", sl=sl, tp1=tp1, entry=entry
+                    )
+
+        # --------------------------------------------------------------------
+        # استراتژی ۳: Micro-Breakout & Vol Spike (شکار شکست‌های سریع)
+        # --------------------------------------------------------------------
+        v5_curr = IND.safe(df5m["vol"])
+        v5_ma = IND.safe(df5m["vol"].rolling(20).mean())
+        if v5_curr > 1.8 * v5_ma: # جهش ناگهانی حجم معامله
+            c1 = IND.safe(df1m["close"])
+            ema20_1 = IND.safe(IND.ema(df1m["close"], 20))
+            if c1 > ema20_1:
+                atr1 = IND.safe(IND.atr(df1m["high"], df1m["low"], df1m["close"])) or (c1 * 0.005)
+                entry = c1
+                sl = entry - (1.2 * atr1)
+                tp1 = entry + (1.8 * atr1)
+                return ThinkTankOutput(
+                    action="buy", strategy="Strat3_VolBreakout", conf=88,
+                    reason=f"Volume Spike {v5_curr/v5_ma:.1f}x", sl=sl, tp1=tp1, entry=entry
+                )
+
+        return ThinkTankOutput()
+
+THINK_TANK = VirtualThinkTank()
+
+# ============================================================================
 # INTERACTIVE TELEGRAM BOT & KEYBOARD
 # ============================================================================
 class TelegramBotHandler:
@@ -359,11 +488,10 @@ class TelegramBotHandler:
             log.warning("Telegram Post Error: %s", e)
 
     def _get_menu_keyboard(self):
-        """کیبورد سفارشی دکمه‌های تلگرام"""
         return {
             "keyboard": [
                 [{"text": "📊 داشبورد تحلیلی"}, {"text": "💼 پوزیشن‌های باز"}],
-                [{"text": "📜 گزارش کلی صرافی"}, {"text": "🔴 توقف ربات"}],
+                [{"text": "📜 گزارش صرافی"}, {"text": "🔴 توقف ربات"}],
                 [{"text": "🟢 شروع ربات"}]
             ],
             "resize_keyboard": True,
@@ -381,8 +509,7 @@ class TelegramBotHandler:
                         if "message" in update and "text" in update["message"]:
                             text = update["message"]["text"].strip()
                             self._handle_command(text)
-            except Exception:
-                pass
+            except Exception: pass
             time.sleep(2)
 
     def _handle_command(self, cmd: str):
@@ -390,11 +517,11 @@ class TelegramBotHandler:
 
         if cmd in ("/start", "/start_bot", "🟢 شروع ربات"):
             self.engine.is_active = True
-            self.send("🟢 <b>دستور اجرا دریافت شد!</b>\nاسکن بازار و معامله‌گری جدید فعال گردید.", reply_markup=kb)
+            self.send("🟢 <b>موتور معامله‌گری فعال شد!</b>\nاسکن زنده جفت‌ارزها آغاز گردید.", reply_markup=kb)
 
         elif cmd in ("/stop", "/stop_bot", "🔴 توقف ربات"):
             self.engine.is_active = False
-            self.send("🔴 <b>دستور توقف دریافت شد!</b>\nورود به معاملات جدید معلق شد. پوزیشن‌های باز تا بسته‌شدن مدیریت می‌شوند.", reply_markup=kb)
+            self.send("🔴 <b>موتور معامله‌گری متوقف شد!</b>\nورود جدید غیرفعال شد. پوزیشن‌های باز مدیریت می‌شوند.", reply_markup=kb)
 
         elif cmd in ("/dashboard", "📊 داشبورد تحلیلی"):
             self.send_dashboard()
@@ -402,44 +529,36 @@ class TelegramBotHandler:
         elif cmd in ("/positions", "💼 پوزیشن‌های باز"):
             self.send_positions()
 
-        elif cmd in ("/exchange_history", "📜 گزارش کلی صرافی"):
+        elif cmd in ("/exchange_history", "📜 گزارش صرافی"):
             self.send_exchange_history()
 
     def send_dashboard(self):
         stats = database.get_advanced_analytics()
         bal = EX.balance()
-        status_str = "🟢 فعال (Scanning)" if self.engine.is_active else "🔴 متوقف شده"
-        if self.engine.is_dd_halted:
-            status_str = "⚠️ قفل افت حساب (Drawdown Guard)"
+        status_str = "🟢 فعال" if self.engine.is_active else "🔴 متوقف"
+        if self.engine.is_dd_halted: status_str = "⚠️ قفل افت حساب"
 
         msg = (
-            f"📊 <b>داشبورد ارزیابی عملکرد ربات</b>\n"
+            f"📊 <b>داشبورد ارزیابی عملکرد ربات (v9.0 Pro)</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚙️ <b>وضعیت اجرا:</b> {status_str}\n"
-            f"💰 <b>موجودی کیف‌پول:</b> {bal:,.2f} USDT\n"
+            f"⚙️ <b>وضعیت:</b> {status_str}\n"
+            f"💰 <b>موجودی:</b> {bal:,.2f} USDT\n"
             f"📈 <b>سود/زیان کل:</b> {stats['total_pnl']:+,.2f} USDT\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 <b>تعداد کل معاملات:</b> {stats['total_trades']}\n"
+            f"🎯 <b>کل معاملات:</b> {stats['total_trades']}\n"
             f"✅ <b>برد:</b> {stats['wins_count']} | ❌ <b>باخت:</b> {stats['losses_count']}\n"
-            f"🔥 <b>وین‌ریت (Win Rate):</b> {stats['win_rate']}%\n"
+            f"🔥 <b>وین‌ریت:</b> {stats['win_rate']}%\n"
             f"⚡ <b>پرافیت فاکتور:</b> {stats['profit_factor']}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🟢 <b>بهترین معامله:</b> +{stats['best_trade']:.2f} $\n"
-            f"🔴 <b>بدترین معامله:</b> {stats['worst_trade']:.2f} $\n"
-            f"📊 <b>میانگین سود:</b> +{stats['avg_win']:.2f} $\n"
-            f"📊 <b>میانگین زیان:</b> -{stats['avg_loss']:.2f} $\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🛡️ <b>افت حساب (Drawdown):</b> {self.engine.current_dd:.1f}% / {MAX_DD}%\n"
+            f"🛡️ <b>افت حساب:</b> {self.engine.current_dd:.1f}% / {MAX_DD}%\n"
             f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
         self.send(msg, reply_markup=self._get_menu_keyboard())
 
     def send_positions(self):
-        with self.engine._lock:
-            pos_list = list(self.engine._pos.values())
-
+        with self.engine._lock: pos_list = list(self.engine._pos.values())
         if not pos_list:
-            self.send("💼 <b>هیچ پوزیشن بازی در حال حاضر وجود ندارد.</b>", reply_markup=self._get_menu_keyboard())
+            self.send("💼 <b>هیچ پوزیشن بازی وجود ندارد.</b>", reply_markup=self._get_menu_keyboard())
             return
 
         msg = f"💼 <b>پوزیشن‌های فعال ({len(pos_list)}/{MAX_POS}):</b>\n━━━━━━━━━━━━━━━━━━━━\n"
@@ -453,102 +572,17 @@ class TelegramBotHandler:
         self.send(msg, reply_markup=self._get_menu_keyboard())
 
     def send_exchange_history(self):
-        """ارسال تاریخچه معاملات واقعی دریافت‌شده از صرافی Phemex"""
-        self.send("⏳ در حال استعلام تاریخچه معاملات از صرافی Phemex...")
+        self.send("⏳ استعلام تاریخچه از صرافی Phemex...")
         trades = EX.fetch_exchange_trade_history()
-        
         if not trades:
-            self.send("📜 <b>هیچ معامله‌ای در تاریخچه صرافی یافت نشد (یا در حالت Dry-Run هستید).</b>", reply_markup=self._get_menu_keyboard())
+            self.send("📜 <b>هیچ معامله‌ای در تاریخچه یافت نشد (یا در حالت Dry-Run هستید).</b>", reply_markup=self._get_menu_keyboard())
             return
 
-        msg = f"📜 <b>گزارش اخیر معاملات صرافی Phemex:</b>\n━━━━━━━━━━━━━━━━━━━━\n"
-        for t in trades[:10]: # نمایش ۱۰ معامله اخیر
+        msg = f"📜 <b>گزارش اخیر صرافی Phemex:</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+        for t in trades[:8]:
             side_emoji = "🟢" if t["side"].lower() == "buy" else "🔴"
-            msg += (
-                f"{side_emoji} <b>{t['symbol']}</b> | {t['side'].upper()}\n"
-                f"قیمت: {t['price']} | حجم: {t['amount']}\n"
-                f"ارزش کل: {t['cost']:.2f} USDT | زمان: {t['time']}\n"
-                f"────────────────────\n"
-            )
+            msg += f"{side_emoji} <b>{t['symbol']}</b> | {t['side'].upper()}\nقیمت: {t['price']} | حجم: {t['amount']}\nزمان: {t['time']}\n────────────────────\n"
         self.send(msg, reply_markup=self._get_menu_keyboard())
-
-# ============================================================================
-# VIRTUAL THINK-TANK ENGINE
-# ============================================================================
-@dataclass
-class ThinkTankOutput:
-    action: str = "neutral"
-    strategy: str = ""
-    conf: int = 0
-    reason: str = ""
-    sl: float = 0.0
-    tp1: float = 0.0
-    entry: float = 0.0
-
-class VirtualThinkTank:
-    def analyze(self, sym: str, dfs: Dict[str, pd.DataFrame]) -> ThinkTankOutput:
-        if not dfs or any(len(dfs[tf]) < 30 for tf in ["1m", "3m", "5m", "15m"]):
-            return ThinkTankOutput()
-
-        df1m, df3m, df5m, df15m = dfs["1m"], dfs["3m"], dfs["5m"], dfs["15m"]
-        adx15 = IND.safe(IND.adx(df15m["high"], df15m["low"], df15m["close"]))
-        ema200_15 = IND.safe(IND.ema(df15m["close"], 200))
-        ema50_15  = IND.safe(IND.ema(df15m["close"], 50))
-        price15   = IND.safe(df15m["close"])
-
-        # === استراتژی اول: شکارچی روند ===
-        if adx15 > 25:
-            trend = "long" if price15 > ema200_15 and ema50_15 > ema200_15 else ("short" if price15 < ema200_15 and ema50_15 < ema200_15 else None)
-            if trend:
-                rsi3 = IND.safe(IND.rsi(df3m["close"], 7))
-                rsi5 = IND.safe(IND.rsi(df5m["close"], 7))
-                pullback = (rsi3 < 30 or rsi5 < 30) if trend == "long" else (rsi3 > 70 or rsi5 > 70)
-                if pullback:
-                    ema9_1m = IND.ema(df1m["close"], 9)
-                    c_prev, c_curr = df1m["close"].iloc[-2], df1m["close"].iloc[-1]
-                    e_prev, e_curr = ema9_1m.iloc[-2], ema9_1m.iloc[-1]
-                    trigger = (c_prev <= e_prev and c_curr > e_curr) if trend == "long" else (c_prev >= e_prev and c_curr < e_curr)
-                    if trigger:
-                        atr3 = IND.safe(IND.atr(df3m["high"], df3m["low"], df3m["close"])) or (c_curr * 0.01)
-                        entry = c_curr
-                        sl = entry - (1.5 * atr3) if trend == "long" else entry + (1.5 * atr3)
-                        tp1 = entry + abs(entry - sl) if trend == "long" else entry - abs(entry - sl)
-                        return ThinkTankOutput(
-                            action="buy" if trend == "long" else "sell",
-                            strategy="Strat1_TrendPullback", conf=85,
-                            reason=f"ADX15={adx15:.1f} Trend={trend}", sl=sl, tp1=tp1, entry=entry
-                        )
-
-        # === استراتژی دوم: رفت و برگشت نقدینگی ===
-        if adx15 < 25:
-            bb_lo15, _, bb_hi15 = IND.bbands(df15m["close"], 20, 2.0)
-            h5, l5 = IND.safe(df5m["high"]), IND.safe(df5m["low"])
-
-            fake_long  = l5 < IND.safe(bb_lo15)
-            fake_short = h5 > IND.safe(bb_hi15)
-
-            if fake_long or fake_short:
-                rsi3_s = IND.rsi(df3m["close"], 14)
-                div_long  = (IND.safe(df3m["close"], -1) < IND.safe(df3m["close"], -3)) and (IND.safe(rsi3_s, -1) > IND.safe(rsi3_s, -3)) if fake_long else False
-                div_short = (IND.safe(df3m["close"], -1) > IND.safe(df3m["close"], -3)) and (IND.safe(rsi3_s, -1) < IND.safe(rsi3_s, -3)) if fake_short else False
-
-                if div_long or div_short:
-                    bb_lo1, _, bb_hi1 = IND.bbands(df1m["close"], 20, 2.0)
-                    c1 = IND.safe(df1m["close"])
-                    if (div_long and c1 > IND.safe(bb_lo1)) or (div_short and c1 < IND.safe(bb_hi1)):
-                        atr5 = IND.safe(IND.atr(df5m["high"], df5m["low"], df5m["close"])) or (c1 * 0.01)
-                        entry = c1
-                        sl = entry - (1.5 * atr5) if div_long else entry + (1.5 * atr5)
-                        tp1 = entry + (1.5 * atr5) if div_long else entry - (1.5 * atr5)
-                        return ThinkTankOutput(
-                            action="buy" if div_long else "sell",
-                            strategy="Strat2_LiquiditySweep", conf=80,
-                            reason=f"ADX15={adx15:.1f} Range Sweep", sl=sl, tp1=tp1, entry=entry
-                        )
-
-        return ThinkTankOutput()
-
-THINK_TANK = VirtualThinkTank()
 
 # ============================================================================
 # ENGINE
@@ -567,17 +601,16 @@ class Engine:
     def _boot(self):
         bal = EX.balance()
         self.peak_balance = bal
-        for t in database.open_trades():
-            self._pos[t["id"]] = t
+        for t in database.open_trades(): self._pos[t["id"]] = t
 
         real_positions = EX.fetch_real_open_positions()
         for rp in real_positions:
             if not any(p["symbol"] == rp["symbol"] for p in self._pos.values()):
                 pid = f"sync_{uuid.uuid4().hex[:6]}"
                 entry = rp["entry"]
-                atr = entry * 0.01
-                sl = entry - (1.5 * atr) if rp["side"] == "long" else entry + (1.5 * atr)
-                tp = entry + (1.5 * atr) if rp["side"] == "long" else entry - (1.5 * atr)
+                atr = entry * 0.008
+                sl = entry - (1.3 * atr) if rp["side"] == "long" else entry + (1.3 * atr)
+                tp = entry + (1.6 * atr) if rp["side"] == "long" else entry - (1.6 * atr)
 
                 pos = {
                     "id": pid, "symbol": rp["symbol"], "side": rp["side"],
@@ -593,36 +626,30 @@ class Engine:
 
         if self.peak_balance > 0:
             self.current_dd = (self.peak_balance - current_bal) / self.peak_balance * 100.0
-            
             if self.current_dd >= MAX_DD and not self.is_dd_halted:
                 self.is_dd_halted = True
                 if self.tg_handler:
-                    self.tg_handler.send(
-                        f"🚨 <b>هشدار افت حساب (Drawdown Guard)!</b>\n"
-                        f"افت حساب به {self.current_dd:.1f}% رسید.\n"
-                        f"ورود به معاملات جدید معلق شد؛ اما پوزیشن‌های باز تا بسته‌شدن مدیریت می‌شوند."
-                    )
+                    self.tg_handler.send(f"🚨 <b>هشدار افت حساب (Drawdown Guard)!</b>\nافت به {self.current_dd:.1f}% رسید. ورود جدید معلق شد.")
             elif self.current_dd < (MAX_DD * 0.7) and self.is_dd_halted:
                 self.is_dd_halted = False
                 if self.tg_handler:
-                    self.tg_handler.send("✅ <b>افت حساب بهبود یافت. ورود به معاملات جدید مجاز است.</b>")
+                    self.tg_handler.send("✅ <b>افت حساب بهبود یافت. معامله‌گری مجاز است.</b>")
 
     def loop(self):
-        log.info("▶️ موتور اصلی ربات اجرا شد.")
+        log.info("▶️ موتور اصلی اجرا شد.")
         while True:
             try:
                 bal = EX.balance()
                 self.check_drawdown(bal)
-
                 self._manage_positions()
 
                 if self.is_active and not self.is_dd_halted and len(self._pos) < MAX_POS:
                     self._scan(bal)
 
-                time.sleep(10)
+                time.sleep(8)
             except Exception as e:
                 log.error("Engine Loop Error: %s", e)
-                time.sleep(10)
+                time.sleep(8)
 
     def _scan(self, bal: float):
         for sym in SYMBOLS:
@@ -640,7 +667,7 @@ class Engine:
                     risk_amt = bal * (RISK_PCT / 100.0)
                     sl_dist = abs(output.entry - output.sl) or (output.entry * 0.005)
                     qty = risk_amt / sl_dist
-                    if (qty * output.entry) > (bal * 0.20): qty = (bal * 0.20) / output.entry
+                    if (qty * output.entry) > (bal * 0.15): qty = (bal * 0.15) / output.entry
 
                     if qty > 0:
                         self._open_position(sym, output, round(qty, 5))
@@ -686,7 +713,7 @@ class Engine:
                     self._close_position(pid, pos, price, "Stop Loss")
                     continue
 
-                # خروج ۵۰٪ (TP1) و Breakeven
+                # خروج ۵۰٪ (TP1)
                 if not pos.get("is_partial", 0):
                     tp1_hit = (side == "long" and price >= pos["tp"]) or (side == "short" and price <= pos["tp"])
                     if tp1_hit:
@@ -698,13 +725,13 @@ class Engine:
                         pos["is_partial"] = 1
                         database.update_partial(pid, half_qty, pos["entry"])
                         if self.tg_handler:
-                            self.tg_handler.send(f"🎯 <b>خروج ۵۰٪ حجم (TP1)</b>\nنماد: {pos['symbol']}\nاستاپ به نقطه ورود منتقل شد.")
+                            self.tg_handler.send(f"🎯 <b>خروج ۵۰٪ (TP1)</b>\nنماد: {pos['symbol']}\nاستاپ به نقطه ورود منتقل شد.")
 
                 # Trailing Stop EMA20 (3m)
                 if pos.get("is_partial", 0):
                     ema20_3m = IND.safe(IND.ema(dfs["3m"]["close"], 20))
                     if (side == "long" and price < ema20_3m) or (side == "short" and price > ema20_3m):
-                        self._close_position(pid, pos, price, "Trailing Stop (EMA20)")
+                        self._close_position(pid, pos, price, "Trailing Stop")
 
             except Exception as e:
                 log.error("Manage Error [%s]: %s", pos["symbol"], e)
@@ -721,47 +748,96 @@ class Engine:
             self.tg_handler.send(f"🏁 <b>بستن پوزیشن ({reason})</b>\nنماد: {pos['symbol']}\nسود/زیان: {pnl:+.2f}$ ({pct:+.2f}%)")
 
 # ============================================================================
-# FLASK WEB DASHBOARD SERVER
+# FLASK WEB DASHBOARD SERVER (داشبورد فوق‌حرفه‌ای مرورگر)
 # ============================================================================
 app = Flask(__name__)
 engine = None
 
 @app.route('/')
 def home():
-    """صفحه اول داشبورد وب گرافیکی"""
     stats = database.get_advanced_analytics()
     bal = EX.balance()
-    pos_count = len(engine._pos) if engine else 0
-    status_str = "🟢 فعال" if (engine and engine.is_active) else "🔴 متوقف"
+    pos_list = list(engine._pos.values()) if engine else []
+    recent_closed = database.get_recent_closed(5)
+    status_str = "🟢 فعال (Scanning)" if (engine and engine.is_active) else "🔴 متوقف"
     
+    # ساخت ردیف‌های جدول پوزیشن‌های باز
+    pos_rows = ""
+    for p in pos_list:
+        pos_rows += f"<tr><td><b>{p['symbol']}</b></td><td><span class='badge {p['side']}'>{p['side'].upper()}</span></td><td>{p['entry']:.4f}</td><td>{p['sl']:.4f}</td><td>{p['qty']}</td><td>{p['strategy']}</td></tr>"
+    if not pos_rows:
+        pos_rows = "<tr><td colspan='6' style='text-align:center;color:#8b949e;'>هیچ پوزیشن بازی وجود ندارد</td></tr>"
+
+    # ساخت ردیف‌های جدول تاریخچه
+    history_rows = ""
+    for h in recent_closed:
+        pnl_class = "green" if h["pnl"] > 0 else "red"
+        history_rows += f"<tr><td><b>{h['symbol']}</b></td><td>{h['side'].upper()}</td><td>{h['entry']:.4f}</td><td>{h['exit']:.4f}</td><td class='{pnl_class}'>{h['pnl']:+.2f} $ ({h['pct']:+.2f}%)</td><td>{h['reason']}</td></tr>"
+    if not history_rows:
+        history_rows = "<tr><td colspan='6' style='text-align:center;color:#8b949e;'>تاریخچه‌ای ثبت نشده است</td></tr>"
+
     return f"""
     <!DOCTYPE html>
     <html dir="rtl" lang="fa">
     <head>
         <meta charset="UTF-8">
-        <title>داشبورد مدیریتی Master-AI Bot</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Quant Dashboard | Master-AI Bot</title>
         <style>
-            body {{ font-family: Tahoma, sans-serif; background-color: #0d1117; color: #c9d1d9; margin: 0; padding: 20px; }}
-            .container {{ max-width: 900px; margin: 0 auto; text-align: center; }}
-            .card-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 20px; }}
-            .card {{ background: #161b22; padding: 15px; border-radius: 8px; border: 1px solid #30363d; }}
-            .card h3 {{ margin: 0; font-size: 14px; color: #8b949e; }}
-            .card p {{ margin: 10px 0 0 0; font-size: 20px; font-weight: bold; color: #58a6ff; }}
-            .status-on {{ color: #2ea043 !important; }}
+            body {{ font-family: 'Segoe UI', Tahoma, sans-serif; background-color: #0b0e14; color: #e1e7ec; margin: 0; padding: 20px; }}
+            .container {{ max-width: 1100px; margin: 0 auto; }}
+            .header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1f2937; padding-bottom: 15px; }}
+            .status-badge {{ padding: 6px 12px; border-radius: 20px; background: #16222f; border: 1px solid #238636; color: #3fb950; font-size: 14px; }}
+            .card-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin: 20px 0; }}
+            .card {{ background: #121824; padding: 18px; border-radius: 10px; border: 1px solid #1f2937; text-align: center; }}
+            .card h3 {{ margin: 0; font-size: 13px; color: #8b949e; text-transform: uppercase; }}
+            .card p {{ margin: 8px 0 0 0; font-size: 22px; font-weight: bold; color: #58a6ff; }}
+            .section {{ background: #121824; border-radius: 10px; border: 1px solid #1f2937; padding: 20px; margin-bottom: 20px; }}
+            .section h2 {{ margin-top: 0; font-size: 16px; color: #f0f6fc; border-bottom: 1px solid #1f2937; padding-bottom: 10px; }}
+            table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }}
+            th, td {{ padding: 10px; text-align: right; border-bottom: 1px solid #1f2937; }}
+            th {{ color: #8b949e; font-weight: normal; }}
+            .badge {{ padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }}
+            .badge.long {{ background: #13382c; color: #3fb950; }}
+            .badge.short {{ background: #441c24; color: #f85149; }}
+            .green {{ color: #3fb950; font-weight: bold; }}
+            .red {{ color: #f85149; font-weight: bold; }}
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🤖 Master-AI Bot v8.0.0</h1>
-            <p>وضعیت اجرای ربات: <span class="status-on">{status_str}</span> | پوزیشن‌های فعال: <b>{pos_count}/3</b></p>
+            <div class="header">
+                <h1>🤖 Master-AI Quant Bot <small style="font-size:12px;color:#8b949e;">v9.0 Pro</small></h1>
+                <div class="status-badge">{status_str}</div>
+            </div>
             
             <div class="card-grid">
-                <div class="card"><h3>موجودی حساب</h3><p>${bal:,.2f}</p></div>
-                <div class="card"><h3>سود/زیان کل</h3><p>{stats['total_pnl']:+,.2f} $</p></div>
-                <div class="card"><h3>وین ریت (Win Rate)</h3><p>{stats['win_rate']}%</p></div>
-                <div class="card"><h3>تعداد کل معاملات</h3><p>{stats['total_trades']}</p></div>
+                <div class="card"><h3>موجودی کیف‌پول</h3><p>${bal:,.2f}</p></div>
+                <div class="card"><h3>سود/زیان کل</h3><p class="{'green' if stats['total_pnl']>=0 else 'red'}">{stats['total_pnl']:+,.2f} $</p></div>
+                <div class="card"><h3>وین‌ریت (Win Rate)</h3><p>{stats['win_rate']}%</p></div>
+                <div class="card"><h3>کل معاملات</h3><p>{stats['total_trades']}</p></div>
                 <div class="card"><h3>پرافیت فاکتور</h3><p>{stats['profit_factor']}</p></div>
-                <div class="card"><h3>افت حساب (Drawdown)</h3><p>{engine.current_dd if engine else 0:.1f}%</p></div>
+                <div class="card"><h3>افت حساب (DD)</h3><p style="color:#e3b341;">{engine.current_dd if engine else 0:.1f}%</p></div>
+            </div>
+
+            <div class="section">
+                <h2>💼 پوزیشن‌های فعال در حال مدیریت ({len(pos_list)}/{MAX_POS})</h2>
+                <table>
+                    <thead>
+                        <tr><th>نماد</th><th>جهت</th><th>قیمت ورود</th><th>حد ضرر</th><th>حجم</th><th>استراتژی</th></tr>
+                    </thead>
+                    <tbody>{pos_rows}</tbody>
+                </table>
+            </div>
+
+            <div class="section">
+                <h2>📜 تاریخچه ۵ معامله اخیر ربات</h2>
+                <table>
+                    <thead>
+                        <tr><th>نماد</th><th>جهت</th><th>ورود</th><th>خروج</th><th>سود/زیان</th><th>دلیل خروج</th></tr>
+                    </thead>
+                    <tbody>{history_rows}</tbody>
+                </table>
             </div>
         </div>
     </body>
