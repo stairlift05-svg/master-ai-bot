@@ -35,10 +35,12 @@ logging.basicConfig(
 )
 log = logging.getLogger("MasterQuant")
 
+
 # ============================================================================
 # CONFIG
 # ============================================================================
 class Cfg:
+
     @staticmethod
     def s(k: str, d: str = "") -> str:
         return os.getenv(k, d).strip()
@@ -59,36 +61,56 @@ class Cfg:
 
     @staticmethod
     def b(k: str, d: bool = False) -> bool:
-        return os.getenv(k, "true" if d else "false").strip().lower() in ("1", "true", "yes", "on")
+        return os.getenv(k, "true" if d else "false").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+
 
 API_KEY = Cfg.s("PHEMEX_API_KEY", "401799eb-2c23-4616-9d05-216f2bf379e9")
-API_SECRET = Cfg.s("PHEMEX_API_SECRET", "L7eUG47TNV4FmUvGE1iAD4WTv86JIQts4Lbt7kU6AEM5MTgwNmY3OC1iNDQ4LTQxMGQtYjY4Mi1mN2FiMmYzZDZhZmE")
+API_SECRET = Cfg.s(
+    "PHEMEX_API_SECRET",
+    "L7eUG47TNV4FmUvGE1iAD4WTv86JIQts4Lbt7kU6AEM5MTgwNmY3OC1iNDQ4LTQxMGQtYjY4Mi1mN2FiMmYzZDZhZmE",
+)
 TG_TOKEN = Cfg.s("TELEGRAM_BOT_TOKEN")
 TG_CHAT = Cfg.s("TELEGRAM_CHAT_ID")
 
 SYMBOLS = [
-    "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT",
-    "BNB/USDT:USDT", "DOGE/USDT:USDT", "ADA/USDT:USDT", "AVAX/USDT:USDT",
-    "DOT/USDT:USDT", "LINK/USDT:USDT"
+    "BTC/USDT:USDT",
+    "ETH/USDT:USDT",
+    "SOL/USDT:USDT",
+    "XRP/USDT:USDT",
+    "BNB/USDT:USDT",
+    "DOGE/USDT:USDT",
+    "ADA/USDT:USDT",
+    "AVAX/USDT:USDT",
+    "DOT/USDT:USDT",
+    "LINK/USDT:USDT",
 ]
 
 RISK_PCT = Cfg.f("RISK_PER_TRADE", 1.5)
 MAX_DD = Cfg.f("MAX_DRAWDOWN", 10.0)
 MAX_POS = Cfg.i("MAX_POSITIONS", 5)
-DRY_RUN = Cfg.b("DRY_RUN", False)  # معامله واقعی روی تست‌نت
+DRY_RUN = Cfg.b("DRY_RUN", False)  # اجرا روی حساب واقعی تست‌نت
 TESTNET = Cfg.b("PHEMEX_TESTNET", True)
 PORT = Cfg.i("PORT", 10000)
+
 
 # ============================================================================
 # INDICATORS
 # ============================================================================
 class Indicators:
+
     @staticmethod
     def rsi(close: pd.Series, n: int = 14) -> pd.Series:
         delta = close.diff()
         up = delta.clip(lower=0)
         down = (-delta).clip(lower=0)
-        rs = up.ewm(com=n - 1, adjust=False).mean() / (down.ewm(com=n - 1, adjust=False).mean() + 1e-10)
+        rs = up.ewm(com=n - 1, adjust=False).mean() / (
+            down.ewm(com=n - 1, adjust=False).mean() + 1e-10
+        )
         return 100 - (100 / (1 + rs))
 
     @staticmethod
@@ -96,8 +118,17 @@ class Indicators:
         return close.ewm(span=n, adjust=False).mean()
 
     @staticmethod
-    def atr(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
-        tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
+    def atr(
+        high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14
+    ) -> pd.Series:
+        tr = pd.concat(
+            [
+                high - low,
+                (high - close.shift()).abs(),
+                (low - close.shift()).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
         return tr.ewm(com=n - 1, adjust=False).mean()
 
     @staticmethod
@@ -110,15 +141,30 @@ class Indicators:
         return line, signal, hist
 
     @staticmethod
-    def adx(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
+    def adx(
+        high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14
+    ) -> pd.Series:
         up = high.diff()
         down = -low.diff()
         plus_dm = np.where((up > down) & (up > 0), up, 0.0)
         minus_dm = np.where((down > up) & (down > 0), down, 0.0)
-        tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
+        tr = pd.concat(
+            [
+                high - low,
+                (high - close.shift()).abs(),
+                (low - close.shift()).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
         atr_val = tr.ewm(com=n - 1, adjust=False).mean()
-        plus_di = 100 * (pd.Series(plus_dm).ewm(com=n - 1, adjust=False).mean() / (atr_val + 1e-10))
-        minus_di = 100 * (pd.Series(minus_dm).ewm(com=n - 1, adjust=False).mean() / (atr_val + 1e-10))
+        plus_di = 100 * (
+            pd.Series(plus_dm).ewm(com=n - 1, adjust=False).mean()
+            / (atr_val + 1e-10)
+        )
+        minus_di = 100 * (
+            pd.Series(minus_dm).ewm(com=n - 1, adjust=False).mean()
+            / (atr_val + 1e-10)
+        )
         dx = 100 * (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10))
         return dx.ewm(com=n - 1, adjust=False).mean()
 
@@ -138,7 +184,9 @@ class Indicators:
         except Exception:
             return 0.0
 
+
 IND = Indicators()
+
 
 # ============================================================================
 # DATABASE
@@ -173,6 +221,7 @@ class DB:
 
     def _boot(self):
         import sqlite3
+
         with self._lock:
             c = sqlite3.connect(self._path)
             cur = c.cursor()
@@ -183,6 +232,7 @@ class DB:
 
     def _cx(self):
         import sqlite3
+
         return sqlite3.connect(self._path, timeout=15)
 
     def run(self, sql: str, p: tuple = ()) -> Optional[List]:
@@ -202,21 +252,47 @@ class DB:
         return None
 
     def open_trades(self) -> List[Dict]:
-        rows = self.run("SELECT id,symbol,side,entry_price,quantity,stop_loss,take_profit,strategy,confidence,is_partial FROM trades WHERE status='open'")
+        rows = self.run(
+            "SELECT id,symbol,side,entry_price,quantity,stop_loss,take_profit,strategy,confidence,is_partial FROM trades WHERE status='open'"
+        )
         if not rows:
             return []
-        k = ["id", "symbol", "side", "entry", "qty", "sl", "tp", "strategy", "conf", "is_partial"]
+        k = [
+            "id",
+            "symbol",
+            "side",
+            "entry",
+            "qty",
+            "sl",
+            "tp",
+            "strategy",
+            "conf",
+            "is_partial",
+        ]
         return [dict(zip(k, r)) for r in rows]
 
     def insert(self, t: Dict):
         self.run(
             "INSERT OR IGNORE INTO trades (id,symbol,side,entry_price,quantity,stop_loss,take_profit,strategy,confidence) "
             "VALUES (?,?,?,?,?,?,?,?,?)",
-            (t["id"], t["symbol"], t["side"], t["entry"], t["qty"], t["sl"], t["tp"], t["strategy"], t["conf"]),
+            (
+                t["id"],
+                t["symbol"],
+                t["side"],
+                t["entry"],
+                t["qty"],
+                t["sl"],
+                t["tp"],
+                t["strategy"],
+                t["conf"],
+            ),
         )
 
     def update_partial(self, tid: str, new_qty: float, new_sl: float):
-        self.run("UPDATE trades SET quantity=?, stop_loss=?, is_partial=1 WHERE id=?", (new_qty, new_sl, tid))
+        self.run(
+            "UPDATE trades SET quantity=?, stop_loss=?, is_partial=1 WHERE id=?",
+            (new_qty, new_sl, tid),
+        )
 
     def close(self, tid: str, ep: float, pnl: float, pct: float, reason: str):
         self.run(
@@ -225,7 +301,10 @@ class DB:
         )
 
     def get_recent_closed(self, limit: int = 10) -> List[Dict]:
-        rows = self.run("SELECT symbol, side, entry_price, exit_price, pnl, pnl_pct, exit_reason, closed_at FROM trades WHERE status='closed' ORDER BY closed_at DESC LIMIT ?", (limit,))
+        rows = self.run(
+            "SELECT symbol, side, entry_price, exit_price, pnl, pnl_pct, exit_reason, closed_at FROM trades WHERE status='closed' ORDER BY closed_at DESC LIMIT ?",
+            (limit,),
+        )
         if not rows:
             return []
         k = ["symbol", "side", "entry", "exit", "pnl", "pct", "reason", "time"]
@@ -235,9 +314,16 @@ class DB:
         rows = self.run("SELECT pnl, pnl_pct FROM trades WHERE status='closed'")
         if not rows:
             return {
-                "total_trades": 0, "win_rate": 0.0, "total_pnl": 0.0,
-                "profit_factor": 0.0, "best_trade": 0.0, "worst_trade": 0.0,
-                "avg_win": 0.0, "avg_loss": 0.0, "wins_count": 0, "losses_count": 0,
+                "total_trades": 0,
+                "win_rate": 0.0,
+                "total_pnl": 0.0,
+                "profit_factor": 0.0,
+                "best_trade": 0.0,
+                "worst_trade": 0.0,
+                "avg_win": 0.0,
+                "avg_loss": 0.0,
+                "wins_count": 0,
+                "losses_count": 0,
             }
 
         pnls = [r[0] for r in rows]
@@ -249,21 +335,32 @@ class DB:
         total_pnl = sum(pnls)
         gross_profit = sum(wins)
         gross_loss = sum(losses)
-        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else gross_profit
+        profit_factor = (
+            (gross_profit / gross_loss) if gross_loss > 0 else gross_profit
+        )
 
         return {
-            "total_trades": total_trades, "wins_count": len(wins), "losses_count": len(losses),
-            "win_rate": round(win_rate, 1), "total_pnl": round(total_pnl, 2), "profit_factor": round(profit_factor, 2),
-            "best_trade": round(max(pnls), 2) if pnls else 0.0, "worst_trade": round(min(pnls), 2) if pnls else 0.0,
-            "avg_win": round(sum(wins) / len(wins), 2) if wins else 0.0, "avg_loss": round(sum(losses) / len(losses), 2) if losses else 0.0,
+            "total_trades": total_trades,
+            "wins_count": len(wins),
+            "losses_count": len(losses),
+            "win_rate": round(win_rate, 1),
+            "total_pnl": round(total_pnl, 2),
+            "profit_factor": round(profit_factor, 2),
+            "best_trade": round(max(pnls), 2) if pnls else 0.0,
+            "worst_trade": round(min(pnls), 2) if pnls else 0.0,
+            "avg_win": round(sum(wins) / len(wins), 2) if wins else 0.0,
+            "avg_loss": round(sum(losses) / len(losses), 2) if losses else 0.0,
         }
+
 
 database = DB()
 
+
 # ============================================================================
-# EXCHANGE (کاملاً اصلاح‌شده طبق کد تست)
+# EXCHANGE (سازگار کامل با One-Way Mode)
 # ============================================================================
 class Exchange:
+
     def __init__(self):
         self._ex = None
         self._connect()
@@ -290,8 +387,14 @@ class Exchange:
         result = {}
         for tf in timeframes:
             try:
-                raw = self._ex.fetch_ohlcv(sym, tf, limit=100) if self._ex else self._mock_ohlcv()
-                df = pd.DataFrame(raw, columns=["ts", "open", "high", "low", "close", "vol"])
+                raw = (
+                    self._ex.fetch_ohlcv(sym, tf, limit=100)
+                    if self._ex
+                    else self._mock_ohlcv()
+                )
+                df = pd.DataFrame(
+                    raw, columns=["ts", "open", "high", "low", "close", "vol"]
+                )
                 df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
                 result[tf] = df
             except Exception:
@@ -332,7 +435,9 @@ class Exchange:
                             "price": t.get("price"),
                             "amount": t.get("amount"),
                             "cost": t.get("cost"),
-                            "time": datetime.fromtimestamp(t.get("timestamp", 0) / 1000).strftime("%m-%d %H:%M"),
+                            "time": datetime.fromtimestamp(
+                                t.get("timestamp", 0) / 1000
+                            ).strftime("%m-%d %H:%M"),
                         })
                 except Exception:
                     continue
@@ -354,27 +459,41 @@ class Exchange:
         except Exception:
             return 0.0
 
-    def order(self, sym: str, side: str, qty: float, pos_side: str = "Long", is_close: bool = False) -> Optional[Dict]:
-        """ثبت واقعی سفارش با پارامترهای posSide و reduceOnly (دقیقاً مشابه کد تست)"""
+    def order(
+        self, sym: str, side: str, qty: float, is_close: bool = False
+    ) -> Optional[Dict]:
+        """ارسال سفارش بدون اجبار posSide برای پشتیبانی کامل از One-Way Mode"""
         if DRY_RUN:
             return {"id": f"dry_{uuid.uuid4().hex[:6]}", "ok": True}
         try:
-            params = {'posSide': pos_side}
+            params = {}
             if is_close:
-                params['reduceOnly'] = True
+                params["reduceOnly"] = True
 
             if side.lower() == "buy":
-                order_res = self._ex.create_market_buy_order(sym, qty, params=params)
+                order_res = self._ex.create_market_buy_order(
+                    sym, qty, params=params
+                )
             else:
-                order_res = self._ex.create_market_sell_order(sym, qty, params=params)
+                order_res = self._ex.create_market_sell_order(
+                    sym, qty, params=params
+                )
 
-            log.info("✅ سفارش واقعی صرافی ثبت شد: %s %s Qty: %.2f (ID: %s)", side, sym, qty, order_res.get('id'))
+            log.info(
+                "✅ سفارش واقعی صرافی ثبت شد: %s %s Qty: %.2f (ID: %s)",
+                side,
+                sym,
+                qty,
+                order_res.get("id"),
+            )
             return order_res
         except Exception as e:
             log.error("❌ خطای ثبت سفارش در صرافی [%s %s]: %s", side, sym, e)
             return None
 
+
 EX = Exchange()
+
 
 # ============================================================================
 # THINK-TANK
@@ -389,9 +508,15 @@ class ThinkTankOutput:
     tp1: float = 0.0
     entry: float = 0.0
 
+
 class VirtualThinkTank:
-    def analyze(self, sym: str, dfs: Dict[str, pd.DataFrame]) -> ThinkTankOutput:
-        if not dfs or any(len(dfs[tf]) < 30 for tf in ["1m", "3m", "5m", "15m"]):
+
+    def analyze(
+        self, sym: str, dfs: Dict[str, pd.DataFrame]
+    ) -> ThinkTankOutput:
+        if not dfs or any(
+            len(dfs[tf]) < 30 for tf in ["1m", "3m", "5m", "15m"]
+        ):
             return ThinkTankOutput()
 
         df1m, df3m, df5m, df15m = dfs["1m"], dfs["3m"], dfs["5m"], dfs["15m"]
@@ -402,26 +527,53 @@ class VirtualThinkTank:
 
         # استراتژی ۱: Momentum
         if adx15 > 20:
-            trend = "long" if price15 > ema20_15 and ema20_15 > ema50_15 else ("short" if price15 < ema20_15 and ema20_15 < ema50_15 else None)
+            trend = (
+                "long"
+                if price15 > ema20_15 and ema20_15 > ema50_15
+                else (
+                    "short"
+                    if price15 < ema20_15 and ema20_15 < ema50_15
+                    else None
+                )
+            )
+
             if trend:
                 rsi3 = IND.safe(IND.rsi(df3m["close"], 14))
                 _, _, m_hist = IND.macd(df3m["close"])
                 macd_h = IND.safe(m_hist)
-                pullback_ok = (rsi3 < 48 and macd_h > 0) if trend == "long" else (rsi3 > 52 and macd_h < 0)
+                pullback_ok = (
+                    (rsi3 < 48 and macd_h > 0)
+                    if trend == "long"
+                    else (rsi3 > 52 and macd_h < 0)
+                )
 
                 if pullback_ok:
                     c1 = IND.safe(df1m["close"])
                     ema9_1 = IND.safe(IND.ema(df1m["close"], 9))
                     trigger = (c1 > ema9_1) if trend == "long" else (c1 < ema9_1)
                     if trigger:
-                        atr3 = IND.safe(IND.atr(df3m["high"], df3m["low"], df3m["close"])) or (c1 * 0.008)
+                        atr3 = IND.safe(
+                            IND.atr(df3m["high"], df3m["low"], df3m["close"])
+                        ) or (c1 * 0.008)
                         entry = c1
-                        sl = entry - (1.2 * atr3) if trend == "long" else entry + (1.2 * atr3)
-                        tp1 = entry + (1.5 * atr3) if trend == "long" else entry - (1.5 * atr3)
+                        sl = (
+                            entry - (1.2 * atr3)
+                            if trend == "long"
+                            else entry + (1.2 * atr3)
+                        )
+                        tp1 = (
+                            entry + (1.5 * atr3)
+                            if trend == "long"
+                            else entry - (1.5 * atr3)
+                        )
                         return ThinkTankOutput(
                             action="buy" if trend == "long" else "sell",
-                            strategy="Strat1_MomentumScalp", conf=85,
-                            reason=f"ADX15={adx15:.1f} Trend={trend}", sl=sl, tp1=tp1, entry=entry
+                            strategy="Strat1_MomentumScalp",
+                            conf=85,
+                            reason=f"ADX15={adx15:.1f} Trend={trend}",
+                            sl=sl,
+                            tp1=tp1,
+                            entry=entry,
                         )
 
         # استراتژی ۲: Mean Reversion
@@ -436,26 +588,49 @@ class VirtualThinkTank:
                 c1 = IND.safe(df1m["close"])
                 rsi1 = IND.safe(IND.rsi(df1m["close"], 7))
                 if reach_lo and rsi1 > 30:
-                    atr1 = IND.safe(IND.atr(df1m["high"], df1m["low"], df1m["close"])) or (c1 * 0.006)
+                    atr1 = IND.safe(
+                        IND.atr(df1m["high"], df1m["low"], df1m["close"])
+                    ) or (c1 * 0.006)
                     entry = c1
                     sl = entry - (1.3 * atr1)
                     tp1 = entry + (1.6 * atr1)
-                    return ThinkTankOutput(action="buy", strategy="Strat2_MeanReversion", conf=80, reason="Range Reversion", sl=sl, tp1=tp1, entry=entry)
+                    return ThinkTankOutput(
+                        action="buy",
+                        strategy="Strat2_MeanReversion",
+                        conf=80,
+                        reason="Range Reversion",
+                        sl=sl,
+                        tp1=tp1,
+                        entry=entry,
+                    )
                 elif reach_hi and rsi1 < 70:
-                    atr1 = IND.safe(IND.atr(df1m["high"], df1m["low"], df1m["close"])) or (c1 * 0.006)
+                    atr1 = IND.safe(
+                        IND.atr(df1m["high"], df1m["low"], df1m["close"])
+                    ) or (c1 * 0.006)
                     entry = c1
                     sl = entry + (1.3 * atr1)
                     tp1 = entry - (1.6 * atr1)
-                    return ThinkTankOutput(action="sell", strategy="Strat2_MeanReversion", conf=80, reason="Range Reversion", sl=sl, tp1=tp1, entry=entry)
+                    return ThinkTankOutput(
+                        action="sell",
+                        strategy="Strat2_MeanReversion",
+                        conf=80,
+                        reason="Range Reversion",
+                        sl=sl,
+                        tp1=tp1,
+                        entry=entry,
+                    )
 
         return ThinkTankOutput()
 
+
 THINK_TANK = VirtualThinkTank()
+
 
 # ============================================================================
 # TELEGRAM BOT HANDLER
 # ============================================================================
 class TelegramBotHandler:
+
     def __init__(self, engine):
         self.engine = engine
         self.last_update_id = 0
@@ -469,18 +644,26 @@ class TelegramBotHandler:
             data = {"chat_id": TG_CHAT, "text": msg, "parse_mode": "HTML"}
             if reply_markup:
                 data["reply_markup"] = json.dumps(reply_markup)
-            requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", data=data, timeout=10)
+            requests.post(
+                f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                data=data,
+                timeout=10,
+            )
         except Exception as e:
             log.warning("Telegram Post Error: %s", e)
 
     def _get_menu_keyboard(self):
         return {
             "keyboard": [
-                [{"text": "📊 داشبورد تحلیلی"}, {"text": "💼 پوزیشن‌های باز"}],
+                [
+                    {"text": "📊 داشبورد تحلیلی"},
+                    {"text": "💼 پوزیشن‌های باز"},
+                ],
                 [{"text": "📜 گزارش صرافی"}, {"text": "🔴 توقف ربات"}],
-                [{"text": "🟢 شروع ربات"}]
+                [{"text": "🟢 شروع ربات"}],
             ],
-            "resize_keyboard": True, "persistent": True
+            "resize_keyboard": True,
+            "persistent": True,
         }
 
     def _poll_updates(self):
@@ -491,7 +674,10 @@ class TelegramBotHandler:
                 if res.get("ok"):
                     for update in res.get("result", []):
                         self.last_update_id = update["update_id"]
-                        if "message" in update and "text" in update["message"]:
+                        if (
+                            "message" in update
+                            and "text" in update["message"]
+                        ):
                             text = update["message"]["text"].strip()
                             self._handle_command(text)
             except Exception:
@@ -502,7 +688,9 @@ class TelegramBotHandler:
         kb = self._get_menu_keyboard()
         if cmd in ("/start", "/start_bot", "🟢 شروع ربات"):
             self.engine.is_active = True
-            self.send("🟢 <b>موتور معامله‌گری فعال شد!</b>", reply_markup=kb)
+            self.send(
+                "🟢 <b>موتور معامله‌گری فعال شد!</b>", reply_markup=kb
+            )
         elif cmd in ("/stop", "/stop_bot", "🔴 توقف ربات"):
             self.engine.is_active = False
             self.send("🔴 <b>موتور متوقف شد!</b>", reply_markup=kb)
@@ -531,7 +719,10 @@ class TelegramBotHandler:
         with self.engine._lock:
             pos_list = list(self.engine._pos.values())
         if not pos_list:
-            self.send("💼 <b>هیچ پوزیشن بازی وجود ندارد.</b>", reply_markup=self._get_menu_keyboard())
+            self.send(
+                "💼 <b>هیچ پوزیشن بازی وجود ندارد.</b>",
+                reply_markup=self._get_menu_keyboard(),
+            )
             return
         msg = f"💼 <b>پوزیشن‌های فعال ({len(pos_list)}/{MAX_POS}):</b>\n"
         for p in pos_list:
@@ -541,17 +732,22 @@ class TelegramBotHandler:
     def send_exchange_history(self):
         trades = EX.fetch_exchange_trade_history()
         if not trades:
-            self.send("📜 <b>هیچ معامله‌ای در تاریخچه یافت نشد.</b>", reply_markup=self._get_menu_keyboard())
+            self.send(
+                "📜 <b>هیچ معامله‌ای در تاریخچه یافت نشد.</b>",
+                reply_markup=self._get_menu_keyboard(),
+            )
             return
         msg = f"📜 <b>گزارش اخیر صرافی:</b>\n"
         for t in trades[:5]:
             msg += f"<b>{t['symbol']}</b> | {t['side'].upper()} | قیمت: {t['price']}\n"
         self.send(msg, reply_markup=self._get_menu_keyboard())
 
+
 # ============================================================================
 # ENGINE
 # ============================================================================
 class Engine:
+
     def __init__(self):
         self._pos: Dict[str, Dict] = {}
         self._lock = threading.Lock()
@@ -574,12 +770,27 @@ class Engine:
                 pid = f"sync_{uuid.uuid4().hex[:6]}"
                 entry = rp["entry"]
                 atr = entry * 0.008
-                sl = entry - (1.3 * atr) if rp["side"] == "long" else entry + (1.3 * atr)
-                tp = entry + (1.6 * atr) if rp["side"] == "long" else entry - (1.6 * atr)
+                sl = (
+                    entry - (1.3 * atr)
+                    if rp["side"] == "long"
+                    else entry + (1.3 * atr)
+                )
+                tp = (
+                    entry + (1.6 * atr)
+                    if rp["side"] == "long"
+                    else entry - (1.6 * atr)
+                )
                 pos = {
-                    "id": pid, "symbol": rp["symbol"], "side": rp["side"],
-                    "entry": entry, "qty": rp["qty"], "sl": sl, "tp": tp,
-                    "strategy": "ReSynced", "conf": 100, "is_partial": 0,
+                    "id": pid,
+                    "symbol": rp["symbol"],
+                    "side": rp["side"],
+                    "entry": entry,
+                    "qty": rp["qty"],
+                    "sl": sl,
+                    "tp": tp,
+                    "strategy": "ReSynced",
+                    "conf": 100,
+                    "is_partial": 0,
                 }
                 with self._lock:
                     self._pos[pid] = pos
@@ -589,7 +800,9 @@ class Engine:
         if self.peak_balance is None or current_bal > self.peak_balance:
             self.peak_balance = current_bal
         if self.peak_balance > 0:
-            self.current_dd = ((self.peak_balance - current_bal) / self.peak_balance * 100.0)
+            self.current_dd = (
+                (self.peak_balance - current_bal) / self.peak_balance * 100.0
+            )
 
     def loop(self):
         log.info("▶️ موتور اصلی اجرا شد.")
@@ -599,7 +812,11 @@ class Engine:
                 self.check_drawdown(bal)
                 self._manage_positions()
 
-                if self.is_active and not self.is_dd_halted and len(self._pos) < MAX_POS:
+                if (
+                    self.is_active
+                    and not self.is_dd_halted
+                    and len(self._pos) < MAX_POS
+                ):
                     self._scan(bal)
 
                 time.sleep(8)
@@ -611,7 +828,9 @@ class Engine:
         for sym in SYMBOLS:
             try:
                 with self._lock:
-                    if len(self._pos) >= MAX_POS or sym in [p["symbol"] for p in self._pos.values()]:
+                    if len(self._pos) >= MAX_POS or sym in [
+                        p["symbol"] for p in self._pos.values()
+                    ]:
                         continue
 
                 dfs = EX.fetch_multi_ohlcv(sym)
@@ -622,7 +841,9 @@ class Engine:
 
                 if output.action in ("buy", "sell"):
                     risk_amt = bal * (RISK_PCT / 100.0)
-                    sl_dist = abs(output.entry - output.sl) or (output.entry * 0.005)
+                    sl_dist = abs(output.entry - output.sl) or (
+                        output.entry * 0.005
+                    )
                     qty = risk_amt / sl_dist
                     if (qty * output.entry) > (bal * 0.15):
                         qty = (bal * 0.15) / output.entry
@@ -634,18 +855,24 @@ class Engine:
 
     def _open_position(self, sym: str, out: ThinkTankOutput, qty: float):
         side = "buy" if out.action == "buy" else "sell"
-        pos_side = "Long" if out.action == "buy" else "Short"
         pid = f"p_{uuid.uuid4().hex[:8]}"
 
-        # ارسال واقعی به صرافی با مشخصات posSide
-        order_res = EX.order(sym, side, qty, pos_side=pos_side, is_close=False)
+        # ارسال سفارش در One-Way Mode
+        order_res = EX.order(sym, side, qty, is_close=False)
         if not order_res:
             return
 
         pos = {
-            "id": pid, "symbol": sym, "side": "long" if out.action == "buy" else "short",
-            "entry": out.entry, "qty": qty, "sl": out.sl, "tp": out.tp1,
-            "strategy": out.strategy, "conf": out.conf, "is_partial": 0,
+            "id": pid,
+            "symbol": sym,
+            "side": "long" if out.action == "buy" else "short",
+            "entry": out.entry,
+            "qty": qty,
+            "sl": out.sl,
+            "tp": out.tp1,
+            "strategy": out.strategy,
+            "conf": out.conf,
+            "is_partial": 0,
         }
 
         with self._lock:
@@ -673,40 +900,53 @@ class Engine:
                 side = pos["side"]
 
                 # حد ضرر
-                sl_hit = (side == "long" and price <= pos["sl"]) or (side == "short" and price >= pos["sl"])
+                sl_hit = (side == "long" and price <= pos["sl"]) or (
+                    side == "short" and price >= pos["sl"]
+                )
                 if sl_hit:
                     self._close_position(pid, pos, price, "Stop Loss")
                     continue
 
                 # خروج ۵۰٪ (TP1)
                 if not pos.get("is_partial", 0):
-                    tp1_hit = (side == "long" and price >= pos["tp"]) or (side == "short" and price <= pos["tp"])
+                    tp1_hit = (side == "long" and price >= pos["tp"]) or (
+                        side == "short" and price <= pos["tp"]
+                    )
                     if tp1_hit:
                         half_qty = round(pos["qty"] / 2.0, 2)
                         close_side = "sell" if side == "long" else "buy"
-                        pos_side = "Long" if side == "long" else "Short"
 
-                        EX.order(pos["symbol"], close_side, half_qty, pos_side=pos_side, is_close=True)
+                        # بستن ۵۰٪ حجم در One-Way Mode با reduceOnly
+                        EX.order(pos["symbol"], close_side, half_qty, is_close=True)
 
                         pos["sl"] = pos["entry"]
                         pos["qty"] = half_qty
                         pos["is_partial"] = 1
                         database.update_partial(pid, half_qty, pos["entry"])
                         if self.tg_handler:
-                            self.tg_handler.send(f"🎯 <b>خروج ۵۰٪ (TP1)</b>\nنماد: {pos['symbol']}")
+                            self.tg_handler.send(
+                                f"🎯 <b>خروج ۵۰٪ (TP1)</b>\nنماد: {pos['symbol']}"
+                            )
 
             except Exception as e:
                 log.error("Manage Error [%s]: %s", pos["symbol"], e)
 
     def _close_position(self, pid: str, pos: Dict, price: float, reason: str):
         close_side = "sell" if pos["side"] == "long" else "buy"
-        pos_side = "Long" if pos["side"] == "long" else "Short"
 
-        # بستن کامل سفارش در صرافی
-        EX.order(pos["symbol"], close_side, pos["qty"], pos_side=pos_side, is_close=True)
+        # بستن کامل معامله در One-Way Mode با reduceOnly
+        EX.order(pos["symbol"], close_side, pos["qty"], is_close=True)
 
-        pnl = (price - pos["entry"]) * pos["qty"] if pos["side"] == "long" else (pos["entry"] - price) * pos["qty"]
-        pct = (price - pos["entry"]) / pos["entry"] * 100 if pos["side"] == "long" else (pos["entry"] - price) / pos["entry"] * 100
+        pnl = (
+            (price - pos["entry"]) * pos["qty"]
+            if pos["side"] == "long"
+            else (pos["entry"] - price) * pos["qty"]
+        )
+        pct = (
+            (price - pos["entry"]) / pos["entry"] * 100
+            if pos["side"] == "long"
+            else (pos["entry"] - price) / pos["entry"] * 100
+        )
 
         database.close(pid, price, pnl, pct, reason)
         with self._lock:
@@ -717,18 +957,22 @@ class Engine:
                 f"🏁 <b>بستن پوزیشن ({reason})</b>\nنماد: {pos['symbol']}\nسود/زیان: {pnl:+.2f}$ ({pct:+.2f}%)"
             )
 
+
 # ============================================================================
 # FLASK WEB SERVER
 # ============================================================================
 app = Flask(__name__)
 engine = None
 
+
 @app.route("/")
 def home():
     stats = database.get_advanced_analytics()
     bal = EX.balance()
     pos_count = len(engine._pos) if engine else 0
-    status_str = "🟢 فعال" if (engine and engine.is_active) else "🔴 متوقف"
+    status_str = (
+        "🟢 فعال" if (engine and engine.is_active) else "🔴 متوقف"
+    )
 
     return f"""
     <!DOCTYPE html>
@@ -751,9 +995,14 @@ def home():
     </html>
     """
 
+
 @app.route("/health")
 def health():
-    return {"status": "ok", "active_positions": len(engine._pos) if engine else 0}
+    return {
+        "status": "ok",
+        "active_positions": len(engine._pos) if engine else 0,
+    }
+
 
 def main():
     global engine
@@ -763,6 +1012,7 @@ def main():
 
     threading.Thread(target=engine.loop, daemon=True).start()
     app.run(host="0.0.0.0", port=PORT, debug=False)
+
 
 if __name__ == "__main__":
     main()
