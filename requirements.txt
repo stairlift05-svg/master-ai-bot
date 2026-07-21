@@ -7,3 +7,4 @@ python-dotenv>=1.0.0
 openai>=1.7.0
 psycopg2-binary>=2.9.9
 Werkzeug>=3.0.1
+gunicorn
