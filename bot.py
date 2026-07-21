@@ -1,27 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master-AI Trading Bot Pro v7.0.0 - Interactive Telegram Control & Advanced Analytics
+Master-AI Trading Bot Pro v8.0.0 - Full Telegram Control & Exchange History Integration
 ویژگی‌ها:
-- پنل کنترل کامل تلگرام (دستورات start, stop, dashboard, positions)
-- داشبورد تحلیلی عمیق (Win Rate, Profit Factor, Max Drawdown, Avg Win/Loss)
-- مدیریت هوشمند افت حساب (ممانعت از ورود به معاملات جدید + ادامه مدیریت پوزیشن‌های باز)
-- هماهنگ‌سازی پوزیشن‌های باز صرافی و دیتابیس
+- دریافت تاریخچه کلی معاملات مستقیماً از صرافی Phemex (دکمه جدید تلگرام)
+- گزارش لحظه‌ای شروع، توقف، خروج پله‌ای و بسته‌شدن معاملات در تلگرام
+- داشبورد مدیریتی کامل در وب (HTML/CSS) و تلگرام
+- مدیریت هوشمند افت حساب و بازیابی پوزیشن‌های صرافی
 """
 
 import os
 import sys
-import re
 import json
 import time
 import uuid
 import logging
 import threading
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Optional, Dict, List, Tuple
 
-# ── بررسی نسخه پایتون ──────────────────────────────────────────────────
 if sys.version_info < (3, 10):
     print("[CRITICAL] Python 3.10+ لازم است")
     sys.exit(1)
@@ -63,7 +61,6 @@ API_KEY    = Cfg.s("PHEMEX_API_KEY")
 API_SECRET = Cfg.s("PHEMEX_API_SECRET")
 TG_TOKEN   = Cfg.s("TELEGRAM_BOT_TOKEN")
 TG_CHAT    = Cfg.s("TELEGRAM_CHAT_ID")
-DB_URL     = Cfg.s("DATABASE_URL")
 
 SYMBOLS = [
     "BTC/USDT:USDT","ETH/USDT:USDT","SOL/USDT:USDT","XRP/USDT:USDT",
@@ -128,7 +125,7 @@ class Indicators:
 IND = Indicators()
 
 # ============================================================================
-# DATABASE & ADVANCED ANALYTICS
+# DATABASE & ANALYTICS
 # ============================================================================
 class DB:
     _SCHEMA = [
@@ -210,13 +207,12 @@ class DB:
         )
 
     def get_advanced_analytics(self) -> Dict:
-        """محاسبه کامل آمار عملکرد ربات جهت ارزیابی عمیق"""
         rows = self.run("SELECT pnl, pnl_pct FROM trades WHERE status='closed'")
         if not rows:
             return {
                 "total_trades": 0, "win_rate": 0.0, "total_pnl": 0.0,
                 "profit_factor": 0.0, "best_trade": 0.0, "worst_trade": 0.0,
-                "avg_win": 0.0, "avg_loss": 0.0
+                "avg_win": 0.0, "avg_loss": 0.0, "wins_count": 0, "losses_count": 0
             }
 
         pnls = [r[0] for r in rows]
@@ -247,7 +243,7 @@ class DB:
 database = DB()
 
 # ============================================================================
-# EXCHANGE
+# EXCHANGE (با قابلیت دریافت تاریخچه معاملات از صرافی)
 # ============================================================================
 class Exchange:
     def __init__(self):
@@ -264,6 +260,7 @@ class Exchange:
             })
             if TESTNET: self._ex.set_sandbox_mode(True)
             self._ex.load_markets()
+            log.info("✅ اتصال صرافی فیمکس برقرار شد.")
         except Exception as e:
             log.error("Exchange Connect Error: %s", e)
 
@@ -296,6 +293,30 @@ class Exchange:
             return active
         except Exception: return []
 
+    def fetch_exchange_trade_history(self) -> List[Dict]:
+        """دریافت گزارش کامل تاریخچه معاملات مستقیماً از صرافی Phemex"""
+        if not self._ex or DRY_RUN: return []
+        all_trades = []
+        try:
+            for sym in SYMBOLS:
+                try:
+                    trades = self._ex.fetch_my_trades(sym, limit=10)
+                    for t in trades:
+                        all_trades.append({
+                            "symbol": t.get("symbol"),
+                            "side": t.get("side"),
+                            "price": t.get("price"),
+                            "amount": t.get("amount"),
+                            "cost": t.get("cost"),
+                            "time": datetime.fromtimestamp(t.get("timestamp", 0)/1000).strftime('%m-%d %H:%M')
+                        })
+                except Exception:
+                    continue
+            return all_trades
+        except Exception as e:
+            log.error("Fetch Exchange Trades Error: %s", e)
+            return []
+
     def _mock_ohlcv(self):
         now = int(time.time() * 1000)
         return [[now - i*60000, 100, 101, 99, 100, 10] for i in range(100)]
@@ -318,7 +339,7 @@ class Exchange:
 EX = Exchange()
 
 # ============================================================================
-# INTERACTIVE TELEGRAM BOT & DASHBOARD ENGINE
+# INTERACTIVE TELEGRAM BOT & KEYBOARD
 # ============================================================================
 class TelegramBotHandler:
     def __init__(self, engine):
@@ -327,15 +348,29 @@ class TelegramBotHandler:
         if TG_TOKEN:
             threading.Thread(target=self._poll_updates, daemon=True).start()
 
-    def send(self, msg: str):
+    def send(self, msg: str, reply_markup=None):
         if not TG_TOKEN or not TG_CHAT: return
         try:
-            requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", data={"chat_id": TG_CHAT, "text": msg, "parse_mode": "HTML"}, timeout=10)
+            data = {"chat_id": TG_CHAT, "text": msg, "parse_mode": "HTML"}
+            if reply_markup:
+                data["reply_markup"] = json.dumps(reply_markup)
+            requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", data=data, timeout=10)
         except Exception as e:
             log.warning("Telegram Post Error: %s", e)
 
+    def _get_menu_keyboard(self):
+        """کیبورد سفارشی دکمه‌های تلگرام"""
+        return {
+            "keyboard": [
+                [{"text": "📊 داشبورد تحلیلی"}, {"text": "💼 پوزیشن‌های باز"}],
+                [{"text": "📜 گزارش کلی صرافی"}, {"text": "🔴 توقف ربات"}],
+                [{"text": "🟢 شروع ربات"}]
+            ],
+            "resize_keyboard": True,
+            "persistent": True
+        }
+
     def _poll_updates(self):
-        """حلقه دریافت دستورات از تلگرام (Polling)"""
         while True:
             try:
                 url = f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates?offset={self.last_update_id + 1}&timeout=10"
@@ -351,13 +386,15 @@ class TelegramBotHandler:
             time.sleep(2)
 
     def _handle_command(self, cmd: str):
+        kb = self._get_menu_keyboard()
+
         if cmd in ("/start", "/start_bot", "🟢 شروع ربات"):
             self.engine.is_active = True
-            self.send("🟢 <b>ربات فعال شد!</b>\nاسکن بازار و معامله‌گری جدید آغاز گردید.")
+            self.send("🟢 <b>دستور اجرا دریافت شد!</b>\nاسکن بازار و معامله‌گری جدید فعال گردید.", reply_markup=kb)
 
         elif cmd in ("/stop", "/stop_bot", "🔴 توقف ربات"):
             self.engine.is_active = False
-            self.send("🔴 <b>ربات متوقف شد!</b>\nورود به معاملات جدید معلق شد. پوزیشن‌های باز همچنان مدیریت می‌شوند.")
+            self.send("🔴 <b>دستور توقف دریافت شد!</b>\nورود به معاملات جدید معلق شد. پوزیشن‌های باز تا بسته‌شدن مدیریت می‌شوند.", reply_markup=kb)
 
         elif cmd in ("/dashboard", "📊 داشبورد تحلیلی"):
             self.send_dashboard()
@@ -365,41 +402,44 @@ class TelegramBotHandler:
         elif cmd in ("/positions", "💼 پوزیشن‌های باز"):
             self.send_positions()
 
+        elif cmd in ("/exchange_history", "📜 گزارش کلی صرافی"):
+            self.send_exchange_history()
+
     def send_dashboard(self):
         stats = database.get_advanced_analytics()
         bal = EX.balance()
         status_str = "🟢 فعال (Scanning)" if self.engine.is_active else "🔴 متوقف شده"
         if self.engine.is_dd_halted:
-            status_str = "⚠️ قفل افت حساب (Drawdown Halt)"
+            status_str = "⚠️ قفل افت حساب (Drawdown Guard)"
 
         msg = (
             f"📊 <b>داشبورد ارزیابی عملکرد ربات</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚙️ <b>وضعیت ربات:</b> {status_str}\n"
+            f"⚙️ <b>وضعیت اجرا:</b> {status_str}\n"
             f"💰 <b>موجودی کیف‌پول:</b> {bal:,.2f} USDT\n"
             f"📈 <b>سود/زیان کل:</b> {stats['total_pnl']:+,.2f} USDT\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 <b>تعداد کل معاملات:</b> {stats['total_trades']}\n"
             f"✅ <b>برد:</b> {stats['wins_count']} | ❌ <b>باخت:</b> {stats['losses_count']}\n"
             f"🔥 <b>وین‌ریت (Win Rate):</b> {stats['win_rate']}%\n"
-            f"⚡ <b>پرافیت فاکتور (Profit Factor):</b> {stats['profit_factor']}\n"
+            f"⚡ <b>پرافیت فاکتور:</b> {stats['profit_factor']}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🟢 <b>بهترین معامله:</b> +{stats['best_trade']:.2f} $\n"
             f"🔴 <b>بدترین معامله:</b> {stats['worst_trade']:.2f} $\n"
             f"📊 <b>میانگین سود:</b> +{stats['avg_win']:.2f} $\n"
             f"📊 <b>میانگین زیان:</b> -{stats['avg_loss']:.2f} $\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🛡️ <b>افت حساب روزانه (Drawdown):</b> {self.engine.current_dd:.1f}% / {MAX_DD}%\n"
+            f"🛡️ <b>افت حساب (Drawdown):</b> {self.engine.current_dd:.1f}% / {MAX_DD}%\n"
             f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
-        self.send(msg)
+        self.send(msg, reply_markup=self._get_menu_keyboard())
 
     def send_positions(self):
         with self.engine._lock:
             pos_list = list(self.engine._pos.values())
 
         if not pos_list:
-            self.send("💼 <b>هیچ پوزیشن بازی وجود ندارد.</b>")
+            self.send("💼 <b>هیچ پوزیشن بازی در حال حاضر وجود ندارد.</b>", reply_markup=self._get_menu_keyboard())
             return
 
         msg = f"💼 <b>پوزیشن‌های فعال ({len(pos_list)}/{MAX_POS}):</b>\n━━━━━━━━━━━━━━━━━━━━\n"
@@ -410,7 +450,27 @@ class TelegramBotHandler:
                 f"حجم: {p['qty']} | استراتژی: {p['strategy']}\n"
                 f"────────────────────\n"
             )
-        self.send(msg)
+        self.send(msg, reply_markup=self._get_menu_keyboard())
+
+    def send_exchange_history(self):
+        """ارسال تاریخچه معاملات واقعی دریافت‌شده از صرافی Phemex"""
+        self.send("⏳ در حال استعلام تاریخچه معاملات از صرافی Phemex...")
+        trades = EX.fetch_exchange_trade_history()
+        
+        if not trades:
+            self.send("📜 <b>هیچ معامله‌ای در تاریخچه صرافی یافت نشد (یا در حالت Dry-Run هستید).</b>", reply_markup=self._get_menu_keyboard())
+            return
+
+        msg = f"📜 <b>گزارش اخیر معاملات صرافی Phemex:</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+        for t in trades[:10]: # نمایش ۱۰ معامله اخیر
+            side_emoji = "🟢" if t["side"].lower() == "buy" else "🔴"
+            msg += (
+                f"{side_emoji} <b>{t['symbol']}</b> | {t['side'].upper()}\n"
+                f"قیمت: {t['price']} | حجم: {t['amount']}\n"
+                f"ارزش کل: {t['cost']:.2f} USDT | زمان: {t['time']}\n"
+                f"────────────────────\n"
+            )
+        self.send(msg, reply_markup=self._get_menu_keyboard())
 
 # ============================================================================
 # VIRTUAL THINK-TANK ENGINE
@@ -497,8 +557,8 @@ class Engine:
     def __init__(self):
         self._pos : Dict[str, Dict] = {}
         self._lock = threading.Lock()
-        self.is_active = True           # قابلیت فعال/غیرفعال‌سازی با تلگرام
-        self.is_dd_halted = False       # قفل افت حساب
+        self.is_active = True
+        self.is_dd_halted = False
         self.current_dd = 0.0
         self.peak_balance = None
         self.tg_handler = None
@@ -510,7 +570,6 @@ class Engine:
         for t in database.open_trades():
             self._pos[t["id"]] = t
 
-        # بازیابی پوزیشن‌های واقعی صرافی
         real_positions = EX.fetch_real_open_positions()
         for rp in real_positions:
             if not any(p["symbol"] == rp["symbol"] for p in self._pos.values()):
@@ -529,7 +588,6 @@ class Engine:
                 database.insert(pos)
 
     def check_drawdown(self, current_bal: float):
-        """چک کردن افت حساب جهت جلوگیری از ورود به معاملات جدید"""
         if self.peak_balance is None or current_bal > self.peak_balance:
             self.peak_balance = current_bal
 
@@ -556,10 +614,8 @@ class Engine:
                 bal = EX.balance()
                 self.check_drawdown(bal)
 
-                # ۱. مدیریت همیشه فعال پوزیشن‌های باز (حتی هنگام Stop یا Drawdown)
                 self._manage_positions()
 
-                # ۲. ورود به معامله جدید تنها در صورت فعال بودن و عدم وجود قفل افت حساب
                 if self.is_active and not self.is_dd_halted and len(self._pos) < MAX_POS:
                     self._scan(bal)
 
@@ -614,7 +670,6 @@ class Engine:
             )
 
     def _manage_positions(self):
-        """مدیریت هوشمند پوزیشن‌های باز (SL/TP1/Trailing Stop)"""
         with self._lock: snap = dict(self._pos)
 
         for pid, pos in snap.items():
@@ -666,14 +721,52 @@ class Engine:
             self.tg_handler.send(f"🏁 <b>بستن پوزیشن ({reason})</b>\nنماد: {pos['symbol']}\nسود/زیان: {pnl:+.2f}$ ({pct:+.2f}%)")
 
 # ============================================================================
-# FLASK SERVER
+# FLASK WEB DASHBOARD SERVER
 # ============================================================================
 app = Flask(__name__)
 engine = None
 
 @app.route('/')
 def home():
-    return "<h1>🤖 Master-AI Bot v7.0.0 (Interactive Telegram & Dashboard)</h1>"
+    """صفحه اول داشبورد وب گرافیکی"""
+    stats = database.get_advanced_analytics()
+    bal = EX.balance()
+    pos_count = len(engine._pos) if engine else 0
+    status_str = "🟢 فعال" if (engine and engine.is_active) else "🔴 متوقف"
+    
+    return f"""
+    <!DOCTYPE html>
+    <html dir="rtl" lang="fa">
+    <head>
+        <meta charset="UTF-8">
+        <title>داشبورد مدیریتی Master-AI Bot</title>
+        <style>
+            body {{ font-family: Tahoma, sans-serif; background-color: #0d1117; color: #c9d1d9; margin: 0; padding: 20px; }}
+            .container {{ max-width: 900px; margin: 0 auto; text-align: center; }}
+            .card-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 20px; }}
+            .card {{ background: #161b22; padding: 15px; border-radius: 8px; border: 1px solid #30363d; }}
+            .card h3 {{ margin: 0; font-size: 14px; color: #8b949e; }}
+            .card p {{ margin: 10px 0 0 0; font-size: 20px; font-weight: bold; color: #58a6ff; }}
+            .status-on {{ color: #2ea043 !important; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🤖 Master-AI Bot v8.0.0</h1>
+            <p>وضعیت اجرای ربات: <span class="status-on">{status_str}</span> | پوزیشن‌های فعال: <b>{pos_count}/3</b></p>
+            
+            <div class="card-grid">
+                <div class="card"><h3>موجودی حساب</h3><p>${bal:,.2f}</p></div>
+                <div class="card"><h3>سود/زیان کل</h3><p>{stats['total_pnl']:+,.2f} $</p></div>
+                <div class="card"><h3>وین ریت (Win Rate)</h3><p>{stats['win_rate']}%</p></div>
+                <div class="card"><h3>تعداد کل معاملات</h3><p>{stats['total_trades']}</p></div>
+                <div class="card"><h3>پرافیت فاکتور</h3><p>{stats['profit_factor']}</p></div>
+                <div class="card"><h3>افت حساب (Drawdown)</h3><p>{engine.current_dd if engine else 0:.1f}%</p></div>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
 
 @app.route('/health')
 def health():
