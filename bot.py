@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master-AI Quant Bot v4.6 - FINAL FIXED VERSION
-نسخه نهایی با رفع کامل مشکل داده
+Master-AI Quant Bot v4.6 - FINAL DEPLOYMENT READY
+نسخه نهایی برای دیپلوی روی Render با رفع کامل خطاها
 """
 
 import json
@@ -87,17 +87,17 @@ SYMBOLS = [
     "LINK/USDT:USDT",
 ]
 
-# 🔥 تنظیمات جدید
+# تنظیمات
 RISK_PCT = Cfg.f("RISK_PER_TRADE", 0.5)
 MAX_DD = Cfg.f("MAX_DRAWDOWN", 15.0)
 MAX_POS = Cfg.i("MAX_POSITIONS", 2)
 LEVERAGE = Cfg.i("LEVERAGE", 5)
 TESTNET = Cfg.b("PHEMEX_TESTNET", True)
 PORT = Cfg.i("PORT", 10000)
-SCAN_INTERVAL = Cfg.i("SCAN_INTERVAL", 90)  # 🔥 افزایش به ۹۰ ثانیه
+SCAN_INTERVAL = Cfg.i("SCAN_INTERVAL", 90)
 MIN_CONFIDENCE = Cfg.i("MIN_CONFIDENCE", 75)
-SCAN_BATCH_SIZE = Cfg.i("SCAN_BATCH_SIZE", 1)  # 🔥 کاهش به ۱
-REQUEST_TIMEOUT = Cfg.i("REQUEST_TIMEOUT", 45)  # 🔥 افزایش به ۴۵
+SCAN_BATCH_SIZE = Cfg.i("SCAN_BATCH_SIZE", 1)
+REQUEST_TIMEOUT = Cfg.i("REQUEST_TIMEOUT", 45)
 
 # contract_size
 CONTRACT_SIZE_MAP = {
@@ -362,7 +362,7 @@ database = DB()
 
 
 # ============================================================================
-# EXCHANGE ENGINE - با کش کردن داده
+# EXCHANGE ENGINE
 # ============================================================================
 class Exchange:
 
@@ -371,8 +371,8 @@ class Exchange:
         self._binance: Optional[ccxt.binance] = None
         self._markets_info: Dict = {}
         self._connected = False
-        self._data_cache: Dict = {}  # 🔥 کش داده
-        self._cache_time: Dict = {}  # 🔥 زمان کش
+        self._data_cache: Dict = {}
+        self._cache_time: Dict = {}
         self._connect()
 
     def _connect(self):
@@ -419,7 +419,6 @@ class Exchange:
                 mkt = self._ex.markets[sym]
                 symbol_base = sym.split("/")[0]
                 contract_size = CONTRACT_SIZE_MAP.get(symbol_base, 0.001)
-                
                 self._markets_info[sym] = {
                     "min_amount": mkt.get("limits", {}).get("amount", {}).get("min", 0.001),
                     "min_cost": mkt.get("limits", {}).get("cost", {}).get("min", 0.5),
@@ -499,55 +498,47 @@ class Exchange:
             return None
 
     def fetch_multi_ohlcv(self, sym: str) -> Dict[str, pd.DataFrame]:
-        """🔥 با اولویت تایم‌فریم بزرگتر"""
         result = {}
-        
-        # 🔥 اولویت با تایم‌فریم بزرگتر
         timeframes = ["15m", "5m", "1m"]
-        
+
         for tf in timeframes:
             df = self.fetch_ohlcv_safe(sym, tf, limit=60, max_retries=2)
-            
+
             if df is not None and len(df) >= 25:
                 result[tf] = df
-                time.sleep(0.5)  # 🔥 فاصله بیشتر
+                time.sleep(0.5)
             else:
-                # 🔥 اگر ۱۵ دقیقه failed، کل عملیات را متوقف کن
                 if tf == "15m":
                     log.warning(f"⚠️ {sym}: داده ۱۵ دقیقه دريافت نشد")
                     return {}
-                # 🔥 برای بقیه، سعی کن از داده قبلی استفاده کنی
                 if result:
                     log.warning(f"⚠️ {sym}: {tf} دريافت نشد، استفاده از داده موجود")
                     continue
                 return {}
-        
-        # 🔥 اگر ۱ دقیقه نبود، از ۵ دقیقه کپی کن
+
         if "1m" not in result and "5m" in result:
             log.warning(f"⚠️ {sym}: استفاده از ۵ دقیقه به جای ۱ دقیقه")
             result["1m"] = result["5m"].copy()
-        
-        # 🔥 اگر ۵ دقیقه نبود، از ۱۵ دقیقه کپی کن
+
         if "5m" not in result and "15m" in result:
             log.warning(f"⚠️ {sym}: استفاده از ۱۵ دقیقه به جای ۵ دقیقه")
             result["5m"] = result["15m"].copy()
-        
+
         return result
 
     def fetch_multi_ohlcv_cached(self, sym: str) -> Dict[str, pd.DataFrame]:
-        """🔥 با کش کردن داده"""
         now = time.time()
-        cache_duration = 120  # 🔥 ۲ دقیقه کش
-        
+        cache_duration = 120
+
         if sym in self._data_cache and (now - self._cache_time.get(sym, 0)) < cache_duration:
             log.info(f"📦 {sym}: استفاده از داده کش شده")
             return self._data_cache[sym]
-        
+
         data = self.fetch_multi_ohlcv(sym)
         if data:
             self._data_cache[sym] = data
             self._cache_time[sym] = now
-        
+
         return data
 
     def get_current_price(self, sym: str) -> Optional[float]:
@@ -621,7 +612,7 @@ class Exchange:
             contract_size = self.get_contract_size(sym)
             contracts = qty / contract_size
             contracts = int(round(contracts))
-            
+
             if contracts < 1:
                 contracts = 1
                 qty = contracts * contract_size
@@ -671,7 +662,7 @@ class Exchange:
             contracts = int(round(qty / contract_size))
             if contracts < 1:
                 contracts = 1
-            
+
             sl_side = "sell" if pos_side == "long" else "buy"
             fmt_price = float(self._ex.price_to_precision(sym, stop_price))
 
@@ -703,7 +694,7 @@ EX = Exchange()
 
 
 # ============================================================================
-# STRATEGY ENGINE (خلاصه شده برای اختصار)
+# STRATEGY ENGINE
 # ============================================================================
 @dataclass
 class Signal:
@@ -718,23 +709,765 @@ class Signal:
 
 
 class StrategyEngine:
-    # ... (همان استراتژی‌های قبلی با MIN_SL_PCT = 0.05)
-    pass
+
+    def analyze(self, sym: str, dfs: Dict[str, pd.DataFrame]) -> Signal:
+        required = ["1m", "3m", "5m", "15m"]
+
+        if not dfs:
+            return Signal(debug_info="داده دريافت نشد")
+
+        for tf in required:
+            if tf not in dfs:
+                return Signal(debug_info=f"{tf} موجود نیست")
+            if len(dfs[tf]) < 30:
+                return Signal(debug_info=f"{tf} داده ناکافی")
+
+        df1m = dfs["1m"]
+        df3m = dfs["3m"]
+        df5m = dfs["5m"]
+        df15m = dfs["15m"]
+
+        adx15 = IND.safe(IND.adx(df15m["high"], df15m["low"], df15m["close"]))
+        trend_str = IND.trend_strength(df15m["close"])
+
+        # استراتژی‌ها
+        if adx15 > 20:
+            sig = self._momentum_scalp_optimized(df1m, df3m, df15m, adx15, trend_str)
+            if sig.action != "neutral" and sig.confidence >= MIN_CONFIDENCE:
+                return sig
+
+        if adx15 <= 28:
+            sig = self._mean_reversion_optimized(df1m, df5m, df15m, adx15, trend_str)
+            if sig.action != "neutral" and sig.confidence >= MIN_CONFIDENCE:
+                return sig
+
+        sig = self._breakout_optimized(df1m, df5m, df15m, adx15, trend_str)
+        if sig.action != "neutral" and sig.confidence >= MIN_CONFIDENCE:
+            return sig
+
+        sig = self._pullback_ema(df1m, df5m, df15m, adx15)
+        if sig.action != "neutral" and sig.confidence >= MIN_CONFIDENCE:
+            return sig
+
+        sig = self._supertrend_volume(df1m, df5m, df15m)
+        if sig.action != "neutral" and sig.confidence >= MIN_CONFIDENCE:
+            return sig
+
+        sig = self._double_pattern(df1m, df5m, df15m)
+        if sig.action != "neutral" and sig.confidence >= MIN_CONFIDENCE:
+            return sig
+
+        sig = self._atr_breakout(df1m, df5m, df15m)
+        if sig.action != "neutral" and sig.confidence >= MIN_CONFIDENCE:
+            return sig
+
+        sig = self._rsi_divergence(df1m, df5m, df15m)
+        if sig.action != "neutral" and sig.confidence >= MIN_CONFIDENCE:
+            return sig
+
+        sig = self._opening_range(df1m, df5m, df15m)
+        if sig.action != "neutral" and sig.confidence >= MIN_CONFIDENCE:
+            return sig
+
+        return Signal(
+            debug_info=f"ADX15={adx15:.1f} Trend={trend_str:.2f} - هيچ سيگنالي"
+        )
+
+    # ----------------------------------------------
+    # استراتژی‌ها با حداقل SL 5%
+    # ----------------------------------------------
+
+    def _opening_range(self, df1m, df5m, df15m) -> Signal:
+        if len(df5m) < 20:
+            return Signal(debug_info="OpeningRange: داده کافی نیست")
+
+        first_15 = df5m.iloc[:3]
+        range_high = first_15["high"].max()
+        range_low = first_15["low"].min()
+
+        current_price = IND.safe(df5m["close"])
+        vol = IND.safe(df5m["vol"])
+        avg_vol = IND.safe(df5m["vol"].rolling(20).mean())
+
+        if current_price > range_high and vol > avg_vol * 1.1:
+            c1 = IND.safe(df1m["close"])
+            if c1 <= 0:
+                c1 = current_price
+            sl_dist = c1 * MIN_SL_PCT
+            sl = c1 - sl_dist
+            tp = c1 + sl_dist * 1.5
+            return Signal(
+                action="buy",
+                strategy="OpeningRange",
+                confidence=75,
+                reason=f"شکست محدوده بازگشایی",
+                sl=sl, tp=tp, entry_estimate=c1,
+                debug_info="✅ Opening Range UP"
+            )
+
+        if current_price < range_low and vol > avg_vol * 1.1:
+            c1 = IND.safe(df1m["close"])
+            if c1 <= 0:
+                c1 = current_price
+            sl_dist = c1 * MIN_SL_PCT
+            sl = c1 + sl_dist
+            tp = c1 - sl_dist * 1.5
+            return Signal(
+                action="sell",
+                strategy="OpeningRange",
+                confidence=75,
+                reason=f"شکست محدوده بازگشایی",
+                sl=sl, tp=tp, entry_estimate=c1,
+                debug_info="✅ Opening Range DOWN"
+            )
+        return Signal(debug_info="OpeningRange: بدون شکست")
+
+    def _pullback_ema(self, df1m, df5m, df15m, adx15) -> Signal:
+        ema20 = IND.safe(IND.ema(df15m["close"], 20))
+        ema50 = IND.safe(IND.ema(df15m["close"], 50))
+        ema200 = IND.safe(IND.ema(df15m["close"], 200))
+        price = IND.safe(df15m["close"])
+        rsi = IND.safe(IND.rsi(df15m["close"], 14))
+
+        if price > ema50 > ema200 and adx15 > 25:
+            if price <= ema20 * 1.005 and price >= ema20 * 0.995:
+                if 40 < rsi < 50:
+                    c1 = IND.safe(df1m["close"])
+                    ema9_1 = IND.safe(IND.ema(df1m["close"], 9))
+                    if c1 > ema9_1:
+                        sl_dist = c1 * MIN_SL_PCT
+                        sl = c1 - sl_dist
+                        tp = c1 + sl_dist * 1.5
+                        return Signal(
+                            action="buy",
+                            strategy="PullbackEMA",
+                            confidence=72,
+                            reason=f"Pullback EMA RSI={rsi:.0f}",
+                            sl=sl, tp=tp, entry_estimate=c1,
+                            debug_info="✅ Pullback EMA"
+                        )
+
+        if price < ema50 < ema200 and adx15 > 25:
+            if price >= ema20 * 0.995 and price <= ema20 * 1.005:
+                if 50 < rsi < 60:
+                    c1 = IND.safe(df1m["close"])
+                    ema9_1 = IND.safe(IND.ema(df1m["close"], 9))
+                    if c1 < ema9_1:
+                        sl_dist = c1 * MIN_SL_PCT
+                        sl = c1 + sl_dist
+                        tp = c1 - sl_dist * 1.5
+                        return Signal(
+                            action="sell",
+                            strategy="PullbackEMA",
+                            confidence=72,
+                            reason=f"Pullback EMA RSI={rsi:.0f}",
+                            sl=sl, tp=tp, entry_estimate=c1,
+                            debug_info="✅ Pullback EMA (شورت)"
+                        )
+        return Signal(debug_info="PullbackEMA: شرايط برقرار نيست")
+
+    def _supertrend_volume(self, df1m, df5m, df15m) -> Signal:
+        atr = IND.safe(IND.atr(df15m["high"], df15m["low"], df15m["close"], 10))
+        multiplier = 3.0
+        hl2 = (df15m["high"] + df15m["low"]) / 2
+        upper_band = IND.safe(hl2 + multiplier * atr)
+        lower_band = IND.safe(hl2 - multiplier * atr)
+        close = IND.safe(df15m["close"])
+        prev_close = IND.safe(df15m["close"], -2)
+        vol = IND.safe(df15m["vol"])
+        avg_vol = IND.safe(df15m["vol"].rolling(20).mean())
+        vol_surge = vol > avg_vol * 1.3
+
+        if not vol_surge:
+            return Signal(debug_info="SuperTrend: حجم کافی نیست")
+
+        if close > upper_band and prev_close <= upper_band:
+            c1 = IND.safe(df1m["close"])
+            sl_dist = c1 * MIN_SL_PCT
+            sl = c1 - sl_dist
+            tp = c1 + sl_dist * 1.8
+            return Signal(
+                action="buy",
+                strategy="SuperTrend_Vol",
+                confidence=78,
+                reason=f"SuperTrend تغییر",
+                sl=sl, tp=tp, entry_estimate=c1,
+                debug_info="✅ SuperTrend BUY"
+            )
+
+        if close < lower_band and prev_close >= lower_band:
+            c1 = IND.safe(df1m["close"])
+            sl_dist = c1 * MIN_SL_PCT
+            sl = c1 + sl_dist
+            tp = c1 - sl_dist * 1.8
+            return Signal(
+                action="sell",
+                strategy="SuperTrend_Vol",
+                confidence=78,
+                reason=f"SuperTrend تغییر",
+                sl=sl, tp=tp, entry_estimate=c1,
+                debug_info="✅ SuperTrend SELL"
+            )
+        return Signal(debug_info="SuperTrend: بدون تغییر روند")
+
+    def _double_pattern(self, df1m, df5m, df15m) -> Signal:
+        high = df5m["high"].values
+        low = df5m["low"].values
+        close = df5m["close"].values
+
+        troughs = []
+        peaks = []
+
+        for i in range(5, len(close) - 5):
+            if low[i] < low[i-1] and low[i] < low[i+1]:
+                troughs.append((i, low[i]))
+            if high[i] > high[i-1] and high[i] > high[i+1]:
+                peaks.append((i, high[i]))
+
+        if len(peaks) >= 2:
+            last_peak = peaks[-1]
+            prev_peak = peaks[-2]
+            diff_pct = abs(last_peak[1] - prev_peak[1]) / prev_peak[1] * 100
+            if diff_pct < 2.0:
+                neck = min(low[prev_peak[0]:last_peak[0]])
+                current_price = IND.safe(df5m["close"])
+                if current_price < neck:
+                    vol = IND.safe(df5m["vol"])
+                    avg_vol = IND.safe(df5m["vol"].rolling(20).mean())
+                    if vol > avg_vol * 1.1:
+                        c1 = IND.safe(df1m["close"])
+                        if c1 <= 0:
+                            c1 = current_price
+                        sl_dist = c1 * MIN_SL_PCT
+                        sl = prev_peak[1] * 1.02
+                        tp = c1 - (prev_peak[1] - neck) * 1.2
+                        if tp < c1 - c1 * 0.01:
+                            return Signal(
+                                action="sell",
+                                strategy="DoubleTop",
+                                confidence=75,
+                                reason=f"Double Top",
+                                sl=sl, tp=tp, entry_estimate=c1,
+                                debug_info="✅ Double Top"
+                            )
+
+        if len(troughs) >= 2:
+            last_trough = troughs[-1]
+            prev_trough = troughs[-2]
+            diff_pct = abs(last_trough[1] - prev_trough[1]) / prev_trough[1] * 100
+            if diff_pct < 2.0:
+                neck = max(high[prev_trough[0]:last_trough[0]])
+                current_price = IND.safe(df5m["close"])
+                if current_price > neck:
+                    vol = IND.safe(df5m["vol"])
+                    avg_vol = IND.safe(df5m["vol"].rolling(20).mean())
+                    if vol > avg_vol * 1.1:
+                        c1 = IND.safe(df1m["close"])
+                        if c1 <= 0:
+                            c1 = current_price
+                        sl_dist = c1 * MIN_SL_PCT
+                        sl = prev_trough[1] * 0.98
+                        tp = c1 + (neck - prev_trough[1]) * 1.2
+                        if tp > c1 + c1 * 0.01:
+                            return Signal(
+                                action="buy",
+                                strategy="DoubleBottom",
+                                confidence=75,
+                                reason=f"Double Bottom",
+                                sl=sl, tp=tp, entry_estimate=c1,
+                                debug_info="✅ Double Bottom"
+                            )
+        return Signal(debug_info="DoublePattern: الگويي يافت نشد")
+
+    def _atr_breakout(self, df1m, df5m, df15m) -> Signal:
+        high = df5m["high"]
+        low = df5m["low"]
+        close = df5m["close"]
+        atr = IND.safe(IND.atr(high, low, close, 14))
+        upper_band = IND.safe(high.rolling(20).max()) + atr * 0.5
+        lower_band = IND.safe(low.rolling(20).min()) - atr * 0.5
+        current_price = IND.safe(close)
+        vol = IND.safe(df5m["vol"])
+        avg_vol = IND.safe(df5m["vol"].rolling(20).mean())
+
+        if current_price > upper_band and vol > avg_vol * 1.1:
+            c1 = IND.safe(df1m["close"])
+            sl_dist = c1 * MIN_SL_PCT
+            sl = c1 - sl_dist
+            tp = c1 + sl_dist * 1.8
+            return Signal(
+                action="buy",
+                strategy="ATR_Breakout",
+                confidence=72,
+                reason=f"ATR Breakout بالا",
+                sl=sl, tp=tp, entry_estimate=c1,
+                debug_info="✅ ATR Breakout UP"
+            )
+
+        if current_price < lower_band and vol > avg_vol * 1.1:
+            c1 = IND.safe(df1m["close"])
+            sl_dist = c1 * MIN_SL_PCT
+            sl = c1 + sl_dist
+            tp = c1 - sl_dist * 1.8
+            return Signal(
+                action="sell",
+                strategy="ATR_Breakout",
+                confidence=72,
+                reason=f"ATR Breakout پایین",
+                sl=sl, tp=tp, entry_estimate=c1,
+                debug_info="✅ ATR Breakout DOWN"
+            )
+        return Signal(debug_info="ATR_Breakout: بدون شکست")
+
+    def _rsi_divergence(self, df1m, df5m, df15m) -> Signal:
+        close = df15m["close"]
+        rsi = IND.rsi(close, 14)
+
+        price_lows = []
+        rsi_lows = []
+
+        for i in range(10, len(close) - 1):
+            if close.iloc[i] < close.iloc[i-1] and close.iloc[i] < close.iloc[i+1]:
+                price_lows.append((i, close.iloc[i]))
+            if rsi.iloc[i] < rsi.iloc[i-1] and rsi.iloc[i] < rsi.iloc[i+1]:
+                rsi_lows.append((i, rsi.iloc[i]))
+
+        if len(price_lows) >= 2 and len(rsi_lows) >= 2:
+            last_price_low = price_lows[-1]
+            prev_price_low = price_lows[-2]
+            last_rsi_low = rsi_lows[-1]
+            prev_rsi_low = rsi_lows[-2]
+
+            if last_price_low[1] < prev_price_low[1] and last_rsi_low[1] > prev_rsi_low[1]:
+                c1 = IND.safe(df1m["close"])
+                sl_dist = c1 * MIN_SL_PCT
+                sl = c1 - sl_dist
+                tp = c1 + sl_dist * 1.8
+                return Signal(
+                    action="buy",
+                    strategy="RSI_Divergence",
+                    confidence=80,
+                    reason=f"واگرایی مثبت RSI",
+                    sl=sl, tp=tp, entry_estimate=c1,
+                    debug_info="✅ RSI Divergence BUY"
+                )
+
+        price_highs = []
+        rsi_highs = []
+        for i in range(10, len(close) - 1):
+            if close.iloc[i] > close.iloc[i-1] and close.iloc[i] > close.iloc[i+1]:
+                price_highs.append((i, close.iloc[i]))
+            if rsi.iloc[i] > rsi.iloc[i-1] and rsi.iloc[i] > rsi.iloc[i+1]:
+                rsi_highs.append((i, rsi.iloc[i]))
+
+        if len(price_highs) >= 2 and len(rsi_highs) >= 2:
+            last_price_high = price_highs[-1]
+            prev_price_high = price_highs[-2]
+            last_rsi_high = rsi_highs[-1]
+            prev_rsi_high = rsi_highs[-2]
+
+            if last_price_high[1] > prev_price_high[1] and last_rsi_high[1] < prev_rsi_high[1]:
+                c1 = IND.safe(df1m["close"])
+                sl_dist = c1 * MIN_SL_PCT
+                sl = c1 + sl_dist
+                tp = c1 - sl_dist * 1.8
+                return Signal(
+                    action="sell",
+                    strategy="RSI_Divergence",
+                    confidence=80,
+                    reason=f"واگرایی منفی RSI",
+                    sl=sl, tp=tp, entry_estimate=c1,
+                    debug_info="✅ RSI Divergence SELL"
+                )
+        return Signal(debug_info="RSI_Divergence: واگرايي يافت نشد")
+
+    def _momentum_scalp_optimized(self, df1m, df3m, df15m, adx15, trend_str) -> Signal:
+        price15 = IND.safe(df15m["close"])
+        ema20_15 = IND.safe(IND.ema(df15m["close"], 20))
+        ema50_15 = IND.safe(IND.ema(df15m["close"], 50))
+
+        if price15 > ema20_15 and ema20_15 > ema50_15 and trend_str > 0.3:
+            trend = "long"
+        elif price15 < ema20_15 and ema20_15 < ema50_15 and trend_str < -0.3:
+            trend = "short"
+        else:
+            return Signal(debug_info=f"Momentum: روند ضعيف")
+
+        rsi3 = IND.safe(IND.rsi(df3m["close"], 14))
+        _, _, m_hist = IND.macd(df3m["close"])
+        macd_h = IND.safe(m_hist)
+        vol_ratio = IND.safe(df1m["vol"] / df1m["vol"].rolling(20).mean())
+
+        if trend == "long":
+            pullback = (rsi3 < 45 and rsi3 > 30) and (macd_h > 0.0001)
+        else:
+            pullback = (rsi3 > 55 and rsi3 < 70) and (macd_h < -0.0001)
+
+        if not pullback:
+            return Signal(debug_info=f"Momentum: پولبک ضعيف")
+
+        c1 = IND.safe(df1m["close"])
+        ema9_1 = IND.safe(IND.ema(df1m["close"], 9))
+        trigger = (c1 > ema9_1) if trend == "long" else (c1 < ema9_1)
+
+        if not trigger or vol_ratio < 0.6:
+            return Signal(debug_info=f"Momentum: تريگر ضعيف")
+
+        sl_dist = c1 * MIN_SL_PCT
+        sl_dist_tp = sl_dist * 1.5
+
+        if trend == "long":
+            sl = c1 - sl_dist
+            tp = c1 + sl_dist_tp
+            action = "buy"
+        else:
+            sl = c1 + sl_dist
+            tp = c1 - sl_dist_tp
+            action = "sell"
+
+        conf = 55
+        if adx15 > 30:
+            conf += 8
+        if adx15 > 40:
+            conf += 8
+        if abs(rsi3 - 50) > 8:
+            conf += 8
+        if abs(macd_h) > 0.001:
+            conf += 7
+        if vol_ratio > 1.2:
+            conf += 5
+
+        return Signal(
+            action=action,
+            strategy="MomentumScalp",
+            confidence=min(conf, 90),
+            reason=f"ADX={adx15:.0f} RSI3={rsi3:.0f}",
+            sl=sl, tp=tp, entry_estimate=c1,
+            debug_info=f"✅ Momentum {trend}"
+        )
+
+    def _mean_reversion_optimized(self, df1m, df5m, df15m, adx15, trend_str) -> Signal:
+        bb_lo, bb_mid, bb_hi = IND.bbands(df5m["close"], 20, 2.0)
+        c5 = IND.safe(df5m["close"])
+        rsi5 = IND.safe(IND.rsi(df5m["close"], 14))
+
+        if c5 <= 0:
+            return Signal(debug_info="MeanRev: قيمت نامعتبر")
+
+        if abs(trend_str) > 0.8:
+            return Signal(debug_info=f"MeanRev: روند قوي")
+
+        bb_lo_val = IND.safe(bb_lo)
+        bb_hi_val = IND.safe(bb_hi)
+
+        at_lower = c5 <= bb_lo_val and rsi5 < 35
+        at_upper = c5 >= bb_hi_val and rsi5 > 65
+
+        if not (at_lower or at_upper):
+            return Signal(debug_info=f"MeanRev: باند نخورده")
+
+        c1 = IND.safe(df1m["close"])
+        rsi1 = IND.safe(IND.rsi(df1m["close"], 7))
+
+        if c1 <= 0:
+            return Signal(debug_info="MeanRev: C1=0")
+
+        sl_dist = c1 * MIN_SL_PCT
+
+        if at_lower and rsi1 > 30:
+            sl = c1 - sl_dist
+            tp = c1 + sl_dist * 1.5
+            conf = 50
+            if rsi5 < 30:
+                conf += 10
+            if rsi1 > 35:
+                conf += 8
+            vol_ratio = IND.safe(df1m["vol"] / df1m["vol"].rolling(20).mean())
+            if vol_ratio > 1.1:
+                conf += 5
+            return Signal(
+                action="buy",
+                strategy="MeanReversion",
+                confidence=min(conf, 85),
+                reason=f"BB_Low",
+                sl=sl, tp=tp, entry_estimate=c1,
+                debug_info="✅ MeanRev BUY"
+            )
+
+        if at_upper and rsi1 < 70:
+            sl = c1 + sl_dist
+            tp = c1 - sl_dist * 1.5
+            conf = 50
+            if rsi5 > 70:
+                conf += 10
+            if rsi1 < 65:
+                conf += 8
+            vol_ratio = IND.safe(df1m["vol"] / df1m["vol"].rolling(20).mean())
+            if vol_ratio > 1.1:
+                conf += 5
+            return Signal(
+                action="sell",
+                strategy="MeanReversion",
+                confidence=min(conf, 85),
+                reason=f"BB_High",
+                sl=sl, tp=tp, entry_estimate=c1,
+                debug_info="✅ MeanRev SELL"
+            )
+        return Signal(debug_info="MeanRev: تأیید نداد")
+
+    def _breakout_optimized(self, df1m, df5m, df15m, adx15, trend_str) -> Signal:
+        high5 = df5m["high"].rolling(20).max()
+        low5 = df5m["low"].rolling(20).min()
+
+        current_high = IND.safe(high5)
+        current_low = IND.safe(low5)
+        c5 = IND.safe(df5m["close"])
+        prev_c5 = IND.safe(df5m["close"], -2)
+        vol = IND.safe(df5m["vol"])
+        avg_vol = IND.safe(df5m["vol"].rolling(20).mean())
+
+        if c5 <= 0 or current_high <= 0 or current_low <= 0:
+            return Signal(debug_info="Breakout: داده ناقص")
+
+        sl_dist = c5 * MIN_SL_PCT
+        rsi1 = IND.safe(IND.rsi(df1m["close"], 7))
+
+        if c5 >= current_high and prev_c5 < current_high:
+            if vol > avg_vol * 1.2 and rsi1 > 45:
+                c1 = IND.safe(df1m["close"])
+                if c1 <= 0:
+                    c1 = c5
+                sl = c1 - sl_dist
+                tp = c1 + sl_dist * 1.8
+                conf = 60
+                if adx15 > 25:
+                    conf += 8
+                if vol > avg_vol * 1.5:
+                    conf += 8
+                return Signal(
+                    action="buy",
+                    strategy="Breakout_High",
+                    confidence=min(conf, 85),
+                    reason=f"شکست سقف",
+                    sl=sl, tp=tp, entry_estimate=c1,
+                    debug_info="✅ Breakout UP"
+                )
+
+        if c5 <= current_low and prev_c5 > current_low:
+            if vol > avg_vol * 1.2 and rsi1 < 55:
+                c1 = IND.safe(df1m["close"])
+                if c1 <= 0:
+                    c1 = c5
+                sl = c1 + sl_dist
+                tp = c1 - sl_dist * 1.8
+                conf = 60
+                if adx15 > 25:
+                    conf += 8
+                if vol > avg_vol * 1.5:
+                    conf += 8
+                return Signal(
+                    action="sell",
+                    strategy="Breakout_Low",
+                    confidence=min(conf, 85),
+                    reason=f"شکست کف",
+                    sl=sl, tp=tp, entry_estimate=c1,
+                    debug_info="✅ Breakout DOWN"
+                )
+        return Signal(debug_info="Breakout: شکستي رخ نداده")
 
 
 STRATEGY = StrategyEngine()
 
 
 # ============================================================================
-# TELEGRAM HANDLER (خلاصه شده)
+# TELEGRAM HANDLER - FIXED
 # ============================================================================
 class TelegramHandler:
-    # ... (همان کد قبلی)
-    pass
+
+    def __init__(self, engine_ref):
+        self.engine = engine_ref
+        self.last_update_id = 0
+        if TG_TOKEN and TG_CHAT:
+            threading.Thread(target=self._poll_loop, daemon=True).start()
+            log.info("🤖 تلگرام متصل شد.")
+
+    def send(self, msg: str, reply_markup=None):
+        if not TG_TOKEN or not TG_CHAT:
+            return
+        try:
+            data = {
+                "chat_id": TG_CHAT,
+                "text": msg,
+                "parse_mode": "HTML",
+            }
+            if reply_markup:
+                data["reply_markup"] = json.dumps(reply_markup)
+            requests.post(
+                f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                data=data, timeout=10,
+            )
+        except Exception as e:
+            log.warning("TG Error: %s", e)
+
+    def _keyboard(self):
+        return {
+            "keyboard": [
+                [{"text": "📊 داشبورد"}, {"text": "📈 پوزيشن‌ها"}],
+                [{"text": "📜 تاريخچه"}, {"text": "⚙️ وضعيت"}],
+                [{"text": "▶️ شروع"}, {"text": "⏹ توقف"}],
+                [{"text": "🔍 ديباگ اسکن"}],
+            ],
+            "resize_keyboard": True,
+        }
+
+    def _poll_loop(self):
+        while True:
+            try:
+                url = f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates?offset={self.last_update_id + 1}&timeout=10"
+                res = requests.get(url, timeout=15).json()
+                if res.get("ok"):
+                    for upd in res.get("result", []):
+                        self.last_update_id = upd["update_id"]
+                        txt = upd.get("message", {}).get("text", "").strip()
+                        if txt:
+                            self._handle(txt)
+            except Exception:
+                pass
+            time.sleep(2)
+
+    def _handle(self, cmd: str):
+        kb = self._keyboard()
+        if cmd in ("/start", "▶️ شروع"):
+            self.engine.is_active = True
+            self.send("▶️ <b>ربات فعال شد!</b>", reply_markup=kb)
+        elif cmd in ("/stop", "⏹ توقف"):
+            self.engine.is_active = False
+            self.send("⏹ <b>ربات متوقف شد</b>", reply_markup=kb)
+        elif cmd in ("/dashboard", "📊 داشبورد"):
+            self._send_dashboard()
+        elif cmd in ("/positions", "📈 پوزيشن‌ها"):
+            self._send_positions()
+        elif cmd in ("/history", "📜 تاريخچه"):
+            self._send_history()
+        elif cmd in ("/status", "⚙️ وضعيت"):
+            self._send_status()
+        elif cmd in ("/debug", "🔍 ديباگ اسکن"):
+            self._send_debug_scan()
+
+    def _send_dashboard(self):
+        stats = database.get_analytics()
+        bal = EX.balance()
+        equity = EX.total_equity()
+        real_pos = EX.fetch_real_positions()
+        db_count = len(self.engine._pos)
+        status = "▶️ فعال" if self.engine.is_active else "⏹ متوقف"
+        mode = "🧪 TESTNET" if TESTNET else "💰 MAINNET"
+
+        msg = (
+            f"📊 <b>داشبورد ربات v4.6</b>\n"
+            f"{'═' * 28}\n"
+            f"⚡ وضعيت: {status}\n"
+            f"🌐 شبکه: {mode}\n"
+            f"🔗 اتصال: {'✅' if EX.is_connected else '❌'}\n"
+            f"{'═' * 28}\n"
+            f"💰 موجودي: ${bal:,.2f}\n"
+            f"💎 ارزش کل: ${equity:,.2f}\n"
+            f"📈 PnL: {stats['total_pnl']:+,.2f}$\n"
+            f"{'═' * 28}\n"
+            f"📊 پوزيشن: {db_count}/{MAX_POS}\n"
+            f"🎯 Win Rate: {stats['win_rate']}%\n"
+            f"🛡️ DD: {self.engine.current_dd:.1f}%\n"
+            f"{'═' * 28}\n"
+            f"⏱️ اسکن: {SCAN_INTERVAL}s | Min SL: 5%\n"
+            f"📦 ارسال قرارداد به صرافی\n"
+            f"🔧 نسخه: v4.6 (نهایی)"
+        )
+        self.send(msg, reply_markup=self._keyboard())
+
+    def _send_positions(self):
+        real_pos = EX.fetch_real_positions()
+        db_pos = list(self.engine._pos.values())
+        if not real_pos and not db_pos:
+            self.send("📭 <b>هيچ پوزيشني نيست</b>", reply_markup=self._keyboard())
+            return
+        msg = "🏦 <b>پوزيشن‌ها:</b>\n"
+        if real_pos:
+            for p in real_pos:
+                msg += f"\n📌 {p['symbol']} ({p['side'].upper()}) | ورود: {p['entry']:.4f} | PnL: {p['unrealized_pnl']:+.2f}$\n"
+        self.send(msg, reply_markup=self._keyboard())
+
+    def _send_history(self):
+        self.send("📜 تاريخچه در داشبورد وب قابل مشاهده است", reply_markup=self._keyboard())
+
+    def _send_status(self):
+        connected = EX.is_connected
+        mode = "TESTNET" if TESTNET else "MAINNET"
+        bal = EX.balance() if connected else 0
+        msg = (
+            f"⚙️ <b>وضعيت v4.6</b>\n"
+            f"{'═' * 28}\n"
+            f"🔗 صرافي: {'✅' if connected else '❌'}\n"
+            f"🌐 شبکه: {mode}\n"
+            f"💰 موجودي: ${bal:,.2f}\n"
+            f"🎯 ريسک: {RISK_PCT}% | Min SL: 5%\n"
+            f"📊 Max Pos: {MAX_POS} | Scan: {SCAN_INTERVAL}s\n"
+            f"📦 ارسال قرارداد به صرافی\n"
+            f"✅ Fallback به Binance"
+        )
+        self.send(msg, reply_markup=self._keyboard())
+
+    def _send_debug_scan(self):
+        if not EX.is_connected:
+            self.send("❌ صرافي متصل نيست", reply_markup=self._keyboard())
+            return
+
+        msg = "🔍 <b>ديباگ اسکن v4.6:</b>\n"
+        bal = EX.balance()
+        msg += f"💰 موجودي: ${bal:,.2f}\n"
+        msg += f"📊 پوزيشن: {len(self.engine._pos)}/{MAX_POS}\n"
+        msg += f"📦 Min SL: 5%\n\n"
+
+        active_syms = [p["symbol"] for p in self.engine._pos.values()]
+
+        for sym in SYMBOLS:
+            short_name = sym.split("/")[0]
+            if sym in active_syms:
+                msg += f"📌 <b>{short_name}</b>: پوزيشن باز\n"
+                continue
+            if len(self.engine._pos) >= MAX_POS:
+                msg += f"⛔ <b>{short_name}</b>: ظرفيت پر\n"
+                continue
+
+            try:
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(EX.fetch_multi_ohlcv_cached, sym)
+                    dfs = future.result(timeout=REQUEST_TIMEOUT)
+
+                if not dfs:
+                    msg += f"❌ <b>{short_name}</b>: داده دريافت نشد\n"
+                    continue
+
+                sig = STRATEGY.analyze(sym, dfs)
+                if sig.action == "neutral":
+                    msg += f"⏸️ <b>{short_name}</b>: {sig.debug_info[:50]}\n"
+                else:
+                    sl_pct = abs(sig.sl - sig.entry_estimate) / sig.entry_estimate * 100
+                    contract_size = EX.get_contract_size(sym)
+                    msg += (
+                        f"✅ <b>{short_name}</b>: {sig.action.upper()} "
+                        f"({sig.strategy}) Conf={sig.confidence}% "
+                        f"SL={sl_pct:.1f}% | قرارداد: 1\n"
+                    )
+            except concurrent.futures.TimeoutError:
+                msg += f"⏰ <b>{short_name}</b>: Timeout\n"
+            except Exception as e:
+                msg += f"❌ <b>{short_name}</b>: {str(e)[:30]}\n"
+
+        self.send(msg, reply_markup=self._keyboard())
 
 
 # ============================================================================
-# CORE ENGINE - با استفاده از کش
+# CORE ENGINE
 # ============================================================================
 class Engine:
 
@@ -801,7 +1534,7 @@ class Engine:
                 if self._cycle_count % 20 == 0:
                     self._check_sync()
 
-                # 🔥 فقط هر ۲ سیکل یکبار اسکن کن
+                # اسکن هر ۲ سیکل
                 if self.is_active and not self.is_dd_halted and self._cycle_count % 2 == 0:
                     with self._lock:
                         pos_count = len(self._pos)
@@ -839,23 +1572,21 @@ class Engine:
                 self._close_position(pid, pos, price, "Sync_Orphan")
 
     def _scan_markets(self, balance: float):
-        """🔥 استفاده از کش داده"""
         with self._lock:
             active_syms = [p["symbol"] for p in self._pos.values()]
-        
+
         symbols_to_scan = [s for s in SYMBOLS if s not in active_syms]
         max_scan = min(len(symbols_to_scan), SCAN_BATCH_SIZE)
-        
+
         for sym in symbols_to_scan[:max_scan]:
             try:
                 with self._lock:
                     if len(self._pos) >= MAX_POS:
                         return
-                
+
                 short_name = sym.split("/")[0]
                 log.info(f"📊 اسکن {short_name}...")
-                
-                # 🔥 استفاده از کش
+
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(EX.fetch_multi_ohlcv_cached, sym)
                     try:
@@ -863,72 +1594,72 @@ class Engine:
                     except concurrent.futures.TimeoutError:
                         log.warning(f"⏰ Timeout {short_name}")
                         continue
-                
+
                 if not dfs:
                     log.warning(f"⚠️ داده {short_name} دريافت نشد")
                     continue
-                
+
                 signal = STRATEGY.analyze(sym, dfs)
-                
+
                 if signal.action == "neutral":
                     log.debug(f"[{short_name}] {signal.debug_info[:50]}")
                     continue
-                
+
                 if signal.confidence < MIN_CONFIDENCE:
                     log.info(f"[{short_name}] اطمينان {signal.confidence}% < {MIN_CONFIDENCE}%")
                     continue
-                
+
                 log.info(f"✅ [{short_name}] سيگنال: {signal.action.upper()} ({signal.strategy})")
                 self._execute_signal(sym, signal, balance)
                 time.sleep(2)
-                
+
             except Exception as e:
                 log.error(f"[{sym}] Scan Error: {e}")
 
     def _execute_signal(self, sym: str, sig: Signal, balance: float):
         short_name = sym.split("/")[0]
-        
+
         sl_dist = sig.entry_estimate * MIN_SL_PCT
         risk_amount = balance * (RISK_PCT / 100.0) * 0.3
         qty = risk_amount / sl_dist
-        
+
         max_notional = balance * 0.05
         if (qty * sig.entry_estimate) > max_notional:
             qty = max_notional / sig.entry_estimate
-        
+
         contract_size = EX.get_contract_size(sym)
         contracts = qty / contract_size
-        
+
         if contracts < 1:
             contracts = 1
         contracts = int(round(contracts))
         qty = contracts * contract_size
-        
+
         log.info(
             f"[{short_name}] 📊 {contracts} قرارداد = {qty:.6f} سکه | SL: 5%"
         )
-        
+
         side = "buy" if sig.action == "buy" else "sell"
         order_result = EX.place_order(sym, side, qty, is_close=False)
-        
+
         if not order_result:
             log.warning(f"❌ [{short_name}] سفارش اجرا نشد")
             return
-        
+
         fill_price = order_result["fill_price"]
         filled_qty = order_result["filled_qty"]
-        
+
         pos_side = "long" if sig.action == "buy" else "short"
-        
+
         if pos_side == "long":
             real_sl = fill_price * 0.95
             real_tp = fill_price * 1.075
         else:
             real_sl = fill_price * 1.05
             real_tp = fill_price * 0.925
-        
+
         sl_order_id = EX.place_stop_loss(sym, pos_side, filled_qty, real_sl)
-        
+
         pid = f"p_{uuid.uuid4().hex[:8]}"
         pos = {
             "id": pid,
@@ -947,14 +1678,22 @@ class Engine:
             "sl_order_id": sl_order_id or "",
             "contracts": contracts,
         }
-        
+
         with self._lock:
             self._pos[pid] = pos
         database.insert(pos)
-        
+
         log.info(
             f"✅ [{short_name}] پوزيشن باز | ورود: {fill_price:.4f} | SL: 5% | {contracts} قرارداد"
         )
+
+        if self.tg:
+            self.tg.send(
+                f"🚀 <b>پوزيشن جدید ({sig.strategy})</b>\n"
+                f"{sym} | {pos_side.upper()}\n"
+                f"ورود: {fill_price:.4f} | SL: 5%\n"
+                f"{contracts} قرارداد | اطمينان: {sig.confidence}%"
+            )
 
     def _manage_positions(self):
         with self._lock:
@@ -1116,7 +1855,7 @@ def main():
         log.critical("❌ اتصال به صرافي برقرار نشد!")
 
     engine_instance = Engine()
-    tg = TelegramHandler(engine_instance)
+    tg = TelegramHandler(engine_instance)  # ✅ آرگومان پاس داده می‌شود
     engine_instance.tg = tg
 
     if TG_TOKEN and TG_CHAT:
@@ -1135,6 +1874,7 @@ def main():
         )
 
     threading.Thread(target=engine_instance.run_loop, daemon=True).start()
+    # برای Render باید host='0.0.0.0' و port مشخص شود
     app.run(host="0.0.0.0", port=PORT, debug=False)
 
 
