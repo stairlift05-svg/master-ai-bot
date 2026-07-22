@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*- 
+# -*- coding: utf-8 -*-
 """
 Master-AI Quant Bot v4.6 - FINAL FIXED VERSION
-نسخه,نهایی با رفع کامل مشکل داده
+نسخه نهایی با رفع کامل مشکل داده
 """
 
 import json
