@@ -1,7 +1,6 @@
-flask
+ccxt
 pandas
 numpy
+flask
 requests
-ccxt
 python-dotenv
-gunicorn
