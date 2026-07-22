@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master-AI Quant Bot v4.6 - FINAL DEPLOYMENT READY
-نسخه نهایی برای دیپلوی روی Render با رفع کامل خطاها
+Master-AI Quant Bot v4.7 - FIXED DATA TIMEFRAMES
+نسخه نهایی با رفع کامل مشکل تایم‌فریم 3m
 """
 
 import json
@@ -37,7 +37,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(message)s",
     stream=sys.stdout,
 )
-log = logging.getLogger("MasterQuant_v4.6")
+log = logging.getLogger("MasterQuant_v4.7")
 
 
 # ============================================================================
@@ -87,7 +87,6 @@ SYMBOLS = [
     "LINK/USDT:USDT",
 ]
 
-# تنظیمات
 RISK_PCT = Cfg.f("RISK_PER_TRADE", 0.5)
 MAX_DD = Cfg.f("MAX_DRAWDOWN", 15.0)
 MAX_POS = Cfg.i("MAX_POSITIONS", 2)
@@ -99,7 +98,6 @@ MIN_CONFIDENCE = Cfg.i("MIN_CONFIDENCE", 75)
 SCAN_BATCH_SIZE = Cfg.i("SCAN_BATCH_SIZE", 1)
 REQUEST_TIMEOUT = Cfg.i("REQUEST_TIMEOUT", 45)
 
-# contract_size
 CONTRACT_SIZE_MAP = {
     "BTC": 0.001,
     "ETH": 0.01,
@@ -362,7 +360,7 @@ database = DB()
 
 
 # ============================================================================
-# EXCHANGE ENGINE
+# EXCHANGE ENGINE - FIXED TIMEFRAMES
 # ============================================================================
 class Exchange:
 
@@ -497,9 +495,14 @@ class Exchange:
             log.debug(f"Binance fallback failed: {e}")
             return None
 
+    # =========================================================
+    # 🔥 اصلاح اصلی: دریافت تمام تایم‌فریم‌های مورد نیاز
+    # =========================================================
     def fetch_multi_ohlcv(self, sym: str) -> Dict[str, pd.DataFrame]:
+        """دریافت 1m, 3m, 5m, 15m با مدیریت خطا"""
         result = {}
-        timeframes = ["15m", "5m", "1m"]
+        # 🔥 همه تایم‌فریم‌های مورد نیاز
+        timeframes = ["1m", "3m", "5m", "15m"]
 
         for tf in timeframes:
             df = self.fetch_ohlcv_safe(sym, tf, limit=60, max_retries=2)
@@ -508,21 +511,31 @@ class Exchange:
                 result[tf] = df
                 time.sleep(0.5)
             else:
-                if tf == "15m":
-                    log.warning(f"⚠️ {sym}: داده ۱۵ دقیقه دريافت نشد")
+                # اگر 1m failed، کل عملیات را متوقف کن (نیاز اصلی)
+                if tf == "1m":
+                    log.warning(f"⚠️ {sym}: داده ۱ دقیقه دريافت نشد")
                     return {}
-                if result:
-                    log.warning(f"⚠️ {sym}: {tf} دريافت نشد، استفاده از داده موجود")
-                    continue
-                return {}
+                # برای بقیه، اگر failed شد و داده‌های قبلی موجود است، از آن کپی کن
+                elif result:
+                    log.warning(f"⚠️ {sym}: {tf} دريافت نشد، استفاده از {list(result.keys())[-1]}")
+                    # کپی از آخرین تایم‌فریم موجود
+                    last_tf = list(result.keys())[-1]
+                    result[tf] = result[last_tf].copy()
+                else:
+                    return {}
 
-        if "1m" not in result and "5m" in result:
-            log.warning(f"⚠️ {sym}: استفاده از ۵ دقیقه به جای ۱ دقیقه")
-            result["1m"] = result["5m"].copy()
-
-        if "5m" not in result and "15m" in result:
-            log.warning(f"⚠️ {sym}: استفاده از ۱۵ دقیقه به جای ۵ دقیقه")
-            result["5m"] = result["15m"].copy()
+        # اطمینان از وجود همه تایم‌فریم‌ها
+        for tf in timeframes:
+            if tf not in result:
+                # اگر بعضی missing بودند، از نزدیک‌ترین موجود کپی کن
+                if "1m" in result:
+                    result[tf] = result["1m"].copy()
+                elif "5m" in result:
+                    result[tf] = result["5m"].copy()
+                elif "15m" in result:
+                    result[tf] = result["15m"].copy()
+                else:
+                    return {}
 
         return result
 
@@ -694,7 +707,7 @@ EX = Exchange()
 
 
 # ============================================================================
-# STRATEGY ENGINE
+# STRATEGY ENGINE - بدون تغییر (همانند قبل)
 # ============================================================================
 @dataclass
 class Signal:
@@ -773,9 +786,9 @@ class StrategyEngine:
             debug_info=f"ADX15={adx15:.1f} Trend={trend_str:.2f} - هيچ سيگنالي"
         )
 
-    # ----------------------------------------------
-    # استراتژی‌ها با حداقل SL 5%
-    # ----------------------------------------------
+    # --------------------------------------------------------------
+    # کلیه استراتژی‌ها با MIN_SL_PCT = 0.05 (همانند قبل)
+    # --------------------------------------------------------------
 
     def _opening_range(self, df1m, df5m, df15m) -> Signal:
         if len(df5m) < 20:
@@ -1280,7 +1293,7 @@ STRATEGY = StrategyEngine()
 
 
 # ============================================================================
-# TELEGRAM HANDLER - FIXED
+# TELEGRAM HANDLER
 # ============================================================================
 class TelegramHandler:
 
@@ -1364,7 +1377,7 @@ class TelegramHandler:
         mode = "🧪 TESTNET" if TESTNET else "💰 MAINNET"
 
         msg = (
-            f"📊 <b>داشبورد ربات v4.6</b>\n"
+            f"📊 <b>داشبورد ربات v4.7</b>\n"
             f"{'═' * 28}\n"
             f"⚡ وضعيت: {status}\n"
             f"🌐 شبکه: {mode}\n"
@@ -1379,8 +1392,8 @@ class TelegramHandler:
             f"🛡️ DD: {self.engine.current_dd:.1f}%\n"
             f"{'═' * 28}\n"
             f"⏱️ اسکن: {SCAN_INTERVAL}s | Min SL: 5%\n"
-            f"📦 ارسال قرارداد به صرافی\n"
-            f"🔧 نسخه: v4.6 (نهایی)"
+            f"📦 همه تایم‌فریم‌ها فعال\n"
+            f"🔧 نسخه: v4.7 (نهایی)"
         )
         self.send(msg, reply_markup=self._keyboard())
 
@@ -1404,14 +1417,14 @@ class TelegramHandler:
         mode = "TESTNET" if TESTNET else "MAINNET"
         bal = EX.balance() if connected else 0
         msg = (
-            f"⚙️ <b>وضعيت v4.6</b>\n"
+            f"⚙️ <b>وضعيت v4.7</b>\n"
             f"{'═' * 28}\n"
             f"🔗 صرافي: {'✅' if connected else '❌'}\n"
             f"🌐 شبکه: {mode}\n"
             f"💰 موجودي: ${bal:,.2f}\n"
             f"🎯 ريسک: {RISK_PCT}% | Min SL: 5%\n"
             f"📊 Max Pos: {MAX_POS} | Scan: {SCAN_INTERVAL}s\n"
-            f"📦 ارسال قرارداد به صرافی\n"
+            f"📦 همه تایم‌فریم‌ها (1m,3m,5m,15m)\n"
             f"✅ Fallback به Binance"
         )
         self.send(msg, reply_markup=self._keyboard())
@@ -1421,11 +1434,11 @@ class TelegramHandler:
             self.send("❌ صرافي متصل نيست", reply_markup=self._keyboard())
             return
 
-        msg = "🔍 <b>ديباگ اسکن v4.6:</b>\n"
+        msg = "🔍 <b>ديباگ اسکن v4.7:</b>\n"
         bal = EX.balance()
         msg += f"💰 موجودي: ${bal:,.2f}\n"
         msg += f"📊 پوزيشن: {len(self.engine._pos)}/{MAX_POS}\n"
-        msg += f"📦 Min SL: 5%\n\n"
+        msg += f"📦 همه تایم‌فریم‌ها\n\n"
 
         active_syms = [p["symbol"] for p in self.engine._pos.values()]
 
@@ -1452,11 +1465,10 @@ class TelegramHandler:
                     msg += f"⏸️ <b>{short_name}</b>: {sig.debug_info[:50]}\n"
                 else:
                     sl_pct = abs(sig.sl - sig.entry_estimate) / sig.entry_estimate * 100
-                    contract_size = EX.get_contract_size(sym)
                     msg += (
                         f"✅ <b>{short_name}</b>: {sig.action.upper()} "
                         f"({sig.strategy}) Conf={sig.confidence}% "
-                        f"SL={sl_pct:.1f}% | قرارداد: 1\n"
+                        f"SL={sl_pct:.1f}%\n"
                     )
             except concurrent.futures.TimeoutError:
                 msg += f"⏰ <b>{short_name}</b>: Timeout\n"
@@ -1516,7 +1528,7 @@ class Engine:
                 database.insert(pos)
 
     def run_loop(self):
-        log.info("🚀 موتور v4.6 شروع شد - با کش داده")
+        log.info("🚀 موتور v4.7 شروع شد - با همه تایم‌فریم‌ها")
         while True:
             try:
                 self._cycle_count += 1
@@ -1758,7 +1770,7 @@ def home():
     <html dir="rtl" lang="fa">
     <head>
         <meta charset="UTF-8">
-        <title>Quant Bot v4.6</title>
+        <title>Quant Bot v4.7</title>
         <meta http-equiv="refresh" content="30">
         <style>
             body {{ font-family: Tahoma, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; text-align: center; }}
@@ -1770,8 +1782,8 @@ def home():
         </style>
     </head>
     <body>
-        <h1>🤖 Master-AI Quant Bot v4.6</h1>
-        <span class="badge">✅ نهایی - با کش داده</span>
+        <h1>🤖 Master-AI Quant Bot v4.7</h1>
+        <span class="badge">✅ نهایی - همه تایم‌فریم‌ها</span>
         <div class="status">
             وضعيت: <b>{'▶️ فعال' if active else '⏹ متوقف'}</b> |
             اتصال: <b>{'✅' if connected else '❌'}</b> |
@@ -1787,10 +1799,10 @@ def home():
         <div class="card"><h3>🛡️ DD</h3><p>{dd:.1f}%</p></div>
         <br><br>
         <div class="card" style="min-width: 200px;">
-            <h3>🔧 تنظیمات v4.6</h3>
+            <h3>🔧 تنظیمات v4.7</h3>
             <p>ریسک: {RISK_PCT}% | Min SL: 5%</p>
             <p>Max Pos: {MAX_POS} | Scan: {SCAN_INTERVAL}s</p>
-            <p style="color: #3fb950;">✅ کش داده فعال</p>
+            <p style="color: #3fb950;">✅ 1m, 3m, 5m, 15m فعال</p>
             <p style="color: #3fb950;">✅ Fallback به Binance</p>
         </div>
     </body>
@@ -1802,7 +1814,7 @@ def home():
 def health():
     return {
         "status": "ok",
-        "version": "4.6",
+        "version": "4.7",
         "connected": EX.is_connected,
         "testnet": TESTNET,
         "active": engine_instance.is_active if engine_instance else False,
@@ -1841,8 +1853,8 @@ def main():
     global engine_instance
 
     log.info("=" * 60)
-    log.info("  🤖 Master-AI Quant Bot v4.6 (FINAL)")
-    log.info("  ✅ کش داده فعال")
+    log.info("  🤖 Master-AI Quant Bot v4.7 (FINAL)")
+    log.info("  ✅ همه تایم‌فریم‌ها (1m,3m,5m,15m)")
     log.info("  ✅ Min SL: 5%")
     log.info("  ✅ Fallback به Binance")
     log.info("  🌐 Mode: %s", "TESTNET" if TESTNET else "MAINNET")
@@ -1855,14 +1867,14 @@ def main():
         log.critical("❌ اتصال به صرافي برقرار نشد!")
 
     engine_instance = Engine()
-    tg = TelegramHandler(engine_instance)  # ✅ آرگومان پاس داده می‌شود
+    tg = TelegramHandler(engine_instance)
     engine_instance.tg = tg
 
     if TG_TOKEN and TG_CHAT:
         tg.send(
-            f"🚀 <b>ربات v4.6 (نهایی) شروع شد</b>\n"
+            f"🚀 <b>ربات v4.7 (نهایی) شروع شد</b>\n"
             f"{'═' * 28}\n"
-            f"✅ کش داده فعال\n"
+            f"✅ همه تایم‌فریم‌ها فعال\n"
             f"✅ Min SL: 5%\n"
             f"✅ Fallback به Binance\n"
             f"🛡️ Max DD: {MAX_DD}%\n"
@@ -1874,7 +1886,6 @@ def main():
         )
 
     threading.Thread(target=engine_instance.run_loop, daemon=True).start()
-    # برای Render باید host='0.0.0.0' و port مشخص شود
     app.run(host="0.0.0.0", port=PORT, debug=False)
 
 
