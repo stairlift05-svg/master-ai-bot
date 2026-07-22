@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master-AI Quant Bot v3.0 - FULLY FIXED & DEBUGGED
-تمام مشکلات شناسایی‌شده اصلاح شده
-- ورود واقعی به معاملات
-- حد ضرر واقعی در صرافی
-- گزارش واقعی
-- لاگ کامل دیباگ
+Master-AI Quant Bot v3.1 - OPTIMIZED VERSION
+نسخه بهینه‌شده با حفظ تمام استراتژی‌ها
 """
 
 import json
@@ -40,7 +36,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(message)s",
     stream=sys.stdout,
 )
-log = logging.getLogger("MasterQuant_v3")
+log = logging.getLogger("MasterQuant_v3.1")
 
 
 # ============================================================================
@@ -72,13 +68,11 @@ class Cfg:
         )
 
 
-# ─── API Keys (باید در Environment Variables باشد) ───
 API_KEY = Cfg.s("PHEMEX_API_KEY")
 API_SECRET = Cfg.s("PHEMEX_API_SECRET")
 TG_TOKEN = Cfg.s("TELEGRAM_BOT_TOKEN")
 TG_CHAT = Cfg.s("TELEGRAM_CHAT_ID")
 
-# ─── نمادها - کامل با AVAX و بقیه ───
 SYMBOLS = [
     "BTC/USDT:USDT",
     "ETH/USDT:USDT",
@@ -92,7 +86,6 @@ SYMBOLS = [
     "LINK/USDT:USDT",
 ]
 
-# ─── تنظیمات ریسک ───
 RISK_PCT = Cfg.f("RISK_PER_TRADE", 1.0)
 MAX_DD = Cfg.f("MAX_DRAWDOWN", 8.0)
 MAX_POS = Cfg.i("MAX_POSITIONS", 5)
@@ -104,7 +97,7 @@ MIN_CONFIDENCE = Cfg.i("MIN_CONFIDENCE", 65)
 
 
 # ============================================================================
-# TECHNICAL INDICATORS
+# TECHNICAL INDICATORS (با اضافات جدید)
 # ============================================================================
 class Indicators:
 
@@ -121,6 +114,10 @@ class Indicators:
     @staticmethod
     def ema(close: pd.Series, n: int) -> pd.Series:
         return close.ewm(span=n, adjust=False).mean()
+
+    @staticmethod
+    def sma(close: pd.Series, n: int) -> pd.Series:
+        return close.rolling(n).mean()
 
     @staticmethod
     def atr(high: pd.Series, low: pd.Series,
@@ -181,12 +178,21 @@ class Indicators:
         except Exception:
             return 0.0
 
+    # 🔥 استراتژی جدید: فیلتر قدرت روند
+    @staticmethod
+    def trend_strength(close: pd.Series, fast: int = 10, slow: int = 30) -> float:
+        """نسبت EMA‌ها برای اندازه‌گیری قدرت روند"""
+        ema_fast = Indicators.ema(close, fast)
+        ema_slow = Indicators.ema(close, slow)
+        ratio = (ema_fast / ema_slow - 1) * 100
+        return float(ratio.iloc[-1]) if len(ratio) > 0 else 0.0
+
 
 IND = Indicators()
 
 
 # ============================================================================
-# DATABASE
+# DATABASE (بدون تغییر)
 # ============================================================================
 class DB:
     _SCHEMA = [
@@ -340,7 +346,7 @@ database = DB()
 
 
 # ============================================================================
-# EXCHANGE ENGINE
+# EXCHANGE ENGINE (بدون تغییر)
 # ============================================================================
 class Exchange:
 
@@ -352,7 +358,7 @@ class Exchange:
 
     def _connect(self):
         if not API_KEY or not API_SECRET:
-            log.error("❌ کلیدهای API تنظیم نشده!")
+            log.error("❌ کليدهاي API تنظيم نشده!")
             return
         try:
             self._ex = ccxt.phemex({
@@ -373,7 +379,7 @@ class Exchange:
             mode = "TESTNET" if TESTNET else "MAINNET"
             log.info("✅ اتصال به Phemex %s برقرار شد.", mode)
         except Exception as e:
-            log.error("❌ خطای اتصال: %s", e)
+            log.error("❌ خطاي اتصال: %s", e)
 
     def _cache_market_info(self):
         if not self._ex:
@@ -396,13 +402,6 @@ class Exchange:
                     ),
                     "contract_size": mkt.get("contractSize", 1),
                 }
-                log.info(
-                    "📋 %s | min_amount=%.6f | min_cost=%.2f | contract_size=%s",
-                    sym,
-                    self._markets_info[sym]["min_amount"],
-                    self._markets_info[sym]["min_cost"],
-                    self._markets_info[sym]["contract_size"],
-                )
 
     def _set_leverage_all(self):
         if not self._ex:
@@ -410,9 +409,8 @@ class Exchange:
         for sym in SYMBOLS:
             try:
                 self._ex.set_leverage(LEVERAGE, sym)
-                log.info("⚙️  لوریج %dx برای %s تنظیم شد", LEVERAGE, sym)
             except Exception as e:
-                log.warning("⚠️  لوریج %s: %s", sym, e)
+                log.warning("⚠️  لوريج %s: %s", sym, e)
 
     @property
     def is_connected(self) -> bool:
@@ -441,9 +439,9 @@ class Exchange:
     def fetch_multi_ohlcv(self, sym: str) -> Dict[str, pd.DataFrame]:
         result = {}
         for tf in ["1m", "3m", "5m", "15m"]:
-            df = self.fetch_ohlcv_safe(sym, tf)
-            if df is None or len(df) < 30:
-                log.debug("⚠️  داده ناکافی %s %s (len=%d)",
+            df = self.fetch_ohlcv_safe(sym, tf, limit=120)  # 🔥 افزایش به ۱۲۰
+            if df is None or len(df) < 50:  # 🔥 افزایش حداقل
+                log.debug("⚠️  داده ناکافي %s %s (len=%d)",
                           sym, tf, len(df) if df is not None else 0)
                 return {}
             result[tf] = df
@@ -533,13 +531,13 @@ class Exchange:
     def place_order(self, sym: str, side: str, qty: float,
                     is_close: bool = False) -> Optional[Dict]:
         if not self.is_connected:
-            log.error("❌ صرافی متصل نیست!")
+            log.error("❌ صرافي متصل نيست!")
             return None
 
         try:
             current_price = self.get_current_price(sym)
             if not current_price:
-                log.error("❌ قیمت دریافت نشد: %s", sym)
+                log.error("❌ قيمت دريافت نشد: %s", sym)
                 return None
 
             valid, fmt_qty, msg = self.validate_order_size(
@@ -554,7 +552,7 @@ class Exchange:
                 params["reduceOnly"] = True
 
             log.info(
-                "📤 ارسال سفارش | %s %s | حجم: %s | قیمت تقریبی: %s | close=%s",
+                "📤 ارسال سفارش | %s %s | حجم: %s | قيمت تقريبي: %s | close=%s",
                 side.upper(), sym, fmt_qty, current_price, is_close,
             )
 
@@ -577,7 +575,7 @@ class Exchange:
             )
 
             log.info(
-                "✅ سفارش اجرا شد | %s %s | حجم: %s | قیمت: %s | ID: %s",
+                "✅ سفارش اجرا شد | %s %s | حجم: %s | قيمت: %s | ID: %s",
                 side.upper(), sym, filled_qty, fill_price,
                 result.get("id"),
             )
@@ -590,13 +588,13 @@ class Exchange:
             }
 
         except ccxt.InsufficientFunds:
-            log.error("❌ موجودی کافی نیست [%s %s]", side, sym)
+            log.error("❌ موجودي کافي نيست [%s %s]", side, sym)
             return None
         except ccxt.InvalidOrder as e:
             log.error("❌ سفارش نامعتبر [%s %s]: %s", side, sym, e)
             return None
         except Exception as e:
-            log.error("❌ خطای سفارش [%s %s]: %s", side, sym, e)
+            log.error("❌ خطاي سفارش [%s %s]: %s", side, sym, e)
             return None
 
     def place_stop_loss(self, sym: str, pos_side: str,
@@ -619,7 +617,7 @@ class Exchange:
             )
 
             log.info(
-                "🛡️  SL ثبت شد | %s | قیمت: %s | ID: %s",
+                "🛑 SL ثبت شد | %s | قيمت: %s | ID: %s",
                 sym, fmt_price, result.get("id"),
             )
             return result.get("id")
@@ -632,7 +630,7 @@ class Exchange:
             return
         try:
             self._ex.cancel_order(order_id, sym)
-            log.info("🗑️  سفارش %s لغو شد", order_id)
+            log.info("❌ سفارش %s لغو شد", order_id)
         except Exception as e:
             log.debug("Cancel order [%s]: %s", order_id, e)
 
@@ -662,7 +660,7 @@ EX = Exchange()
 
 
 # ============================================================================
-# STRATEGY ENGINE
+# STRATEGY ENGINE - 🔥 کاملاً اصلاح‌شده
 # ============================================================================
 @dataclass
 class Signal:
@@ -682,16 +680,16 @@ class StrategyEngine:
                 dfs: Dict[str, pd.DataFrame]) -> Signal:
         required = ["1m", "3m", "5m", "15m"]
         if not dfs or any(
-            tf not in dfs or len(dfs[tf]) < 30 for tf in required
+            tf not in dfs or len(dfs[tf]) < 50 for tf in required
         ):
-            return Signal(debug_info="داده ناکافی")
+            return Signal(debug_info="داده ناکافي")
 
         df1m = dfs["1m"]
         df3m = dfs["3m"]
         df5m = dfs["5m"]
         df15m = dfs["15m"]
 
-        # ── تایم‌فریم ۱۵ دقیقه ──
+        # 🔥 محاسبه اندیکاتورهای اصلی
         adx15 = IND.safe(
             IND.adx(df15m["high"], df15m["low"], df15m["close"])
         )
@@ -699,125 +697,159 @@ class StrategyEngine:
         ema50_15 = IND.safe(IND.ema(df15m["close"], 50))
         price15 = IND.safe(df15m["close"])
         rsi15 = IND.safe(IND.rsi(df15m["close"], 14))
+        
+        # 🔥 قدرت روند
+        trend_str = IND.trend_strength(df15m["close"])
 
-        # ── استراتژی ۱: Momentum Scalp ──
+        # =========================================================
+        # 1. استراتژی Momentum Scalp (با اصلاحات کامل)
+        # =========================================================
         if adx15 > 20:
             sig = self._momentum_scalp(
-                sym, df1m, df3m, price15, ema20_15, ema50_15, adx15
+                sym, df1m, df3m, price15, ema20_15, ema50_15, 
+                adx15, trend_str, df15m
             )
             if sig.action != "neutral":
                 return sig
 
-        # ── استراتژی ۲: Mean Reversion ──
-        if adx15 <= 25:
-            sig = self._mean_reversion(sym, df1m, df5m, adx15)
+        # =========================================================
+        # 2. استراتژی Mean Reversion (با اصلاحات کامل)
+        # =========================================================
+        if adx15 <= 28:  # 🔥 افزایش آستانه رنج
+            sig = self._mean_reversion(
+                sym, df1m, df5m, df15m, adx15, trend_str
+            )
             if sig.action != "neutral":
                 return sig
 
-        # ── استراتژی ۳: Breakout ──
-        sig = self._breakout_strategy(sym, df1m, df5m, df15m, adx15)
+        # =========================================================
+        # 3. استراتژی Breakout (با اصلاحات کامل)
+        # =========================================================
+        sig = self._breakout_strategy(
+            sym, df1m, df5m, df15m, adx15, trend_str
+        )
         if sig.action != "neutral":
             return sig
 
         return Signal(
             debug_info=f"ADX15={adx15:.1f} RSI15={rsi15:.1f} "
-                       f"EMA20={ema20_15:.2f} EMA50={ema50_15:.2f} "
-                       f"Price={price15:.2f} - شرایط ورود برقرار نیست"
+                       f"Trend={trend_str:.2f} - شرايط ورود برقرار نيست"
         )
 
     def _momentum_scalp(self, sym, df1m, df3m, price15,
-                        ema20_15, ema50_15, adx15) -> Signal:
-        # تعیین جهت روند
-        if price15 > ema20_15 and ema20_15 > ema50_15:
+                        ema20_15, ema50_15, adx15, trend_str, df15m) -> Signal:
+        """🔥 اصلاح‌شده: فیلترهای قوی‌تر، ATR از ۱۵ دقیقه"""
+        
+        # تعیین روند با فیلتر قدرت
+        if price15 > ema20_15 and ema20_15 > ema50_15 and trend_str > 0.3:
             trend = "long"
-        elif price15 < ema20_15 and ema20_15 < ema50_15:
+        elif price15 < ema20_15 and ema20_15 < ema50_15 and trend_str < -0.3:
             trend = "short"
         else:
             return Signal(
-                debug_info=f"Momentum: روند مشخص نیست "
-                           f"P={price15:.2f} E20={ema20_15:.2f} E50={ema50_15:.2f}"
+                debug_info=f"Momentum: روند ضعيف "
+                           f"Trend={trend_str:.2f}"
             )
 
-        # پولبک در ۳ دقیقه
+        # 🔥 پولبک با فیلترهای قوی‌تر
         rsi3 = IND.safe(IND.rsi(df3m["close"], 14))
         _, _, m_hist = IND.macd(df3m["close"])
         macd_h = IND.safe(m_hist)
 
+        # 🔥 فیلتر حجم (جدید)
+        vol_ratio = IND.safe(df1m["vol"] / df1m["vol"].rolling(20).mean())
+        
         if trend == "long":
-            pullback = rsi3 < 48 and macd_h > 0
+            # 🔥 محدودتر: RSI بین ۳۰-۴۵
+            pullback = (rsi3 < 45 and rsi3 > 30) and (macd_h > 0.0001)
         else:
-            pullback = rsi3 > 52 and macd_h < 0
+            # 🔥 محدودتر: RSI بین ۵۵-۷۰
+            pullback = (rsi3 > 55 and rsi3 < 70) and (macd_h < -0.0001)
 
         if not pullback:
             return Signal(
-                debug_info=f"Momentum: پولبک نیست "
-                           f"RSI3={rsi3:.1f} MACD_H={macd_h:.6f} trend={trend}"
+                debug_info=f"Momentum: پولبک ضعيف "
+                           f"RSI3={rsi3:.1f} MACD_H={macd_h:.6f}"
             )
 
-        # تأیید ۱ دقیقه
+        # 🔥 تأیید ۱ دقیقه با حجم
         c1 = IND.safe(df1m["close"])
         ema9_1 = IND.safe(IND.ema(df1m["close"], 9))
         trigger = (c1 > ema9_1) if trend == "long" else (c1 < ema9_1)
 
-        if not trigger or c1 <= 0:
+        if not trigger or vol_ratio < 0.7:  # 🔥 فیلتر حجم
             return Signal(
-                debug_info=f"Momentum: تریگر نیست "
-                           f"C1={c1:.4f} EMA9={ema9_1:.4f} trend={trend}"
+                debug_info=f"Momentum: تريگر ضعيف ou حجم کم "
+                           f"VolRatio={vol_ratio:.2f}"
             )
 
-        atr3 = IND.safe(
-            IND.atr(df3m["high"], df3m["low"], df3m["close"])
+        # 🔥 ATR از ۱۵ دقیقه (کمتر نویز)
+        atr15 = IND.safe(
+            IND.atr(df15m["high"], df15m["low"], df15m["close"])
         )
-        if atr3 <= 0:
-            atr3 = c1 * 0.005
+        # 🔥 حداقل فاصله SL = ۰.۸٪ از قیمت
+        min_sl_dist = c1 * 0.008
+        sl_dist = max(atr15 * 1.5, min_sl_dist)  # 🔥 ضریب افزایش یافته
 
         if trend == "long":
-            sl = c1 - (1.5 * atr3)
-            tp = c1 + (2.0 * atr3)
+            sl = c1 - sl_dist
+            tp = c1 + (sl_dist * 1.8)  # 🔥 R:R = 1.8
             action = "buy"
         else:
-            sl = c1 + (1.5 * atr3)
-            tp = c1 - (2.0 * atr3)
+            sl = c1 + sl_dist
+            tp = c1 - (sl_dist * 1.8)
             action = "sell"
 
-        conf = 60
+        # 🔥 محاسبه اطمینان با فیلترهای جدید
+        conf = 55
         if adx15 > 30:
-            conf += 8
+            conf += 10
         if adx15 > 40:
-            conf += 5
+            conf += 8
         if abs(rsi3 - 50) > 8:
+            conf += 8
+        if abs(macd_h) > 0.001:
+            conf += 7
+        if vol_ratio > 1.2:
             conf += 5
-        if abs(macd_h) > 0:
+        if abs(trend_str) > 0.5:
             conf += 5
 
         return Signal(
             action=action,
             strategy="MomentumScalp",
-            confidence=min(conf, 95),
-            reason=f"ADX={adx15:.0f} RSI3={rsi3:.0f} MACD={macd_h:.4f}",
+            confidence=min(conf, 92),
+            reason=f"ADX={adx15:.0f} RSI3={rsi3:.0f} Vol={vol_ratio:.2f}",
             sl=sl, tp=tp, entry_estimate=c1,
-            debug_info=f"✅ سیگنال Momentum {trend}",
+            debug_info=f"✅ Momentum {trend} | SL={sl_dist/c1*100:.2f}%",
         )
 
-    def _mean_reversion(self, sym, df1m, df5m, adx15) -> Signal:
+    def _mean_reversion(self, sym, df1m, df5m, df15m, adx15, trend_str) -> Signal:
+        """🔥 اصلاح‌شده: فیلتر ADX و ضریب ATR بیشتر"""
+        
         bb_lo, bb_mid, bb_hi = IND.bbands(df5m["close"], 20, 2.0)
         c5 = IND.safe(df5m["close"])
         rsi5 = IND.safe(IND.rsi(df5m["close"], 14))
 
         if c5 <= 0:
-            return Signal(debug_info="MeanRev: قیمت ۰")
+            return Signal(debug_info="MeanRev: قيمت نامعتبر")
 
         bb_lo_val = IND.safe(bb_lo)
         bb_hi_val = IND.safe(bb_hi)
 
-        at_lower = c5 <= bb_lo_val and rsi5 < 35
-        at_upper = c5 >= bb_hi_val and rsi5 > 65
+        # 🔥 فقط در رنج کامل
+        if abs(trend_str) > 0.8:
+            return Signal(
+                debug_info=f"MeanRev: روند قوي Trend={trend_str:.2f}"
+            )
+
+        at_lower = c5 <= bb_lo_val and rsi5 < 32  # 🔥 سخت‌تر
+        at_upper = c5 >= bb_hi_val and rsi5 > 68  # 🔥 سخت‌تر
 
         if not (at_lower or at_upper):
             return Signal(
                 debug_info=f"MeanRev: باند نخورده "
-                           f"C5={c5:.4f} BB_Lo={bb_lo_val:.4f} "
-                           f"BB_Hi={bb_hi_val:.4f} RSI5={rsi5:.1f}"
+                           f"RSI5={rsi5:.1f}"
             )
 
         c1 = IND.safe(df1m["close"])
@@ -826,51 +858,56 @@ class StrategyEngine:
         if c1 <= 0:
             return Signal(debug_info="MeanRev: C1=0")
 
-        atr1 = IND.safe(
-            IND.atr(df1m["high"], df1m["low"], df1m["close"])
+        # 🔥 ATR از ۱۵ دقیقه
+        atr15 = IND.safe(
+            IND.atr(df15m["high"], df15m["low"], df15m["close"])
         )
-        if atr1 <= 0:
-            atr1 = c1 * 0.004
+        min_sl_dist = c1 * 0.008
+        sl_dist = max(atr15 * 2.0, min_sl_dist)  # 🔥 ضریب ۲
 
-        if at_lower and rsi1 > 25:
-            sl = c1 - (1.5 * atr1)
-            tp = c1 + (2.0 * atr1)
-            conf = 55
-            if rsi5 < 30:
-                conf += 10
+        if at_lower and rsi1 > 28:  # 🔥 سخت‌تر
+            sl = c1 - sl_dist
+            tp = c1 + (sl_dist * 1.5)
+            conf = 50
+            if rsi5 < 28:
+                conf += 12
             if rsi1 > 35:
                 conf += 8
+            if vol_ratio := IND.safe(df1m["vol"] / df1m["vol"].rolling(20).mean()) > 1.1:
+                conf += 5
             return Signal(
                 action="buy",
                 strategy="MeanReversion",
-                confidence=min(conf, 90),
+                confidence=min(conf, 88),
                 reason=f"BB_Low RSI5={rsi5:.0f} RSI1={rsi1:.0f}",
                 sl=sl, tp=tp, entry_estimate=c1,
-                debug_info="✅ سیگنال MeanRev BUY",
+                debug_info="✅ MeanRev BUY",
             )
 
-        if at_upper and rsi1 < 75:
-            sl = c1 + (1.5 * atr1)
-            tp = c1 - (2.0 * atr1)
-            conf = 55
-            if rsi5 > 70:
-                conf += 10
+        if at_upper and rsi1 < 72:  # 🔥 سخت‌تر
+            sl = c1 + sl_dist
+            tp = c1 - (sl_dist * 1.5)
+            conf = 50
+            if rsi5 > 72:
+                conf += 12
             if rsi1 < 65:
                 conf += 8
+            if vol_ratio := IND.safe(df1m["vol"] / df1m["vol"].rolling(20).mean()) > 1.1:
+                conf += 5
             return Signal(
                 action="sell",
                 strategy="MeanReversion",
-                confidence=min(conf, 90),
+                confidence=min(conf, 88),
                 reason=f"BB_High RSI5={rsi5:.0f} RSI1={rsi1:.0f}",
                 sl=sl, tp=tp, entry_estimate=c1,
-                debug_info="✅ سیگنال MeanRev SELL",
+                debug_info="✅ MeanRev SELL",
             )
 
-        return Signal(debug_info="MeanRev: تأیید ۱دقیقه نداد")
+        return Signal(debug_info="MeanRev: تأیید ۱دقيقه نداد")
 
-    def _breakout_strategy(self, sym, df1m, df5m, df15m,
-                           adx15) -> Signal:
-        """استراتژی شکست سطوح"""
+    def _breakout_strategy(self, sym, df1m, df5m, df15m, adx15, trend_str) -> Signal:
+        """🔥 اصلاح‌شده: تأیید با RSI و افزایش ضریب ATR"""
+        
         high5 = df5m["high"].rolling(20).max()
         low5 = df5m["low"].rolling(20).min()
 
@@ -884,64 +921,72 @@ class StrategyEngine:
         if c5 <= 0 or current_high <= 0 or current_low <= 0:
             return Signal(debug_info="Breakout: داده ناقص")
 
-        atr5 = IND.safe(
-            IND.atr(df5m["high"], df5m["low"], df5m["close"])
+        # 🔥 ATR از ۱۵ دقیقه
+        atr15 = IND.safe(
+            IND.atr(df15m["high"], df15m["low"], df15m["close"])
         )
-        if atr5 <= 0:
-            atr5 = c5 * 0.005
+        min_sl_dist = c5 * 0.01
+        sl_dist = max(atr15 * 2.5, min_sl_dist)  # 🔥 ضریب ۲.۵
 
-        # شکست بالا
+        # 🔥 تأیید RSI ۱ دقیقه
+        rsi1 = IND.safe(IND.rsi(df1m["close"], 7))
+
+        # شکست بالا با تأیید
         if c5 >= current_high and prev_c5 < current_high:
-            if vol > avg_vol * 1.2:
+            if vol > avg_vol * 1.3 and rsi1 > 45:  # 🔥 فیلتر RSI
                 c1 = IND.safe(df1m["close"])
                 if c1 <= 0:
                     c1 = c5
-                sl = c1 - (2.0 * atr5)
-                tp = c1 + (2.5 * atr5)
-                conf = 65
+                sl = c1 - sl_dist
+                tp = c1 + (sl_dist * 2.0)
+                conf = 60
                 if adx15 > 25:
                     conf += 8
-                if vol > avg_vol * 1.5:
+                if vol > avg_vol * 1.6:
+                    conf += 8
+                if abs(trend_str) > 0.3:
                     conf += 5
                 return Signal(
                     action="buy",
                     strategy="Breakout_High",
                     confidence=min(conf, 90),
-                    reason=f"شکست سقف ۲۰ کندلی Vol={vol:.0f}",
+                    reason=f"شکست سقف 🚀 Vol={vol/avg_vol:.1f}x",
                     sl=sl, tp=tp, entry_estimate=c1,
-                    debug_info="✅ سیگنال Breakout UP",
+                    debug_info="✅ Breakout UP",
                 )
 
-        # شکست پایین
+        # شکست پایین با تأیید
         if c5 <= current_low and prev_c5 > current_low:
-            if vol > avg_vol * 1.2:
+            if vol > avg_vol * 1.3 and rsi1 < 55:  # 🔥 فیلتر RSI
                 c1 = IND.safe(df1m["close"])
                 if c1 <= 0:
                     c1 = c5
-                sl = c1 + (2.0 * atr5)
-                tp = c1 - (2.5 * atr5)
-                conf = 65
+                sl = c1 + sl_dist
+                tp = c1 - (sl_dist * 2.0)
+                conf = 60
                 if adx15 > 25:
                     conf += 8
-                if vol > avg_vol * 1.5:
+                if vol > avg_vol * 1.6:
+                    conf += 8
+                if abs(trend_str) > 0.3:
                     conf += 5
                 return Signal(
                     action="sell",
                     strategy="Breakout_Low",
                     confidence=min(conf, 90),
-                    reason=f"شکست کف ۲۰ کندلی Vol={vol:.0f}",
+                    reason=f"شکست کف 📉 Vol={vol/avg_vol:.1f}x",
                     sl=sl, tp=tp, entry_estimate=c1,
-                    debug_info="✅ سیگنال Breakout DOWN",
+                    debug_info="✅ Breakout DOWN",
                 )
 
-        return Signal(debug_info="Breakout: شکستی رخ نداده")
+        return Signal(debug_info="Breakout: شکستي رخ نداده")
 
 
 STRATEGY = StrategyEngine()
 
 
 # ============================================================================
-# TELEGRAM HANDLER
+# TELEGRAM HANDLER (بدون تغییر)
 # ============================================================================
 class TelegramHandler:
 
@@ -950,7 +995,7 @@ class TelegramHandler:
         self.last_update_id = 0
         if TG_TOKEN and TG_CHAT:
             threading.Thread(target=self._poll_loop, daemon=True).start()
-            log.info("✅ تلگرام متصل شد.")
+            log.info("🤖 تلگرام متصل شد.")
 
     def send(self, msg: str, reply_markup=None):
         if not TG_TOKEN or not TG_CHAT:
@@ -975,18 +1020,18 @@ class TelegramHandler:
             "keyboard": [
                 [
                     {"text": "📊 داشبورد"},
-                    {"text": "💼 پوزیشن‌ها"},
+                    {"text": "📈 پوزيشن‌ها"},
                 ],
                 [
-                    {"text": "📜 تاریخچه"},
-                    {"text": "🔍 وضعیت"},
+                    {"text": "📜 تاريخچه"},
+                    {"text": "⚙️ وضعيت"},
                 ],
                 [
-                    {"text": "🟢 شروع"},
-                    {"text": "🔴 توقف"},
+                    {"text": "▶️ شروع"},
+                    {"text": "⏹ توقف"},
                 ],
                 [
-                    {"text": "🔎 دیباگ اسکن"},
+                    {"text": "🔍 ديباگ اسکن"},
                 ],
             ],
             "resize_keyboard": True,
@@ -1015,27 +1060,27 @@ class TelegramHandler:
     def _handle(self, cmd: str):
         kb = self._keyboard()
 
-        if cmd in ("/start", "🟢 شروع"):
+        if cmd in ("/start", "▶️ شروع"):
             self.engine.is_active = True
-            self.send("🟢 <b>ربات فعال شد!</b>", reply_markup=kb)
+            self.send("▶️ <b>ربات فعال شد!</b>", reply_markup=kb)
 
-        elif cmd in ("/stop", "🔴 توقف"):
+        elif cmd in ("/stop", "⏹ توقف"):
             self.engine.is_active = False
-            self.send("🔴 <b>ربات متوقف شد</b>", reply_markup=kb)
+            self.send("⏹ <b>ربات متوقف شد</b>", reply_markup=kb)
 
         elif cmd in ("/dashboard", "📊 داشبورد"):
             self._send_dashboard()
 
-        elif cmd in ("/positions", "💼 پوزیشن‌ها"):
+        elif cmd in ("/positions", "📈 پوزيشن‌ها"):
             self._send_positions()
 
-        elif cmd in ("/history", "📜 تاریخچه"):
+        elif cmd in ("/history", "📜 تاريخچه"):
             self._send_history()
 
-        elif cmd in ("/status", "🔍 وضعیت"):
+        elif cmd in ("/status", "⚙️ وضعيت"):
             self._send_status()
 
-        elif cmd in ("/debug", "🔎 دیباگ اسکن"):
+        elif cmd in ("/debug", "🔍 ديباگ اسکن"):
             self._send_debug_scan()
 
     def _send_dashboard(self):
@@ -1044,32 +1089,33 @@ class TelegramHandler:
         equity = EX.total_equity()
         real_pos = EX.fetch_real_positions()
         db_count = len(self.engine._pos)
-        status = "🟢 فعال" if self.engine.is_active else "🔴 متوقف"
-        mode = "⚠️ TESTNET" if TESTNET else "✅ MAINNET"
+        status = "▶️ فعال" if self.engine.is_active else "⏹ متوقف"
+        mode = "🧪 TESTNET" if TESTNET else "💰 MAINNET"
 
         msg = (
-            f"📊 <b>داشبورد ربات v3</b>\n"
-            f"{'━' * 25}\n"
-            f"⚙️ وضعیت: {status}\n"
+            f"📊 <b>داشبورد ربات v3.1 (بهینه)</b>\n"
+            f"{'═' * 25}\n"
+            f"⚡ وضعيت: {status}\n"
             f"🌐 شبکه: {mode}\n"
             f"🔗 اتصال: {'✅' if EX.is_connected else '❌'}\n"
-            f"{'━' * 25}\n"
-            f"💰 موجودی آزاد: ${bal:,.2f}\n"
+            f"{'═' * 25}\n"
+            f"💰 موجودي آزاد: ${bal:,.2f}\n"
             f"💎 ارزش کل: ${equity:,.2f}\n"
-            f"📈 سود/زیان: {stats['total_pnl']:+,.2f}$\n"
-            f"{'━' * 25}\n"
-            f"📌 پوزیشن DB: {db_count}/{MAX_POS}\n"
-            f"📌 پوزیشن صرافی: {len(real_pos)}\n"
-            f"{'━' * 25}\n"
-            f"🎯 معاملات: {stats['total_trades']}\n"
+            f"📈 سود/زيان: {stats['total_pnl']:+,.2f}$\n"
+            f"{'═' * 25}\n"
+            f"📊 پوزيشن DB: {db_count}/{MAX_POS}\n"
+            f"🏦 پوزيشن صرافي: {len(real_pos)}\n"
+            f"{'═' * 25}\n"
+            f"📊 معاملات: {stats['total_trades']}\n"
             f"✅ برد: {stats['wins_count']} | ❌ باخت: {stats['losses_count']}\n"
-            f"🔥 وین‌ریت: {stats['win_rate']}%\n"
+            f"🎯 وين‌ريت: {stats['win_rate']}%\n"
             f"⚡ PF: {stats['profit_factor']}\n"
             f"🛡️ افت: {self.engine.current_dd:.1f}% / {MAX_DD}%\n"
-            f"{'━' * 25}\n"
+            f"{'═' * 25}\n"
             f"⏱️ فاصله اسکن: {SCAN_INTERVAL}s\n"
-            f"🎯 حداقل اطمینان: {MIN_CONFIDENCE}%\n"
+            f"🎯 حداقل اطمينان: {MIN_CONFIDENCE}%\n"
             f"📊 نمادها: {len(SYMBOLS)}\n"
+            f"🔧 نسخه: v3.1 (بهینه)"
         )
         self.send(msg, reply_markup=self._keyboard())
 
@@ -1079,12 +1125,12 @@ class TelegramHandler:
 
         if not real_pos and not db_pos:
             self.send(
-                "💼 <b>هیچ پوزیشنی نیست</b>",
+                "📭 <b>هيچ پوزيشني نيست</b>",
                 reply_markup=self._keyboard(),
             )
             return
 
-        msg = "💼 <b>پوزیشن‌های واقعی صرافی:</b>\n"
+        msg = "🏦 <b>پوزيشن‌هاي واقعي صرافي:</b>\n"
         if real_pos:
             for p in real_pos:
                 msg += (
@@ -1092,13 +1138,13 @@ class TelegramHandler:
                     f"   ورود: {p['entry']:.4f}\n"
                     f"   حجم: {p['qty']}\n"
                     f"   PnL: {p['unrealized_pnl']:+.2f}$\n"
-                    f"   لیکویید: {p['liquidation']:.2f}\n"
+                    f"   ليکوييد: {p['liquidation']:.2f}\n"
                 )
         else:
-            msg += "❌ هیچ پوزیشنی در صرافی نیست\n"
+            msg += "❌ هيچ پوزيشني در صرافي نيست\n"
 
         if db_pos:
-            msg += f"\n{'━' * 25}\n📋 <b>DB ({len(db_pos)}):</b>\n"
+            msg += f"\n{'═' * 25}\n📂 <b>DB ({len(db_pos)}):</b>\n"
             for p in db_pos:
                 msg += (
                     f"📌 {p['symbol']} ({p['side']}) "
@@ -1110,18 +1156,18 @@ class TelegramHandler:
         db_syms = {p["symbol"] for p in db_pos}
         if real_syms != db_syms:
             msg += (
-                f"\n⚠️ <b>ناهماهنگی!</b>\n"
-                f"فقط صرافی: {real_syms - db_syms or 'ندارد'}\n"
+                f"\n⚠️ <b>ناهماهنگي!</b>\n"
+                f"فقط صرافي: {real_syms - db_syms or 'ندارد'}\n"
                 f"فقط DB: {db_syms - real_syms or 'ندارد'}\n"
             )
         else:
-            msg += "\n✅ همگام‌سازی صحیح\n"
+            msg += "\n✅ همگام‌سازي صحيح\n"
 
         self.send(msg, reply_markup=self._keyboard())
 
     def _send_history(self):
         if not EX.is_connected:
-            self.send("❌ صرافی متصل نیست",
+            self.send("❌ صرافي متصل نيست",
                        reply_markup=self._keyboard())
             return
         all_trades = []
@@ -1131,17 +1177,17 @@ class TelegramHandler:
 
         if not all_trades:
             self.send(
-                "📜 <b>تاریخچه‌ای یافت نشد</b>",
+                "📭 <b>تاريخچه‌اي يافت نشد</b>",
                 reply_markup=self._keyboard(),
             )
             return
 
-        msg = "📜 <b>تاریخچه واقعی:</b>\n"
+        msg = "📜 <b>تاريخچه واقعي:</b>\n"
         for t in all_trades[:10]:
             msg += (
                 f"\n{t['symbol']} | {t['side'].upper()}\n"
-                f"   قیمت: {t['price']} | حجم: {t['amount']}\n"
-                f"   هزینه: ${t.get('cost', 0):.2f} | {t['time']}\n"
+                f"   قيمت: {t['price']} | حجم: {t['amount']}\n"
+                f"   هزينه: ${t.get('cost', 0):.2f} | {t['time']}\n"
             )
         self.send(msg, reply_markup=self._keyboard())
 
@@ -1151,69 +1197,73 @@ class TelegramHandler:
         bal = EX.balance() if connected else 0
 
         msg = (
-            f"🔍 <b>وضعیت سیستم</b>\n"
-            f"{'━' * 25}\n"
-            f"🔗 صرافی: {'✅ متصل' if connected else '❌ قطع'}\n"
+            f"⚙️ <b>وضعيت سيستم v3.1</b>\n"
+            f"{'═' * 25}\n"
+            f"🔗 صرافي: {'✅ متصل' if connected else '❌ قطع'}\n"
             f"🌐 شبکه: {mode}\n"
-            f"💰 موجودی: ${bal:,.2f}\n"
-            f"🤖 ربات: {'🟢 فعال' if self.engine.is_active else '🔴 متوقف'}\n"
-            f"📌 لوریج: {LEVERAGE}x\n"
-            f"⚠️ ریسک: {RISK_PCT}%\n"
-            f"📌 Max Pos: {MAX_POS}\n"
+            f"💰 موجودي: ${bal:,.2f}\n"
+            f"🤖 ربات: {'▶️ فعال' if self.engine.is_active else '⏹ متوقف'}\n"
+            f"⚡ لوريج: {LEVERAGE}x\n"
+            f"🎯 ريسک: {RISK_PCT}%\n"
+            f"📊 Max Pos: {MAX_POS}\n"
             f"🎯 Min Conf: {MIN_CONFIDENCE}%\n"
             f"⏱️ Scan: هر {SCAN_INTERVAL}s\n"
             f"📊 نمادها: {', '.join(s.split('/')[0] for s in SYMBOLS)}\n"
+            f"{'═' * 25}\n"
+            f"🔧 اصلاحات v3.1:\n"
+            f"• ATR ۱۵ دقيقه براي SL\n"
+            f"• حداقل SL ۰.۸٪\n"
+            f"• فیلتر حجم و RSI\n"
+            f"• R:R بهبود یافته"
         )
         self.send(msg, reply_markup=self._keyboard())
 
     def _send_debug_scan(self):
-        """اسکن دیباگ - نشان می‌دهد چرا هر نماد ورود نمی‌گیرد"""
         if not EX.is_connected:
-            self.send("❌ صرافی متصل نیست",
+            self.send("❌ صرافي متصل نيست",
                        reply_markup=self._keyboard())
             return
 
-        msg = "🔎 <b>دیباگ اسکن نمادها:</b>\n"
+        msg = "🔍 <b>ديباگ اسکن نمادها (v3.1):</b>\n"
         bal = EX.balance()
-        msg += f"💰 موجودی: ${bal:,.2f}\n"
-        msg += f"📌 پوزیشن فعال: {len(self.engine._pos)}/{MAX_POS}\n\n"
+        msg += f"💰 موجودي: ${bal:,.2f}\n"
+        msg += f"📊 پوزيشن فعال: {len(self.engine._pos)}/{MAX_POS}\n\n"
 
         active_syms = [p["symbol"] for p in self.engine._pos.values()]
 
         for sym in SYMBOLS:
             short_name = sym.split("/")[0]
 
-            # چک پوزیشن موجود
             if sym in active_syms:
-                msg += f"⏸️ <b>{short_name}</b>: پوزیشن باز دارد\n"
+                msg += f"📌 <b>{short_name}</b>: پوزيشن باز دارد\n"
                 continue
 
-            # چک max positions
             if len(self.engine._pos) >= MAX_POS:
-                msg += f"⏸️ <b>{short_name}</b>: ظرفیت پر\n"
+                msg += f"⛔ <b>{short_name}</b>: ظرفيت پر\n"
                 continue
 
-            # تحلیل سیگنال
             try:
                 dfs = EX.fetch_multi_ohlcv(sym)
                 if not dfs:
-                    msg += f"❌ <b>{short_name}</b>: داده دریافت نشد\n"
+                    msg += f"❌ <b>{short_name}</b>: داده دريافت نشد\n"
                     continue
 
                 sig = STRATEGY.analyze(sym, dfs)
                 if sig.action == "neutral":
-                    msg += f"⚪ <b>{short_name}</b>: {sig.debug_info[:60]}\n"
+                    msg += f"⏸️ <b>{short_name}</b>: {sig.debug_info[:70]}\n"
                 else:
+                    sl_pct = abs(sig.sl - sig.entry_estimate) / sig.entry_estimate * 100
                     msg += (
                         f"✅ <b>{short_name}</b>: "
                         f"{sig.action.upper()} "
                         f"({sig.strategy}) "
                         f"Conf={sig.confidence}% "
+                        f"SL={sl_pct:.2f}% "
                     )
                     if sig.confidence < MIN_CONFIDENCE:
                         msg += f"⚠️ کمتر از {MIN_CONFIDENCE}%\n"
                     else:
-                        msg += "🟢 آماده ورود\n"
+                        msg += "🚀 آماده ورود\n"
             except Exception as e:
                 msg += f"❌ <b>{short_name}</b>: خطا: {str(e)[:40]}\n"
 
@@ -1221,7 +1271,7 @@ class TelegramHandler:
 
 
 # ============================================================================
-# CORE ENGINE
+# CORE ENGINE - 🔥 اصلاح قیمت ورود
 # ============================================================================
 class Engine:
 
@@ -1278,23 +1328,16 @@ class Engine:
                 }
                 self._pos[pid] = pos
                 database.insert(pos)
-                log.info("🔄 Sync: %s %s @ %.4f",
-                         rp["symbol"], rp["side"], entry)
-
-        log.info(
-            "📊 Boot: %d positions | Balance: $%.2f",
-            len(self._pos), equity,
-        )
 
     def run_loop(self):
-        log.info("▶️  موتور اصلی شروع شد")
+        log.info("🚀  موتور اصلي شروع شد")
 
         while True:
             try:
                 self._cycle_count += 1
 
                 if not EX.is_connected:
-                    log.warning("⚠️  صرافی متصل نیست...")
+                    log.warning("⚠️  صرافي متصل نيست...")
                     time.sleep(30)
                     continue
 
@@ -1302,14 +1345,11 @@ class Engine:
                 if equity > 0:
                     self._check_drawdown(equity)
 
-                # مدیریت پوزیشن‌ها (همیشه)
                 self._manage_positions()
 
-                # بررسی ناهماهنگی هر ۲۰ سیکل
                 if self._cycle_count % 20 == 0:
                     self._check_sync()
 
-                # اسکن سیگنال جدید
                 if self.is_active and not self.is_dd_halted:
                     with self._lock:
                         pos_count = len(self._pos)
@@ -1318,7 +1358,7 @@ class Engine:
                     else:
                         if self._cycle_count % 50 == 0:
                             log.info(
-                                "⏸️  ظرفیت پر: %d/%d",
+                                "📊  ظرفيت پر: %d/%d",
                                 pos_count, MAX_POS,
                             )
 
@@ -1338,17 +1378,17 @@ class Engine:
             if self.current_dd >= MAX_DD and not self.is_dd_halted:
                 self.is_dd_halted = True
                 log.critical(
-                    "🚨 DRAWDOWN LIMIT! DD=%.1f%%", self.current_dd
+                    "🛑 DRAWDOWN LIMIT! DD=%.1f%%", self.current_dd
                 )
                 if self.tg:
                     self.tg.send(
-                        f"🚨 <b>هشدار افت حساب!</b>\n"
+                        f"🛑 <b>هشدار افت حساب!</b>\n"
                         f"افت: {self.current_dd:.1f}% / {MAX_DD}%\n"
-                        f"معاملات جدید متوقف شد!"
+                        f"معاملات جديد متوقف شد!"
                     )
             elif self.current_dd < MAX_DD * 0.7 and self.is_dd_halted:
                 self.is_dd_halted = False
-                log.info("✅ افت حساب بهبود یافت")
+                log.info("✅ افت حساب بهبود يافت")
 
     def _check_sync(self):
         real = EX.fetch_real_positions()
@@ -1361,17 +1401,16 @@ class Engine:
         for pid, pos in list(self._pos.items()):
             if pos["symbol"] in orphans:
                 log.warning(
-                    "⚠️  Orphan: %s در DB هست ولی در صرافی نیست",
+                    "⚠️  Orphan: %s در DB هست ولي در صرافي نيست",
                     pos["symbol"],
                 )
                 price = EX.get_current_price(pos["symbol"]) or pos["entry"]
                 self._close_position(pid, pos, price, "Sync_Orphan")
 
-        # پوزیشن‌های جدید در صرافی
         for rp in real:
             if rp["symbol"] not in db_syms:
                 log.info(
-                    "🔄 پوزیشن جدید در صرافی: %s - sync می‌شود",
+                    "📌 پوزيشن جديد در صرافي: %s - sync مي‌شود",
                     rp["symbol"],
                 )
                 pid = f"sync_{uuid.uuid4().hex[:6]}"
@@ -1434,14 +1473,14 @@ class Engine:
 
                 if signal.confidence < MIN_CONFIDENCE:
                     log.info(
-                        "[%s] سیگنال %s (%s) اطمینان=%d%% < %d%% - رد شد",
+                        "[%s] سيگنال %s (%s) اطمينان=%d%% < %d%% - رد شد",
                         short_name, signal.action, signal.strategy,
                         signal.confidence, MIN_CONFIDENCE,
                     )
                     continue
 
                 log.info(
-                    "🎯 [%s] سیگنال: %s | %s | اطمینان: %d%% | دلیل: %s",
+                    "✅ [%s] سيگنال: %s | %s | اطمينان: %d%% | دليل: %s",
                     short_name, signal.action.upper(),
                     signal.strategy, signal.confidence, signal.reason,
                 )
@@ -1451,15 +1490,16 @@ class Engine:
                 log.error("[%s] Scan Error: %s", sym, e)
 
     def _execute_signal(self, sym: str, sig: Signal, balance: float):
+        """🔥 اصلاح‌شده: SL بر اساس قیمت واقعی Fill"""
         short_name = sym.split("/")[0]
 
-        # محاسبه حجم
-        sl_dist = abs(sig.entry_estimate - sig.sl)
-        if sl_dist <= 0:
-            sl_dist = sig.entry_estimate * 0.005
+        # محاسبه حجم با فاصله SL از سیگنال
+        sl_dist_from_signal = abs(sig.entry_estimate - sig.sl)
+        if sl_dist_from_signal <= 0:
+            sl_dist_from_signal = sig.entry_estimate * 0.008
 
         risk_amount = balance * (RISK_PCT / 100.0)
-        qty = risk_amount / sl_dist
+        qty = risk_amount / sl_dist_from_signal
 
         max_notional = balance * 0.12
         if (qty * sig.entry_estimate) > max_notional:
@@ -1470,20 +1510,18 @@ class Engine:
             return
 
         log.info(
-            "[%s] محاسبه حجم: risk=$%.2f sl_dist=%.4f qty=%.6f notional=$%.2f",
-            short_name, risk_amount, sl_dist, qty,
-            qty * sig.entry_estimate,
+            "[%s] محاسبه حجم: risk=$%.2f sl_dist=%.4f qty=%.6f",
+            short_name, risk_amount, sl_dist_from_signal, qty,
         )
 
-        # ثبت سفارش
         side = "buy" if sig.action == "buy" else "sell"
         order_result = EX.place_order(sym, side, qty, is_close=False)
 
         if not order_result:
-            log.warning("⚠️  [%s] سفارش اجرا نشد", short_name)
+            log.warning("❌  [%s] سفارش اجرا نشد", short_name)
             if self.tg:
                 self.tg.send(
-                    f"⚠️ <b>سفارش رد شد</b>\n"
+                    f"❌ <b>سفارش رد شد</b>\n"
                     f"نماد: {sym}\n"
                     f"جهت: {side}\n"
                     f"حجم: {qty:.6f}"
@@ -1493,18 +1531,29 @@ class Engine:
         fill_price = order_result["fill_price"]
         filled_qty = order_result["filled_qty"]
 
-        # محاسبه SL/TP واقعی
-        price_diff_sl = abs(sig.entry_estimate - sig.sl)
-        price_diff_tp = abs(sig.entry_estimate - sig.tp)
+        # 🔥 اصلاح: محاسبه SL بر اساس قیمت واقعی Fill
+        # نسبت فاصله SL به قیمت تخمینی را حفظ می‌کنیم
+        sl_ratio = abs(sig.entry_estimate - sig.sl) / sig.entry_estimate
+        tp_ratio = abs(sig.entry_estimate - sig.tp) / sig.entry_estimate
 
         pos_side = "long" if sig.action == "buy" else "short"
 
         if pos_side == "long":
-            real_sl = fill_price - price_diff_sl
-            real_tp = fill_price + price_diff_tp
+            real_sl = fill_price - (fill_price * sl_ratio)
+            real_tp = fill_price + (fill_price * tp_ratio)
         else:
-            real_sl = fill_price + price_diff_sl
-            real_tp = fill_price - price_diff_tp
+            real_sl = fill_price + (fill_price * sl_ratio)
+            real_tp = fill_price - (fill_price * tp_ratio)
+
+        # 🔥 اطمینان از حداقل فاصله SL
+        min_sl_dist = fill_price * 0.008  # ۰.۸٪
+        actual_sl_dist = abs(fill_price - real_sl)
+        if actual_sl_dist < min_sl_dist:
+            if pos_side == "long":
+                real_sl = fill_price - min_sl_dist
+            else:
+                real_sl = fill_price + min_sl_dist
+            log.info("[%s] SL به حداقل %0.2f%% رسید", short_name, 0.8)
 
         # ثبت SL در صرافی
         sl_order_id = EX.place_stop_loss(
@@ -1534,25 +1583,26 @@ class Engine:
             self._pos[pid] = pos
         database.insert(pos)
 
+        sl_pct = abs(real_sl - fill_price) / fill_price * 100
         log.info(
-            "✅ [%s] پوزیشن باز شد | %s | ورود: %.4f | SL: %.4f | TP: %.4f",
-            short_name, pos_side.upper(), fill_price, real_sl, real_tp,
+            "✅ [%s] پوزيشن باز شد | %s | ورود: %.4f | SL: %.4f (%.2f%%) | TP: %.4f",
+            short_name, pos_side.upper(), fill_price, real_sl, sl_pct, real_tp,
         )
 
         if self.tg:
             self.tg.send(
-                f"🎯 <b>پوزیشن جدید ({sig.strategy})</b>\n"
-                f"{'━' * 25}\n"
-                f"📌 نماد: {sym}\n"
-                f"📊 جهت: {pos_side.upper()}\n"
+                f"🚀 <b>پوزيشن جديد ({sig.strategy}) v3.1</b>\n"
+                f"{'═' * 25}\n"
+                f"📊 نماد: {sym}\n"
+                f"📈 جهت: {pos_side.upper()}\n"
                 f"💰 ورود: {fill_price:.4f}\n"
-                f"🛑 حد ضرر: {real_sl:.4f}\n"
+                f"🛑 حد ضرر: {real_sl:.4f} ({sl_pct:.2f}%)\n"
                 f"🎯 حد سود: {real_tp:.4f}\n"
-                f"📦 حجم: {filled_qty}\n"
-                f"🔥 اطمینان: {sig.confidence}%\n"
-                f"📝 دلیل: {sig.reason}\n"
-                f"🛡️ SL صرافی: {'✅' if sl_order_id else '❌ فقط نرم‌افزاری'}\n"
-                f"{'⚠️ TESTNET' if TESTNET else '✅ REAL'}"
+                f"📊 حجم: {filled_qty}\n"
+                f"🎯 اطمينان: {sig.confidence}%\n"
+                f"📝 دليل: {sig.reason}\n"
+                f"🛡️ SL صرافي: {'✅' if sl_order_id else '❌'}\n"
+                f"{'🧪 TESTNET' if TESTNET else '💰 REAL'}"
             )
 
     def _manage_positions(self):
@@ -1567,7 +1617,6 @@ class Engine:
 
                 side = pos["side"]
 
-                # SL نرم‌افزاری (پشتیبان)
                 sl_hit = (
                     (side == "long" and price <= pos["sl"])
                     or (side == "short" and price >= pos["sl"])
@@ -1580,7 +1629,6 @@ class Engine:
                     self._close_position(pid, pos, price, "StopLoss")
                     continue
 
-                # خروج جزئی TP1
                 if not pos.get("is_partial", 0):
                     tp_hit = (
                         (side == "long" and price >= pos["tp"])
@@ -1608,11 +1656,9 @@ class Engine:
 
         actual_exit = result["fill_price"]
 
-        # لغو SL قبلی
         if pos.get("sl_order_id"):
             EX.cancel_order_safe(pos["symbol"], pos["sl_order_id"])
 
-        # SL جدید = Break Even
         new_sl = pos["entry"]
         new_sl_id = EX.place_stop_loss(
             pos["symbol"], pos["side"], half_qty, new_sl
@@ -1637,11 +1683,11 @@ class Engine:
 
         if self.tg:
             self.tg.send(
-                f"🎯 <b>خروج ۵۰٪ (TP1)</b>\n"
+                f"🎯 <b>خروج جزئی (TP1)</b>\n"
                 f"نماد: {pos['symbol']}\n"
-                f"قیمت خروج: {actual_exit:.4f}\n"
-                f"سود جزئی: {pnl_half:+.2f}$\n"
-                f"SL جدید: {new_sl:.4f} (Break Even)"
+                f"قيمت خروج: {actual_exit:.4f}\n"
+                f"سود جزئي: {pnl_half:+.2f}$\n"
+                f"SL جديد: {new_sl:.4f} (Break Even)"
             )
 
     def _close_position(self, pid: str, pos: Dict,
@@ -1674,7 +1720,7 @@ class Engine:
         with self._lock:
             self._pos.pop(pid, None)
 
-        emoji = "🟢" if pnl >= 0 else "🔴"
+        emoji = "✅" if pnl >= 0 else "❌"
         log.info(
             "%s [%s] بسته شد | PnL: %+.2f$ (%+.2f%%) | %s",
             emoji, pos["symbol"], pnl, pct, reason,
@@ -1684,8 +1730,8 @@ class Engine:
             self.tg.send(
                 f"{emoji} <b>بسته شد ({reason})</b>\n"
                 f"نماد: {pos['symbol']}\n"
-                f"ورود: {entry:.4f} → خروج: {actual_price:.4f}\n"
-                f"سود/زیان: {pnl:+.2f}$ ({pct:+.2f}%)"
+                f"ورود: {entry:.4f} ➜ خروج: {actual_price:.4f}\n"
+                f"سود/زيان: {pnl:+.2f}$ ({pct:+.2f}%)"
             )
 
 
@@ -1712,7 +1758,7 @@ def home():
     <html dir="rtl" lang="fa">
     <head>
         <meta charset="UTF-8">
-        <title>Quant Bot v3</title>
+        <title>Quant Bot v3.1</title>
         <meta http-equiv="refresh" content="30">
         <style>
             body {{
@@ -1732,37 +1778,40 @@ def home():
             .ok {{ border-color: #3fb950; }}
             h1 {{ color: #58a6ff; }}
             .status {{ font-size: 1.2em; margin: 10px; }}
+            .badge {{ background: #238636; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; }}
         </style>
     </head>
     <body>
-        <h1>🤖 Master-AI Quant Bot v3.0</h1>
+        <h1>🤖 Master-AI Quant Bot v3.1</h1>
+        <span class="badge">✅ بهینه‌شده</span>
 
         <div class="status">
-            وضعیت: <b>{'🟢 فعال' if active else '🔴 متوقف'}</b> |
+            وضعيت: <b>{'▶️ فعال' if active else '⏹ متوقف'}</b> |
             اتصال: <b>{'✅' if connected else '❌'}</b> |
             شبکه: <b>{mode}</b> |
-            پوزیشن: <b>{pos_count}/{MAX_POS}</b>
+            پوزيشن: <b>{pos_count}/{MAX_POS}</b>
         </div>
 
-        <div class="card"><h3>💰 موجودی</h3><p>${bal:,.2f}</p></div>
+        <div class="card"><h3>💰 موجودي</h3><p>${bal:,.2f}</p></div>
         <div class="card"><h3>💎 ارزش کل</h3><p>${equity:,.2f}</p></div>
         <div class="card {'ok' if stats['total_pnl'] >= 0 else 'warn'}">
             <h3>📈 PnL</h3><p>{stats['total_pnl']:+,.2f}$</p>
         </div>
-        <div class="card"><h3>🔥 وین‌ریت</h3><p>{stats['win_rate']}%</p></div>
+        <div class="card"><h3>🎯 وين‌ريت</h3><p>{stats['win_rate']}%</p></div>
         <div class="card"><h3>⚡ PF</h3><p>{stats['profit_factor']}</p></div>
-        <div class="card"><h3>🎯 معاملات</h3>
+        <div class="card"><h3>📊 معاملات</h3>
             <p>{stats['total_trades']} (W:{stats['wins_count']} L:{stats['losses_count']})</p>
         </div>
         <div class="card"><h3>🛡️ DD</h3><p>{dd:.1f}%</p></div>
 
-        {'<div class="card warn"><h3>⚠️</h3><p>TESTNET فعال</p></div>' if TESTNET else ''}
+        {'<div class="card warn"><h3>🧪</h3><p>TESTNET فعال</p></div>' if TESTNET else ''}
 
         <br><br>
         <div class="card">
-            <h3>⚙️ تنظیمات</h3>
-            <p>لوریج: {LEVERAGE}x | ریسک: {RISK_PCT}% | اسکن: {SCAN_INTERVAL}s</p>
-            <p>Min Conf: {MIN_CONFIDENCE}% | نمادها: {len(SYMBOLS)}</p>
+            <h3>🔧 تنظيمات v3.1</h3>
+            <p>لوريج: {LEVERAGE}x | ريسک: {RISK_PCT}% | اسکن: {SCAN_INTERVAL}s</p>
+            <p>Min Conf: {MIN_CONFIDENCE}% | SL Min: 0.8% | R:R: 1.8</p>
+            <p>نمادها: {len(SYMBOLS)}</p>
         </div>
     </body>
     </html>
@@ -1773,6 +1822,7 @@ def home():
 def health():
     return {
         "status": "ok",
+        "version": "3.1",
         "connected": EX.is_connected,
         "testnet": TESTNET,
         "active": engine_instance.is_active if engine_instance else False,
@@ -1833,18 +1883,25 @@ def main():
     global engine_instance
 
     log.info("=" * 60)
-    log.info("  Master-AI Quant Bot v3.0")
-    log.info("  Mode: %s", "TESTNET" if TESTNET else "MAINNET")
-    log.info("  Connected: %s", EX.is_connected)
-    log.info("  Symbols: %d", len(SYMBOLS))
-    log.info("  Risk: %.1f%% | Leverage: %dx | MaxPos: %d",
+    log.info("  🤖 Master-AI Quant Bot v3.1 (OPTIMIZED)")
+    log.info("  🌐 Mode: %s", "TESTNET" if TESTNET else "MAINNET")
+    log.info("  🔗 Connected: %s", EX.is_connected)
+    log.info("  📊 Symbols: %d", len(SYMBOLS))
+    log.info("  🎯 Risk: %.1f%% | Leverage: %dx | MaxPos: %d",
              RISK_PCT, LEVERAGE, MAX_POS)
-    log.info("  MinConfidence: %d%% | ScanInterval: %ds",
+    log.info("  🎯 MinConfidence: %d%% | ScanInterval: %ds",
              MIN_CONFIDENCE, SCAN_INTERVAL)
+    log.info("=" * 60)
+    log.info("  🔧 اصلاحات اعمال‌شده:")
+    log.info("  • ATR ۱۵ دقيقه براي محاسبه SL")
+    log.info("  • حداقل SL ۰.۸٪ از قيمت")
+    log.info("  • فیلتر حجم و RSI در تمام استراتژی‌ها")
+    log.info("  • محاسبه SL بر اساس قیمت واقعی Fill")
+    log.info("  • بهبود R:R به ۱.۸")
     log.info("=" * 60)
 
     if not EX.is_connected:
-        log.critical("❌ اتصال به صرافی برقرار نشد!")
+        log.critical("❌ اتصال به صرافي برقرار نشد!")
 
     engine_instance = Engine()
     tg = TelegramHandler(engine_instance)
@@ -1852,18 +1909,24 @@ def main():
 
     if TG_TOKEN and TG_CHAT:
         tg.send(
-            f"🤖 <b>ربات v3.0 شروع شد</b>\n"
-            f"{'━' * 25}\n"
-            f"🌐 شبکه: {'⚠️ TESTNET' if TESTNET else '✅ MAINNET'}\n"
+            f"🚀 <b>ربات v3.1 (بهینه) شروع شد</b>\n"
+            f"{'═' * 25}\n"
+            f"🌐 شبکه: {'🧪 TESTNET' if TESTNET else '💰 MAINNET'}\n"
             f"🔗 اتصال: {'✅' if EX.is_connected else '❌'}\n"
             f"📊 نمادها: {len(SYMBOLS)}\n"
-            f"📌 لوریج: {LEVERAGE}x\n"
-            f"⚠️ ریسک: {RISK_PCT}%\n"
+            f"⚡ لوريج: {LEVERAGE}x\n"
+            f"🎯 ريسک: {RISK_PCT}%\n"
             f"🎯 Min Conf: {MIN_CONFIDENCE}%\n"
             f"⏱️ Scan: {SCAN_INTERVAL}s\n"
-            f"{'━' * 25}\n"
+            f"{'═' * 25}\n"
+            f"🔧 اصلاحات v3.1:\n"
+            f"• حداقل SL ۰.۸%\n"
+            f"• ATR از ۱۵ دقيقه\n"
+            f"• فیلتر حجم و RSI\n"
+            f"• R:R بهبود یافته\n"
+            f"{'═' * 25}\n"
             f"✅ ربات فعال است و در حال اسکن...\n"
-            f"دکمه 🔎 دیباگ اسکن برای بررسی وضعیت",
+            f"🔍 دکمه ديباگ اسکن براي بررسي وضعيت",
             reply_markup=tg._keyboard(),
         )
 
