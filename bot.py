@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master-AI Quant Bot v4.3 - FINAL FIXED VERSION
-نسخه نهایی با رفع کامل مشکل سفارشات در Phemex Futures
-- اصلاح محاسبه حجم بر اساس قرارداد (Contracts)
-- Fallback به Binance برای داده
-- اسکن گروهی نمادها
-- حداقل ۱ قرارداد برای هر نماد
+Master-AI Quant Bot v4.4 - FINAL FIXED VERSION
+نسخه نهایی با رفع کامل مشکل ارسال قرارداد به صرافی
 """
 
 import json
@@ -41,7 +37,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(message)s",
     stream=sys.stdout,
 )
-log = logging.getLogger("MasterQuant_v4.3")
+log = logging.getLogger("MasterQuant_v4.4")
 
 
 # ============================================================================
@@ -91,7 +87,7 @@ SYMBOLS = [
     "LINK/USDT:USDT",
 ]
 
-# 🔥 تنظیمات نهایی
+# تنظیمات
 RISK_PCT = Cfg.f("RISK_PER_TRADE", 0.5)
 MAX_DD = Cfg.f("MAX_DRAWDOWN", 10.0)
 MAX_POS = Cfg.i("MAX_POSITIONS", 2)
@@ -103,21 +99,7 @@ MIN_CONFIDENCE = Cfg.i("MIN_CONFIDENCE", 70)
 SCAN_BATCH_SIZE = Cfg.i("SCAN_BATCH_SIZE", 3)
 REQUEST_TIMEOUT = Cfg.i("REQUEST_TIMEOUT", 30)
 
-# 🔥 حداقل قرارداد برای هر نماد
-MIN_CONTRACTS = {
-    "BTC": 1,
-    "ETH": 1,
-    "SOL": 1,
-    "XRP": 1,
-    "BNB": 1,
-    "DOGE": 1,
-    "ADA": 1,
-    "AVAX": 1,
-    "DOT": 1,
-    "LINK": 1,
-}
-
-# 🔥 contract_size برای هر نماد (در صورت عدم دریافت از صرافی)
+# 🔥 contract_size برای هر نماد
 CONTRACT_SIZE_MAP = {
     "BTC": 0.001,
     "ETH": 0.01,
@@ -133,7 +115,7 @@ CONTRACT_SIZE_MAP = {
 
 
 # ============================================================================
-# TECHNICAL INDICATORS
+# TECHNICAL INDICATORS (کامل)
 # ============================================================================
 class Indicators:
 
@@ -382,7 +364,7 @@ database = DB()
 
 
 # ============================================================================
-# EXCHANGE ENGINE - نسخه اصلاح‌شده با contract_size
+# EXCHANGE ENGINE - نسخه اصلاح‌شده با ارسال قرارداد
 # ============================================================================
 class Exchange:
 
@@ -414,7 +396,6 @@ class Exchange:
             self._set_leverage_all()
             self._connected = True
 
-            # اتصال به Binance برای fallback
             try:
                 self._binance = ccxt.binance({
                     "enableRateLimit": True,
@@ -431,7 +412,6 @@ class Exchange:
             log.error("❌ خطاي اتصال: %s", e)
 
     def _cache_market_info(self):
-        """🔥 دریافت اطلاعات بازار با contract_size"""
         if not self._ex:
             return
         for sym in SYMBOLS:
@@ -439,7 +419,6 @@ class Exchange:
                 mkt = self._ex.markets[sym]
                 symbol_base = sym.split("/")[0]
                 
-                # 🔥 دریافت contract_size
                 contract_size = mkt.get("contractSize", 0)
                 if contract_size <= 0:
                     contract_size = CONTRACT_SIZE_MAP.get(symbol_base, 0.001)
@@ -467,7 +446,6 @@ class Exchange:
         return self._connected and self._ex is not None
 
     def get_contract_size(self, sym: str) -> float:
-        """🔥 دریافت contract_size برای یک نماد"""
         info = self._markets_info.get(sym, {})
         contract_size = info.get("contract_size", 0)
         if contract_size <= 0:
@@ -492,16 +470,13 @@ class Exchange:
                         return df
 
                 if attempt == max_retries - 1:
-                    log.warning(f"⚠️ Fallback به Binance برای {sym} {tf}")
                     return self._fetch_from_binance(sym, tf, limit)
 
                 time.sleep(0.5 * (attempt + 1))
 
             except ccxt.RateLimitExceeded:
-                log.warning(f"⚠️ Rate Limit {sym} {tf}, waiting...")
                 time.sleep(2 * (attempt + 1))
             except ccxt.NetworkError:
-                log.warning(f"⚠️ Network Error {sym} {tf}, retrying...")
                 time.sleep(1 * (attempt + 1))
             except Exception as e:
                 if attempt == max_retries - 1:
@@ -523,7 +498,6 @@ class Exchange:
                 raw, columns=["ts", "open", "high", "low", "close", "vol"]
             )
             df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
-            log.info(f"✅ داده {sym} از Binance دریافت شد")
             return df
         except Exception as e:
             log.debug(f"Binance fallback failed: {e}")
@@ -537,16 +511,13 @@ class Exchange:
             df = self.fetch_ohlcv_safe(sym, tf, limit=80, max_retries=3)
 
             if df is None or len(df) < 30:
-                log.debug(f"⚠️ داده ناکافي {sym} {tf} (len={len(df) if df is not None else 0})")
                 if tf == "1m":
                     time.sleep(1)
                     df = self.fetch_ohlcv_safe(sym, tf, limit=80, max_retries=3)
                     if df is None or len(df) < 30:
-                        log.error(f"❌ داده اصلی {sym} دريافت نشد")
                         return {}
                 else:
                     if result:
-                        log.warning(f"⚠️ {sym} {tf} داده ناقص، ادامه با داده موجود")
                         continue
                     return {}
 
@@ -556,7 +527,6 @@ class Exchange:
         required = ["1m", "5m", "15m"]
         for tf in required:
             if tf not in result:
-                log.error(f"❌ داده {tf} برای {sym} موجود نیست")
                 return {}
 
         return result
@@ -567,8 +537,7 @@ class Exchange:
         try:
             ticker = self._ex.fetch_ticker(sym)
             return float(ticker.get("last", 0))
-        except Exception as e:
-            log.error("Ticker Error [%s]: %s", sym, e)
+        except Exception:
             try:
                 if self._binance:
                     binance_sym = sym.replace("/USDT:USDT", "/USDT")
@@ -618,28 +587,12 @@ class Exchange:
         except Exception:
             return 0.0
 
-    def validate_order_size(self, sym: str, qty: float,
-                            price: float) -> Tuple[bool, float, str]:
-        info = self._markets_info.get(sym, {})
-        min_amount = info.get("min_amount", 0.001)
-        min_cost = info.get("min_cost", 0.5)
-
-        try:
-            formatted_qty = float(self._ex.amount_to_precision(sym, qty))
-        except Exception:
-            formatted_qty = qty
-
-        if formatted_qty < min_amount:
-            return (False, 0, f"حجم {formatted_qty} کمتر از حداقل {min_amount}")
-
-        cost = formatted_qty * price / LEVERAGE
-        if cost < min_cost:
-            return (False, 0, f"ارزش {cost:.2f}$ کمتر از حداقل {min_cost}$")
-
-        return True, formatted_qty, "OK"
-
+    # =========================================================
+    # 🔥🔥🔥 اصلاح اصلی: ارسال "تعداد قرارداد" به صرافی 🔥🔥🔥
+    # =========================================================
     def place_order(self, sym: str, side: str, qty: float,
                     is_close: bool = False) -> Optional[Dict]:
+        """🔥 qty = تعداد سکه، اما به صرافی "تعداد قرارداد" ارسال می‌شود"""
         if not self.is_connected:
             log.error("❌ صرافي متصل نيست!")
             return None
@@ -650,32 +603,66 @@ class Exchange:
                 log.error("❌ قيمت دريافت نشد: %s", sym)
                 return None
 
-            valid, fmt_qty, msg = self.validate_order_size(sym, qty, current_price)
-            if not valid:
-                log.warning("⚠️  سفارش نامعتبر [%s]: %s", sym, msg)
-                return None
+            # 🔥 تبدیل سکه به قرارداد
+            contract_size = self.get_contract_size(sym)
+            contracts = qty / contract_size
+            
+            # 🔥 گرد کردن به عدد صحیح
+            contracts = int(round(contracts))
+            
+            # 🔥 حداقل ۱ قرارداد
+            if contracts < 1:
+                contracts = 1
+                qty = contracts * contract_size
+                log.info(f"📦 {sym}: حجم به {contracts} قرارداد ({qty:.6f} سکه) تنظیم شد")
+            
+            # 🔥 حداکثر ۱۰۰۰۰ قرارداد (ایمنی)
+            max_contracts = 10000
+            if contracts > max_contracts:
+                contracts = max_contracts
+                qty = contracts * contract_size
+                log.warning(f"⚠️ {sym}: حجم به {max_contracts} قرارداد محدود شد")
+            
+            # 🔥 بررسی حداقل ارزش معامله
+            min_cost = 0.5
+            if (qty * current_price / LEVERAGE) < min_cost:
+                contracts = max(contracts, 2)
+                qty = contracts * contract_size
+                log.info(f"📦 {sym}: افزایش به {contracts} قرارداد برای حداقل ارزش")
+
+            log.info(
+                f"📤 ارسال سفارش | {side.upper()} {sym} | "
+                f"{contracts} قرارداد = {qty:.6f} سکه | قیمت: {current_price:.4f}"
+            )
 
             params = {}
             if is_close:
                 params["reduceOnly"] = True
 
-            log.info("📤 ارسال سفارش | %s %s | حجم: %s", side.upper(), sym, fmt_qty)
-
+            # 🔥🔥🔥 ارسال با "تعداد قرارداد" به صرافی 🔥🔥🔥
             if side.lower() == "buy":
-                result = self._ex.create_market_buy_order(sym, fmt_qty, params=params)
+                result = self._ex.create_market_buy_order(
+                    sym, contracts, params=params
+                )
             else:
-                result = self._ex.create_market_sell_order(sym, fmt_qty, params=params)
+                result = self._ex.create_market_sell_order(
+                    sym, contracts, params=params
+                )
 
             fill_price = float(result.get("average") or result.get("price") or current_price)
-            filled_qty = float(result.get("filled") or result.get("amount") or fmt_qty)
+            filled_contracts = float(result.get("filled") or result.get("amount") or contracts)
+            filled_qty = filled_contracts * contract_size
 
-            log.info("✅ سفارش اجرا شد | %s %s | حجم: %s | قيمت: %s",
-                     side.upper(), sym, filled_qty, fill_price)
+            log.info(
+                f"✅ سفارش اجرا شد | {side.upper()} {sym} | "
+                f"{filled_contracts:.0f} قرارداد = {filled_qty:.6f} سکه | قیمت: {fill_price:.4f}"
+            )
 
             return {
                 "id": result.get("id"),
                 "fill_price": fill_price,
                 "filled_qty": filled_qty,
+                "filled_contracts": filled_contracts,
                 "status": result.get("status"),
             }
 
@@ -691,11 +678,16 @@ class Exchange:
 
     def place_stop_loss(self, sym: str, pos_side: str,
                         qty: float, stop_price: float) -> Optional[str]:
+        """🔥 SL هم با تعداد قرارداد ارسال می‌شود"""
         if not self.is_connected:
             return None
         try:
+            contract_size = self.get_contract_size(sym)
+            contracts = int(round(qty / contract_size))
+            if contracts < 1:
+                contracts = 1
+            
             sl_side = "sell" if pos_side == "long" else "buy"
-            fmt_qty = float(self._ex.amount_to_precision(sym, qty))
             fmt_price = float(self._ex.price_to_precision(sym, stop_price))
 
             params = {
@@ -705,13 +697,13 @@ class Exchange:
             }
 
             result = self._ex.create_order(
-                sym, "market", sl_side, fmt_qty, None, params=params,
+                sym, "market", sl_side, contracts, None, params=params,
             )
 
-            log.info("🛑 SL ثبت شد | %s | قيمت: %s", sym, fmt_price)
+            log.info(f"🛑 SL ثبت شد | {sym} | {contracts} قرارداد | قیمت: {fmt_price}")
             return result.get("id")
         except Exception as e:
-            log.warning("⚠️  خطا در SL [%s]: %s", sym, e)
+            log.warning(f"⚠️ خطا در SL [%s]: %s", sym, e)
             return None
 
     def cancel_order_safe(self, sym: str, order_id: str):
@@ -719,7 +711,6 @@ class Exchange:
             return
         try:
             self._ex.cancel_order(order_id, sym)
-            log.info("❌ سفارش %s لغو شد", order_id)
         except Exception as e:
             log.debug("Cancel order [%s]: %s", order_id, e)
 
@@ -728,7 +719,7 @@ EX = Exchange()
 
 
 # ============================================================================
-# STRATEGY ENGINE (کامل)
+# STRATEGY ENGINE (کامل - از نسخه قبلی)
 # ============================================================================
 @dataclass
 class Signal:
@@ -882,7 +873,7 @@ class StrategyEngine:
                 action="buy",
                 strategy="SuperTrend_Vol",
                 confidence=78,
-                reason=f"SuperTrend تغییر + حجم",
+                reason=f"SuperTrend تغییر",
                 sl=sl, tp=tp, entry_estimate=c1,
                 debug_info="✅ SuperTrend BUY"
             )
@@ -897,7 +888,7 @@ class StrategyEngine:
                 action="sell",
                 strategy="SuperTrend_Vol",
                 confidence=78,
-                reason=f"SuperTrend تغییر + حجم",
+                reason=f"SuperTrend تغییر",
                 sl=sl, tp=tp, entry_estimate=c1,
                 debug_info="✅ SuperTrend SELL"
             )
@@ -1402,7 +1393,7 @@ class TelegramHandler:
         mode = "🧪 TESTNET" if TESTNET else "💰 MAINNET"
 
         msg = (
-            f"📊 <b>داشبورد ربات v4.3</b>\n"
+            f"📊 <b>داشبورد ربات v4.4</b>\n"
             f"{'═' * 28}\n"
             f"⚡ وضعيت: {status}\n"
             f"🌐 شبکه: {mode}\n"
@@ -1417,8 +1408,8 @@ class TelegramHandler:
             f"🛡️ DD: {self.engine.current_dd:.1f}%\n"
             f"{'═' * 28}\n"
             f"⏱️ اسکن: {SCAN_INTERVAL}s | Min SL: 2.5%\n"
-            f"📦 حداقل قرارداد: ۱ برای همه\n"
-            f"🔧 نسخه: v4.3 (نهایی)"
+            f"📦 ارسال قرارداد به صرافی\n"
+            f"🔧 نسخه: v4.4 (نهایی)"
         )
         self.send(msg, reply_markup=self._keyboard())
 
@@ -1442,15 +1433,15 @@ class TelegramHandler:
         mode = "TESTNET" if TESTNET else "MAINNET"
         bal = EX.balance() if connected else 0
         msg = (
-            f"⚙️ <b>وضعيت v4.3</b>\n"
+            f"⚙️ <b>وضعيت v4.4</b>\n"
             f"{'═' * 28}\n"
             f"🔗 صرافي: {'✅' if connected else '❌'}\n"
             f"🌐 شبکه: {mode}\n"
             f"💰 موجودي: ${bal:,.2f}\n"
             f"🎯 ريسک: {RISK_PCT}% | Min SL: 2.5%\n"
             f"📊 Max Pos: {MAX_POS} | Scan: {SCAN_INTERVAL}s\n"
-            f"📦 قرارداد: حداقل ۱ برای همه\n"
-            f"✅ Fallback به Binance فعال"
+            f"📦 ارسال قرارداد به صرافی\n"
+            f"✅ Fallback به Binance"
         )
         self.send(msg, reply_markup=self._keyboard())
 
@@ -1459,11 +1450,11 @@ class TelegramHandler:
             self.send("❌ صرافي متصل نيست", reply_markup=self._keyboard())
             return
 
-        msg = "🔍 <b>ديباگ اسکن v4.3:</b>\n"
+        msg = "🔍 <b>ديباگ اسکن v4.4:</b>\n"
         bal = EX.balance()
         msg += f"💰 موجودي: ${bal:,.2f}\n"
         msg += f"📊 پوزيشن: {len(self.engine._pos)}/{MAX_POS}\n"
-        msg += f"📦 حداقل قرارداد: ۱ برای همه\n\n"
+        msg += f"📦 ارسال قرارداد به صرافی\n\n"
 
         active_syms = [p["symbol"] for p in self.engine._pos.values()]
 
@@ -1490,13 +1481,12 @@ class TelegramHandler:
                     msg += f"⏸️ <b>{short_name}</b>: {sig.debug_info[:50]}\n"
                 else:
                     sl_pct = abs(sig.sl - sig.entry_estimate) / sig.entry_estimate * 100
-                    # 🔥 نمایش حجم به قرارداد
                     contract_size = EX.get_contract_size(sym)
-                    contracts = max(1, int(1 / contract_size))  # حداقل ۱ قرارداد
+                    min_contracts = 1
                     msg += (
                         f"✅ <b>{short_name}</b>: {sig.action.upper()} "
                         f"({sig.strategy}) Conf={sig.confidence}% "
-                        f"SL={sl_pct:.2f}% | قرارداد: {contracts}\n"
+                        f"SL={sl_pct:.2f}% | قرارداد: {min_contracts}\n"
                     )
             except concurrent.futures.TimeoutError:
                 msg += f"⏰ <b>{short_name}</b>: Timeout\n"
@@ -1507,7 +1497,7 @@ class TelegramHandler:
 
 
 # ============================================================================
-# CORE ENGINE - بخش اصلی با اصلاح حجم بر اساس قرارداد
+# CORE ENGINE
 # ============================================================================
 class Engine:
 
@@ -1534,14 +1524,15 @@ class Engine:
             if not already:
                 pid = f"sync_{uuid.uuid4().hex[:6]}"
                 entry = rp["entry"]
+                contract_size = EX.get_contract_size(rp["symbol"])
                 pos = {
                     "id": pid,
                     "symbol": rp["symbol"],
                     "side": rp["side"],
                     "entry": entry,
                     "fill_price": entry,
-                    "qty": rp["qty"],
-                    "filled_qty": rp["qty"],
+                    "qty": rp["qty"] * contract_size,
+                    "filled_qty": rp["qty"] * contract_size,
                     "sl": entry * 0.975 if rp["side"] == "long" else entry * 1.025,
                     "tp": entry * 1.04 if rp["side"] == "long" else entry * 0.96,
                     "strategy": "Synced",
@@ -1549,13 +1540,13 @@ class Engine:
                     "is_partial": 0,
                     "exchange_order_id": "",
                     "sl_order_id": "",
-                    "contracts": int(rp["qty"] / EX.get_contract_size(rp["symbol"])),
+                    "contracts": int(rp["qty"]),
                 }
                 self._pos[pid] = pos
                 database.insert(pos)
 
     def run_loop(self):
-        log.info("🚀 موتور v4.3 شروع شد - با حداقل ۱ قرارداد")
+        log.info("🚀 موتور v4.4 شروع شد - ارسال قرارداد به صرافی")
         while True:
             try:
                 self._cycle_count += 1
@@ -1655,7 +1646,7 @@ class Engine:
                 log.error(f"[{sym}] Scan Error: {e}")
 
     def _execute_signal(self, sym: str, sig: Signal, balance: float):
-        """🔥 نسخه نهایی با محاسبه حجم بر اساس قرارداد"""
+        """🔥 محاسبه حجم بر اساس قرارداد"""
         short_name = sym.split("/")[0]
         
         # محاسبه فاصله SL
@@ -1667,7 +1658,7 @@ class Engine:
             else:
                 sig.sl = sig.entry_estimate + sl_dist
         
-        # محاسبه حجم اولیه بر اساس ریسک
+        # محاسبه حجم اولیه (سکه)
         risk_amount = balance * (RISK_PCT / 100.0) * 0.5
         qty = risk_amount / sl_dist
         
@@ -1676,49 +1667,32 @@ class Engine:
         if (qty * sig.entry_estimate) > max_notional:
             qty = max_notional / sig.entry_estimate
         
-        # 🔥🔥🔥 اصلاح اصلی: تبدیل به قرارداد 🔥🔥🔥
+        # 🔥 تبدیل به قرارداد
         contract_size = EX.get_contract_size(sym)
-        
-        # تعداد قراردادها
         contracts = qty / contract_size
         
         # حداقل ۱ قرارداد
         if contracts < 1:
             contracts = 1
-            qty = contracts * contract_size
-            log.info(f"[{short_name}] 📦 حجم به ۱ قرارداد ({qty:.6f} سکه) تنظیم شد")
         
-        # حداکثر ۱۰۰۰ قرارداد (برای ایمنی)
+        # حداکثر ۱۰۰۰ قرارداد
         max_contracts = 1000
         if contracts > max_contracts:
             contracts = max_contracts
-            qty = contracts * contract_size
-            log.info(f"[{short_name}] 📦 حجم به {max_contracts} قرارداد محدود شد")
         
-        # گرد کردن به عدد صحیح (قراردادها باید عدد صحیح باشند)
-        contracts = int(contracts)
+        # گرد کردن به عدد صحیح
+        contracts = int(round(contracts))
         qty = contracts * contract_size
         
         # بررسی حداقل ارزش معامله
         min_cost = 0.5
-        if (qty * sig.entry_estimate) < min_cost:
-            contracts += 1
+        if (qty * sig.entry_estimate / LEVERAGE) < min_cost:
+            contracts = max(contracts, 2)
             qty = contracts * contract_size
-            log.info(f"[{short_name}] 📦 افزایش به {contracts} قرارداد برای حداقل ارزش")
-        
-        # بررسی موجودی کافی
-        margin_required = (qty * sig.entry_estimate) / LEVERAGE
-        if margin_required > balance * 0.9:
-            # کاهش قراردادها
-            while contracts > 1 and margin_required > balance * 0.9:
-                contracts -= 1
-                qty = contracts * contract_size
-                margin_required = (qty * sig.entry_estimate) / LEVERAGE
-            log.info(f"[{short_name}] 📦 کاهش به {contracts} قرارداد برای موجودی کافی")
         
         log.info(
-            f"[{short_name}] 📊 حجم نهایی: {qty:.6f} سکه = {contracts} قرارداد | "
-            f"نوتینال: ${qty * sig.entry_estimate:.2f} | مارجین: ${margin_required:.2f}"
+            f"[{short_name}] 📊 {contracts} قرارداد = {qty:.6f} سکه | "
+            f"نوتینال: ${qty * sig.entry_estimate:.2f}"
         )
         
         # ثبت سفارش
@@ -1731,7 +1705,7 @@ class Engine:
                 self.tg.send(
                     f"❌ سفارش رد شد\n"
                     f"{sym}\n"
-                    f"حجم: {qty:.6f} سکه ({contracts} قرارداد)"
+                    f"{contracts} قرارداد = {qty:.6f} سکه"
                 )
             return
         
@@ -1749,10 +1723,10 @@ class Engine:
             real_sl = fill_price + (fill_price * sl_ratio)
             real_tp = fill_price - (fill_price * sl_ratio * 1.5)
         
-        # ثبت SL در صرافی
+        # ثبت SL
         sl_order_id = EX.place_stop_loss(sym, pos_side, filled_qty, real_sl)
         
-        # ذخیره در دیتابیس
+        # ذخیره
         pid = f"p_{uuid.uuid4().hex[:8]}"
         pos = {
             "id": pid,
@@ -1779,7 +1753,7 @@ class Engine:
         sl_pct = abs(real_sl - fill_price) / fill_price * 100
         log.info(
             f"✅ [{short_name}] پوزيشن باز | ورود: {fill_price:.4f} | "
-            f"SL: {sl_pct:.2f}% | قرارداد: {contracts}"
+            f"SL: {sl_pct:.2f}% | {contracts} قرارداد"
         )
         
         if self.tg:
@@ -1787,7 +1761,7 @@ class Engine:
                 f"🚀 <b>پوزيشن جدید ({sig.strategy})</b>\n"
                 f"{sym} | {pos_side.upper()}\n"
                 f"ورود: {fill_price:.4f} | SL: {sl_pct:.2f}%\n"
-                f"قرارداد: {contracts} | اطمينان: {sig.confidence}%"
+                f"{contracts} قرارداد | اطمينان: {sig.confidence}%"
             )
 
     def _manage_positions(self):
@@ -1853,7 +1827,7 @@ def home():
     <html dir="rtl" lang="fa">
     <head>
         <meta charset="UTF-8">
-        <title>Quant Bot v4.3</title>
+        <title>Quant Bot v4.4</title>
         <meta http-equiv="refresh" content="30">
         <style>
             body {{ font-family: Tahoma, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; text-align: center; }}
@@ -1865,8 +1839,8 @@ def home():
         </style>
     </head>
     <body>
-        <h1>🤖 Master-AI Quant Bot v4.3</h1>
-        <span class="badge">✅ نهایی - حداقل ۱ قرارداد</span>
+        <h1>🤖 Master-AI Quant Bot v4.4</h1>
+        <span class="badge">✅ نهایی - ارسال قرارداد</span>
         <div class="status">
             وضعيت: <b>{'▶️ فعال' if active else '⏹ متوقف'}</b> |
             اتصال: <b>{'✅' if connected else '❌'}</b> |
@@ -1882,10 +1856,10 @@ def home():
         <div class="card"><h3>🛡️ DD</h3><p>{dd:.1f}%</p></div>
         <br><br>
         <div class="card" style="min-width: 200px;">
-            <h3>🔧 تنظیمات v4.3</h3>
+            <h3>🔧 تنظیمات v4.4</h3>
             <p>ریسک: {RISK_PCT}% | Min SL: 2.5%</p>
             <p>Max Pos: {MAX_POS} | Scan: {SCAN_INTERVAL}s</p>
-            <p style="color: #3fb950;">✅ حداقل ۱ قرارداد</p>
+            <p style="color: #3fb950;">✅ ارسال قرارداد به صرافی</p>
             <p style="color: #3fb950;">✅ Fallback به Binance</p>
         </div>
     </body>
@@ -1897,7 +1871,7 @@ def home():
 def health():
     return {
         "status": "ok",
-        "version": "4.3",
+        "version": "4.4",
         "connected": EX.is_connected,
         "testnet": TESTNET,
         "active": engine_instance.is_active if engine_instance else False,
@@ -1939,8 +1913,8 @@ def main():
     global engine_instance
 
     log.info("=" * 60)
-    log.info("  🤖 Master-AI Quant Bot v4.3 (FINAL)")
-    log.info("  ✅ حداقل ۱ قرارداد برای همه نمادها")
+    log.info("  🤖 Master-AI Quant Bot v4.4 (FINAL)")
+    log.info("  ✅ ارسال قرارداد به صرافی")
     log.info("  ✅ Fallback به Binance فعال")
     log.info("  ✅ اسکن گروهی (هر بار %d نماد)", SCAN_BATCH_SIZE)
     log.info("  🌐 Mode: %s", "TESTNET" if TESTNET else "MAINNET")
@@ -1958,9 +1932,9 @@ def main():
 
     if TG_TOKEN and TG_CHAT:
         tg.send(
-            f"🚀 <b>ربات v4.3 (نهایی) شروع شد</b>\n"
+            f"🚀 <b>ربات v4.4 (نهایی) شروع شد</b>\n"
             f"{'═' * 28}\n"
-            f"✅ حداقل ۱ قرارداد برای همه\n"
+            f"✅ ارسال قرارداد به صرافی\n"
             f"✅ Fallback به Binance فعال\n"
             f"🛡️ Min SL: 2.5% | ریسک: {RISK_PCT}%\n"
             f"📊 Max Pos: {MAX_POS} | Scan: {SCAN_INTERVAL}s\n"
