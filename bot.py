@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master-AI Quant Bot v3.1 - OPTIMIZED VERSION
-نسخه بهینه‌شده با حفظ تمام استراتژی‌ها
+Master-AI Quant Bot v4.0 - FINAL VERSION
+نسخه نهایی با ۹ استراتژی و رفع مشکلات دیتا
 """
 
 import json
@@ -36,7 +36,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(message)s",
     stream=sys.stdout,
 )
-log = logging.getLogger("MasterQuant_v3.1")
+log = logging.getLogger("MasterQuant_v4.0")
 
 
 # ============================================================================
@@ -97,7 +97,7 @@ MIN_CONFIDENCE = Cfg.i("MIN_CONFIDENCE", 65)
 
 
 # ============================================================================
-# TECHNICAL INDICATORS (با اضافات جدید)
+# TECHNICAL INDICATORS
 # ============================================================================
 class Indicators:
 
@@ -178,7 +178,6 @@ class Indicators:
         except Exception:
             return 0.0
 
-    # 🔥 استراتژی جدید: فیلتر قدرت روند
     @staticmethod
     def trend_strength(close: pd.Series, fast: int = 10, slow: int = 30) -> float:
         """نسبت EMA‌ها برای اندازه‌گیری قدرت روند"""
@@ -187,12 +186,39 @@ class Indicators:
         ratio = (ema_fast / ema_slow - 1) * 100
         return float(ratio.iloc[-1]) if len(ratio) > 0 else 0.0
 
+    @staticmethod
+    def supertrend(high: pd.Series, low: pd.Series, close: pd.Series,
+                   n: int = 10, multiplier: float = 3.0):
+        """محاسبه SuperTrend"""
+        atr = Indicators.atr(high, low, close, n)
+        hl2 = (high + low) / 2
+        upper_band = hl2 + multiplier * atr
+        lower_band = hl2 - multiplier * atr
+        
+        supertrend = pd.Series(index=close.index, dtype=float)
+        direction = pd.Series(index=close.index, dtype=int)
+        
+        for i in range(1, len(close)):
+            if close.iloc[i] > upper_band.iloc[i-1]:
+                direction.iloc[i] = 1
+            elif close.iloc[i] < lower_band.iloc[i-1]:
+                direction.iloc[i] = -1
+            else:
+                direction.iloc[i] = direction.iloc[i-1]
+            
+            if direction.iloc[i] == 1:
+                supertrend.iloc[i] = lower_band.iloc[i]
+            else:
+                supertrend.iloc[i] = upper_band.iloc[i]
+        
+        return supertrend, direction
+
 
 IND = Indicators()
 
 
 # ============================================================================
-# DATABASE (بدون تغییر)
+# DATABASE
 # ============================================================================
 class DB:
     _SCHEMA = [
@@ -224,7 +250,7 @@ class DB:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._path = "bot_v3.db"
+        self._path = "bot_v4.db"
         self._boot()
 
     def _boot(self):
@@ -321,6 +347,7 @@ class DB:
                 "wins_count": 0, "losses_count": 0,
                 "avg_win": 0.0, "avg_loss": 0.0,
                 "largest_win": 0.0, "largest_loss": 0.0,
+                "strategy_stats": {}
             }
         pnls = [r[0] for r in rows]
         wins = [p for p in pnls if p > 0]
@@ -346,7 +373,7 @@ database = DB()
 
 
 # ============================================================================
-# EXCHANGE ENGINE (بدون تغییر)
+# EXCHANGE ENGINE
 # ============================================================================
 class Exchange:
 
@@ -439,11 +466,15 @@ class Exchange:
     def fetch_multi_ohlcv(self, sym: str) -> Dict[str, pd.DataFrame]:
         result = {}
         for tf in ["1m", "3m", "5m", "15m"]:
-            df = self.fetch_ohlcv_safe(sym, tf, limit=120)  # 🔥 افزایش به ۱۲۰
-            if df is None or len(df) < 50:  # 🔥 افزایش حداقل
-                log.debug("⚠️  داده ناکافي %s %s (len=%d)",
+            df = self.fetch_ohlcv_safe(sym, tf, limit=100)
+            # 🔥 کاهش محدودیت به ۳۰
+            if df is None or len(df) < 30:
+                log.debug("⚠️ داده ناکافي %s %s (len=%d)",
                           sym, tf, len(df) if df is not None else 0)
-                return {}
+                # اگر ۱ دقیقه failed، بقیه را هم چک نکن
+                if tf == "1m":
+                    return {}
+                continue
             result[tf] = df
             time.sleep(0.15)
         return result
@@ -660,7 +691,7 @@ EX = Exchange()
 
 
 # ============================================================================
-# STRATEGY ENGINE - 🔥 کاملاً اصلاح‌شده
+# STRATEGY ENGINE - نسخه نهایی با ۹ استراتژی
 # ============================================================================
 @dataclass
 class Signal:
@@ -676,309 +707,652 @@ class Signal:
 
 class StrategyEngine:
 
-    def analyze(self, sym: str,
-                dfs: Dict[str, pd.DataFrame]) -> Signal:
+    def analyze(self, sym: str, dfs: Dict[str, pd.DataFrame]) -> Signal:
         required = ["1m", "3m", "5m", "15m"]
-        if not dfs or any(
-            tf not in dfs or len(dfs[tf]) < 50 for tf in required
-        ):
-            return Signal(debug_info="داده ناکافي")
-
+        
+        # 🔥 اصلاح: کاهش محدودیت داده
+        if not dfs:
+            return Signal(debug_info="داده دريافت نشد")
+        
+        for tf in required:
+            if tf not in dfs:
+                log.warning(f"⚠️ تایم‌فریم {tf} برای {sym} موجود نیست")
+                return Signal(debug_info=f"{tf} موجود نیست")
+            if len(dfs[tf]) < 30:
+                log.warning(f"⚠️ داده ناکافی {sym} {tf}: {len(dfs[tf])}")
+                return Signal(debug_info=f"{tf} داده ناکافی")
+        
         df1m = dfs["1m"]
         df3m = dfs["3m"]
         df5m = dfs["5m"]
         df15m = dfs["15m"]
-
-        # 🔥 محاسبه اندیکاتورهای اصلی
-        adx15 = IND.safe(
-            IND.adx(df15m["high"], df15m["low"], df15m["close"])
+        
+        # اندیکاتورهای اصلی
+        adx15 = IND.safe(IND.adx(df15m["high"], df15m["low"], df15m["close"]))
+        trend_str = IND.trend_strength(df15m["close"])
+        
+        # =========================================================
+        # ۱. استراتژی‌های اصلی
+        # =========================================================
+        
+        # Momentum Scalp
+        if adx15 > 20:
+            sig = self._momentum_scalp_optimized(df1m, df3m, df15m, adx15, trend_str)
+            if sig.action != "neutral" and sig.confidence >= MIN_CONFIDENCE:
+                return sig
+        
+        # Mean Reversion
+        if adx15 <= 28:
+            sig = self._mean_reversion_optimized(df1m, df5m, df15m, adx15, trend_str)
+            if sig.action != "neutral" and sig.confidence >= MIN_CONFIDENCE:
+                return sig
+        
+        # Breakout
+        sig = self._breakout_optimized(df1m, df5m, df15m, adx15, trend_str)
+        if sig.action != "neutral" and sig.confidence >= MIN_CONFIDENCE:
+            return sig
+        
+        # =========================================================
+        # ۲. استراتژی‌های جدید (۶ استراتژی)
+        # =========================================================
+        
+        # Pullback به EMA
+        sig = self._pullback_ema(df1m, df5m, df15m, adx15)
+        if sig.action != "neutral" and sig.confidence >= MIN_CONFIDENCE:
+            return sig
+        
+        # SuperTrend + Volume
+        sig = self._supertrend_volume(df1m, df5m, df15m)
+        if sig.action != "neutral" and sig.confidence >= MIN_CONFIDENCE:
+            return sig
+        
+        # Double Pattern
+        sig = self._double_pattern(df1m, df5m, df15m)
+        if sig.action != "neutral" and sig.confidence >= MIN_CONFIDENCE:
+            return sig
+        
+        # ATR Breakout
+        sig = self._atr_breakout(df1m, df5m, df15m)
+        if sig.action != "neutral" and sig.confidence >= MIN_CONFIDENCE:
+            return sig
+        
+        # RSI Divergence
+        sig = self._rsi_divergence(df1m, df5m, df15m)
+        if sig.action != "neutral" and sig.confidence >= MIN_CONFIDENCE:
+            return sig
+        
+        # Opening Range
+        sig = self._opening_range(df1m, df5m, df15m)
+        if sig.action != "neutral" and sig.confidence >= MIN_CONFIDENCE:
+            return sig
+        
+        return Signal(
+            debug_info=f"ADX15={adx15:.1f} Trend={trend_str:.2f} - هيچ سيگنالي"
         )
+
+    # =========================================================
+    # استراتژی ۱: Pullback به EMA
+    # =========================================================
+    def _pullback_ema(self, df1m, df5m, df15m, adx15) -> Signal:
+        """استراتژی برگشت به EMA در روند قوی"""
+        
+        # محاسبه EMA‌ها
+        ema20 = IND.safe(IND.ema(df15m["close"], 20))
+        ema50 = IND.safe(IND.ema(df15m["close"], 50))
+        ema200 = IND.safe(IND.ema(df15m["close"], 200))
+        price = IND.safe(df15m["close"])
+        rsi = IND.safe(IND.rsi(df15m["close"], 14))
+        
+        # روند صعودی قوی
+        if price > ema50 > ema200 and adx15 > 25:
+            # برگشت به EMA20
+            if price <= ema20 * 1.005 and price >= ema20 * 0.995:
+                if 40 < rsi < 50:
+                    c1 = IND.safe(df1m["close"])
+                    ema9_1 = IND.safe(IND.ema(df1m["close"], 9))
+                    if c1 > ema9_1:
+                        atr15 = IND.safe(IND.atr(df15m["high"], df15m["low"], df15m["close"]))
+                        sl = c1 - atr15 * 1.5
+                        tp = c1 + atr15 * 2.5
+                        return Signal(
+                            action="buy",
+                            strategy="PullbackEMA",
+                            confidence=75,
+                            reason=f"Pullback به EMA20 RSI={rsi:.0f}",
+                            sl=sl, tp=tp, entry_estimate=c1,
+                            debug_info="✅ Pullback به EMA"
+                        )
+        
+        # روند نزولی قوی
+        if price < ema50 < ema200 and adx15 > 25:
+            if price >= ema20 * 0.995 and price <= ema20 * 1.005:
+                if 50 < rsi < 60:
+                    c1 = IND.safe(df1m["close"])
+                    ema9_1 = IND.safe(IND.ema(df1m["close"], 9))
+                    if c1 < ema9_1:
+                        atr15 = IND.safe(IND.atr(df15m["high"], df15m["low"], df15m["close"]))
+                        sl = c1 + atr15 * 1.5
+                        tp = c1 - atr15 * 2.5
+                        return Signal(
+                            action="sell",
+                            strategy="PullbackEMA",
+                            confidence=75,
+                            reason=f"Pullback به EMA20 RSI={rsi:.0f}",
+                            sl=sl, tp=tp, entry_estimate=c1,
+                            debug_info="✅ Pullback به EMA (شورت)"
+                        )
+        
+        return Signal(debug_info="PullbackEMA: شرايط برقرار نيست")
+
+    # =========================================================
+    # استراتژی ۲: SuperTrend + Volume Surge
+    # =========================================================
+    def _supertrend_volume(self, df1m, df5m, df15m) -> Signal:
+        """استراتژی SuperTrend + افزایش حجم"""
+        
+        # محاسبه SuperTrend
+        atr = IND.safe(IND.atr(df15m["high"], df15m["low"], df15m["close"], 10))
+        multiplier = 3.0
+        hl2 = (df15m["high"] + df15m["low"]) / 2
+        
+        upper_band = IND.safe(hl2 + multiplier * atr)
+        lower_band = IND.safe(hl2 - multiplier * atr)
+        
+        # شناسایی تغییر روند
+        close = IND.safe(df15m["close"])
+        prev_close = IND.safe(df15m["close"], -2)
+        
+        # افزایش حجم
+        vol = IND.safe(df15m["vol"])
+        avg_vol = IND.safe(df15m["vol"].rolling(20).mean())
+        vol_surge = vol > avg_vol * 1.5
+        
+        if not vol_surge:
+            return Signal(debug_info="SuperTrend: حجم کافی نیست")
+        
+        # تغییر به روند صعودی
+        if close > upper_band and prev_close <= upper_band:
+            c1 = IND.safe(df1m["close"])
+            atr1 = IND.safe(IND.atr(df1m["high"], df1m["low"], df1m["close"]))
+            sl = c1 - atr1 * 2.0
+            tp = c1 + atr1 * 3.0
+            return Signal(
+                action="buy",
+                strategy="SuperTrend_Vol",
+                confidence=80,
+                reason=f"SuperTrend تغییر + حجم {vol/avg_vol:.1f}x",
+                sl=sl, tp=tp, entry_estimate=c1,
+                debug_info="✅ SuperTrend BUY"
+            )
+        
+        # تغییر به روند نزولی
+        if close < lower_band and prev_close >= lower_band:
+            c1 = IND.safe(df1m["close"])
+            atr1 = IND.safe(IND.atr(df1m["high"], df1m["low"], df1m["close"]))
+            sl = c1 + atr1 * 2.0
+            tp = c1 - atr1 * 3.0
+            return Signal(
+                action="sell",
+                strategy="SuperTrend_Vol",
+                confidence=80,
+                reason=f"SuperTrend تغییر + حجم {vol/avg_vol:.1f}x",
+                sl=sl, tp=tp, entry_estimate=c1,
+                debug_info="✅ SuperTrend SELL"
+            )
+        
+        return Signal(debug_info="SuperTrend: بدون تغییر روند")
+
+    # =========================================================
+    # استراتژی ۳: Double Bottom / Double Top
+    # =========================================================
+    def _double_pattern(self, df1m, df5m, df15m) -> Signal:
+        """الگوی Double Bottom / Double Top"""
+        
+        # پیدا کردن کف‌ها و سقف‌ها
+        high = df5m["high"].values
+        low = df5m["low"].values
+        close = df5m["close"].values
+        
+        # شناسایی نقاط برگشتی
+        troughs = []
+        peaks = []
+        
+        for i in range(5, len(close) - 5):
+            if low[i] < low[i-1] and low[i] < low[i+1]:
+                troughs.append((i, low[i]))
+            if high[i] > high[i-1] and high[i] > high[i+1]:
+                peaks.append((i, high[i]))
+        
+        # Double Bottom
+        if len(troughs) >= 2:
+            last_trough = troughs[-1]
+            prev_trough = troughs[-2]
+            
+            # دو کف نزدیک به هم (حداکثر ۱٪ اختلاف)
+            diff_pct = abs(last_trough[1] - prev_trough[1]) / prev_trough[1] * 100
+            if diff_pct < 1.0:
+                # خط گردن = بالاترین نقطه بین دو کف
+                neck = max(high[prev_trough[0]:last_trough[0]])
+                current_price = IND.safe(df5m["close"])
+                
+                # شکست خط گردن
+                if current_price > neck:
+                    vol = IND.safe(df5m["vol"])
+                    avg_vol = IND.safe(df5m["vol"].rolling(20).mean())
+                    if vol > avg_vol * 1.3:
+                        c1 = IND.safe(df1m["close"])
+                        atr1 = IND.safe(IND.atr(df1m["high"], df1m["low"], df1m["close"]))
+                        sl = prev_trough[1] * 0.99
+                        tp = c1 + (neck - prev_trough[1]) * 1.5
+                        return Signal(
+                            action="buy",
+                            strategy="DoubleBottom",
+                            confidence=85,
+                            reason=f"Double Bottom شکست {diff_pct:.1f}%",
+                            sl=sl, tp=tp, entry_estimate=c1,
+                            debug_info="✅ Double Bottom"
+                        )
+        
+        # Double Top
+        if len(peaks) >= 2:
+            last_peak = peaks[-1]
+            prev_peak = peaks[-2]
+            
+            diff_pct = abs(last_peak[1] - prev_peak[1]) / prev_peak[1] * 100
+            if diff_pct < 1.0:
+                neck = min(low[prev_peak[0]:last_peak[0]])
+                current_price = IND.safe(df5m["close"])
+                
+                if current_price < neck:
+                    vol = IND.safe(df5m["vol"])
+                    avg_vol = IND.safe(df5m["vol"].rolling(20).mean())
+                    if vol > avg_vol * 1.3:
+                        c1 = IND.safe(df1m["close"])
+                        atr1 = IND.safe(IND.atr(df1m["high"], df1m["low"], df1m["close"]))
+                        sl = prev_peak[1] * 1.01
+                        tp = c1 - (prev_peak[1] - neck) * 1.5
+                        return Signal(
+                            action="sell",
+                            strategy="DoubleTop",
+                            confidence=85,
+                            reason=f"Double Top شکست {diff_pct:.1f}%",
+                            sl=sl, tp=tp, entry_estimate=c1,
+                            debug_info="✅ Double Top"
+                        )
+        
+        return Signal(debug_info="DoublePattern: الگويي يافت نشد")
+
+    # =========================================================
+    # استراتژی ۴: ATR Breakout
+    # =========================================================
+    def _atr_breakout(self, df1m, df5m, df15m) -> Signal:
+        """شکست با ATR و حجم بالا"""
+        
+        # محاسبه باندهای ATR
+        high = df5m["high"]
+        low = df5m["low"]
+        close = df5m["close"]
+        
+        atr = IND.safe(IND.atr(high, low, close, 14))
+        upper_band = IND.safe(high.rolling(20).max()) + atr * 0.5
+        lower_band = IND.safe(low.rolling(20).min()) - atr * 0.5
+        
+        current_price = IND.safe(close)
+        vol = IND.safe(df5m["vol"])
+        avg_vol = IND.safe(df5m["vol"].rolling(20).mean())
+        
+        # شکست به بالا
+        if current_price > upper_band and vol > avg_vol * 1.2:
+            c1 = IND.safe(df1m["close"])
+            sl = c1 - atr * 1.5
+            tp = c1 + atr * 2.5
+            return Signal(
+                action="buy",
+                strategy="ATR_Breakout",
+                confidence=75,
+                reason=f"ATR Breakout بالا {vol/avg_vol:.1f}x",
+                sl=sl, tp=tp, entry_estimate=c1,
+                debug_info="✅ ATR Breakout UP"
+            )
+        
+        # شکست به پایین
+        if current_price < lower_band and vol > avg_vol * 1.2:
+            c1 = IND.safe(df1m["close"])
+            sl = c1 + atr * 1.5
+            tp = c1 - atr * 2.5
+            return Signal(
+                action="sell",
+                strategy="ATR_Breakout",
+                confidence=75,
+                reason=f"ATR Breakout پایین {vol/avg_vol:.1f}x",
+                sl=sl, tp=tp, entry_estimate=c1,
+                debug_info="✅ ATR Breakout DOWN"
+            )
+        
+        return Signal(debug_info="ATR_Breakout: بدون شکست")
+
+    # =========================================================
+    # استراتژی ۵: RSI Divergence
+    # =========================================================
+    def _rsi_divergence(self, df1m, df5m, df15m) -> Signal:
+        """واگرایی RSI"""
+        
+        close = df15m["close"]
+        rsi = IND.rsi(close, 14)
+        
+        # پیدا کردن کف‌ها
+        price_lows = []
+        rsi_lows = []
+        
+        for i in range(10, len(close) - 1):
+            if close.iloc[i] < close.iloc[i-1] and close.iloc[i] < close.iloc[i+1]:
+                price_lows.append((i, close.iloc[i]))
+            if rsi.iloc[i] < rsi.iloc[i-1] and rsi.iloc[i] < rsi.iloc[i+1]:
+                rsi_lows.append((i, rsi.iloc[i]))
+        
+        # واگرایی مثبت
+        if len(price_lows) >= 2 and len(rsi_lows) >= 2:
+            last_price_low = price_lows[-1]
+            prev_price_low = price_lows[-2]
+            last_rsi_low = rsi_lows[-1]
+            prev_rsi_low = rsi_lows[-2]
+            
+            # قیمت کف پایین‌تر ولی RSI کف بالاتر
+            if last_price_low[1] < prev_price_low[1] and last_rsi_low[1] > prev_rsi_low[1]:
+                c1 = IND.safe(df1m["close"])
+                atr1 = IND.safe(IND.atr(df1m["high"], df1m["low"], df1m["close"]))
+                sl = c1 - atr1 * 1.5
+                tp = c1 + atr1 * 2.5
+                return Signal(
+                    action="buy",
+                    strategy="RSI_Divergence",
+                    confidence=82,
+                    reason=f"واگرایی مثبت RSI",
+                    sl=sl, tp=tp, entry_estimate=c1,
+                    debug_info="✅ RSI Divergence BUY"
+                )
+        
+        # واگرایی منفی
+        price_highs = []
+        rsi_highs = []
+        for i in range(10, len(close) - 1):
+            if close.iloc[i] > close.iloc[i-1] and close.iloc[i] > close.iloc[i+1]:
+                price_highs.append((i, close.iloc[i]))
+            if rsi.iloc[i] > rsi.iloc[i-1] and rsi.iloc[i] > rsi.iloc[i+1]:
+                rsi_highs.append((i, rsi.iloc[i]))
+        
+        if len(price_highs) >= 2 and len(rsi_highs) >= 2:
+            last_price_high = price_highs[-1]
+            prev_price_high = price_highs[-2]
+            last_rsi_high = rsi_highs[-1]
+            prev_rsi_high = rsi_highs[-2]
+            
+            if last_price_high[1] > prev_price_high[1] and last_rsi_high[1] < prev_rsi_high[1]:
+                c1 = IND.safe(df1m["close"])
+                atr1 = IND.safe(IND.atr(df1m["high"], df1m["low"], df1m["close"]))
+                sl = c1 + atr1 * 1.5
+                tp = c1 - atr1 * 2.5
+                return Signal(
+                    action="sell",
+                    strategy="RSI_Divergence",
+                    confidence=82,
+                    reason=f"واگرایی منفی RSI",
+                    sl=sl, tp=tp, entry_estimate=c1,
+                    debug_info="✅ RSI Divergence SELL"
+                )
+        
+        return Signal(debug_info="RSI_Divergence: واگرايي يافت نشد")
+
+    # =========================================================
+    # استراتژی ۶: Opening Range Breakout
+    # =========================================================
+    def _opening_range(self, df1m, df5m, df15m) -> Signal:
+        """شکست محدوده بازگشایی"""
+        
+        # ۳ کندل اول (۱۵ دقیقه)
+        if len(df5m) < 20:
+            return Signal(debug_info="OpeningRange: داده کافی نیست")
+        
+        # محدوده ۱۵ دقیقه اول
+        first_15 = df5m.iloc[:3]
+        range_high = first_15["high"].max()
+        range_low = first_15["low"].min()
+        
+        current_price = IND.safe(df5m["close"])
+        vol = IND.safe(df5m["vol"])
+        avg_vol = IND.safe(df5m["vol"].rolling(20).mean())
+        
+        # شکست به بالا
+        if current_price > range_high and vol > avg_vol * 1.3:
+            c1 = IND.safe(df1m["close"])
+            atr1 = IND.safe(IND.atr(df1m["high"], df1m["low"], df1m["close"]))
+            sl = c1 - atr1 * 1.5
+            tp = c1 + atr1 * 2.5
+            return Signal(
+                action="buy",
+                strategy="OpeningRange",
+                confidence=78,
+                reason=f"شکست محدوده بازگشایی بالا",
+                sl=sl, tp=tp, entry_estimate=c1,
+                debug_info="✅ Opening Range UP"
+            )
+        
+        # شکست به پایین
+        if current_price < range_low and vol > avg_vol * 1.3:
+            c1 = IND.safe(df1m["close"])
+            atr1 = IND.safe(IND.atr(df1m["high"], df1m["low"], df1m["close"]))
+            sl = c1 + atr1 * 1.5
+            tp = c1 - atr1 * 2.5
+            return Signal(
+                action="sell",
+                strategy="OpeningRange",
+                confidence=78,
+                reason=f"شکست محدوده بازگشایی پایین",
+                sl=sl, tp=tp, entry_estimate=c1,
+                debug_info="✅ Opening Range DOWN"
+            )
+        
+        return Signal(debug_info="OpeningRange: بدون شکست")
+
+    # =========================================================
+    # استراتژی‌های اصلاح‌شده
+    # =========================================================
+    
+    def _momentum_scalp_optimized(self, df1m, df3m, df15m, adx15, trend_str) -> Signal:
+        """نسخه اصلاح‌شده MomentumScalp"""
+        
+        price15 = IND.safe(df15m["close"])
         ema20_15 = IND.safe(IND.ema(df15m["close"], 20))
         ema50_15 = IND.safe(IND.ema(df15m["close"], 50))
-        price15 = IND.safe(df15m["close"])
-        rsi15 = IND.safe(IND.rsi(df15m["close"], 14))
         
-        # 🔥 قدرت روند
-        trend_str = IND.trend_strength(df15m["close"])
-
-        # =========================================================
-        # 1. استراتژی Momentum Scalp (با اصلاحات کامل)
-        # =========================================================
-        if adx15 > 20:
-            sig = self._momentum_scalp(
-                sym, df1m, df3m, price15, ema20_15, ema50_15, 
-                adx15, trend_str, df15m
-            )
-            if sig.action != "neutral":
-                return sig
-
-        # =========================================================
-        # 2. استراتژی Mean Reversion (با اصلاحات کامل)
-        # =========================================================
-        if adx15 <= 28:  # 🔥 افزایش آستانه رنج
-            sig = self._mean_reversion(
-                sym, df1m, df5m, df15m, adx15, trend_str
-            )
-            if sig.action != "neutral":
-                return sig
-
-        # =========================================================
-        # 3. استراتژی Breakout (با اصلاحات کامل)
-        # =========================================================
-        sig = self._breakout_strategy(
-            sym, df1m, df5m, df15m, adx15, trend_str
-        )
-        if sig.action != "neutral":
-            return sig
-
-        return Signal(
-            debug_info=f"ADX15={adx15:.1f} RSI15={rsi15:.1f} "
-                       f"Trend={trend_str:.2f} - شرايط ورود برقرار نيست"
-        )
-
-    def _momentum_scalp(self, sym, df1m, df3m, price15,
-                        ema20_15, ema50_15, adx15, trend_str, df15m) -> Signal:
-        """🔥 اصلاح‌شده: فیلترهای قوی‌تر، ATR از ۱۵ دقیقه"""
-        
-        # تعیین روند با فیلتر قدرت
+        # تعیین روند
         if price15 > ema20_15 and ema20_15 > ema50_15 and trend_str > 0.3:
             trend = "long"
         elif price15 < ema20_15 and ema20_15 < ema50_15 and trend_str < -0.3:
             trend = "short"
         else:
-            return Signal(
-                debug_info=f"Momentum: روند ضعيف "
-                           f"Trend={trend_str:.2f}"
-            )
-
-        # 🔥 پولبک با فیلترهای قوی‌تر
+            return Signal(debug_info=f"Momentum: روند ضعيف Trend={trend_str:.2f}")
+        
+        # پولبک
         rsi3 = IND.safe(IND.rsi(df3m["close"], 14))
         _, _, m_hist = IND.macd(df3m["close"])
         macd_h = IND.safe(m_hist)
-
-        # 🔥 فیلتر حجم (جدید)
         vol_ratio = IND.safe(df1m["vol"] / df1m["vol"].rolling(20).mean())
         
         if trend == "long":
-            # 🔥 محدودتر: RSI بین ۳۰-۴۵
             pullback = (rsi3 < 45 and rsi3 > 30) and (macd_h > 0.0001)
         else:
-            # 🔥 محدودتر: RSI بین ۵۵-۷۰
             pullback = (rsi3 > 55 and rsi3 < 70) and (macd_h < -0.0001)
-
+        
         if not pullback:
-            return Signal(
-                debug_info=f"Momentum: پولبک ضعيف "
-                           f"RSI3={rsi3:.1f} MACD_H={macd_h:.6f}"
-            )
-
-        # 🔥 تأیید ۱ دقیقه با حجم
+            return Signal(debug_info=f"Momentum: پولبک ضعيف RSI3={rsi3:.1f}")
+        
         c1 = IND.safe(df1m["close"])
         ema9_1 = IND.safe(IND.ema(df1m["close"], 9))
         trigger = (c1 > ema9_1) if trend == "long" else (c1 < ema9_1)
-
-        if not trigger or vol_ratio < 0.7:  # 🔥 فیلتر حجم
-            return Signal(
-                debug_info=f"Momentum: تريگر ضعيف ou حجم کم "
-                           f"VolRatio={vol_ratio:.2f}"
-            )
-
-        # 🔥 ATR از ۱۵ دقیقه (کمتر نویز)
-        atr15 = IND.safe(
-            IND.atr(df15m["high"], df15m["low"], df15m["close"])
-        )
-        # 🔥 حداقل فاصله SL = ۰.۸٪ از قیمت
+        
+        if not trigger or vol_ratio < 0.7:
+            return Signal(debug_info=f"Momentum: تريگر ضعيف VolRatio={vol_ratio:.2f}")
+        
+        atr15 = IND.safe(IND.atr(df15m["high"], df15m["low"], df15m["close"]))
         min_sl_dist = c1 * 0.008
-        sl_dist = max(atr15 * 1.5, min_sl_dist)  # 🔥 ضریب افزایش یافته
-
+        sl_dist = max(atr15 * 1.5, min_sl_dist)
+        
         if trend == "long":
             sl = c1 - sl_dist
-            tp = c1 + (sl_dist * 1.8)  # 🔥 R:R = 1.8
+            tp = c1 + (sl_dist * 1.8)
             action = "buy"
         else:
             sl = c1 + sl_dist
             tp = c1 - (sl_dist * 1.8)
             action = "sell"
-
-        # 🔥 محاسبه اطمینان با فیلترهای جدید
+        
         conf = 55
-        if adx15 > 30:
-            conf += 10
-        if adx15 > 40:
-            conf += 8
-        if abs(rsi3 - 50) > 8:
-            conf += 8
-        if abs(macd_h) > 0.001:
-            conf += 7
-        if vol_ratio > 1.2:
-            conf += 5
-        if abs(trend_str) > 0.5:
-            conf += 5
-
+        if adx15 > 30: conf += 10
+        if adx15 > 40: conf += 8
+        if abs(rsi3 - 50) > 8: conf += 8
+        if abs(macd_h) > 0.001: conf += 7
+        if vol_ratio > 1.2: conf += 5
+        if abs(trend_str) > 0.5: conf += 5
+        
         return Signal(
             action=action,
             strategy="MomentumScalp",
             confidence=min(conf, 92),
-            reason=f"ADX={adx15:.0f} RSI3={rsi3:.0f} Vol={vol_ratio:.2f}",
+            reason=f"ADX={adx15:.0f} RSI3={rsi3:.0f}",
             sl=sl, tp=tp, entry_estimate=c1,
-            debug_info=f"✅ Momentum {trend} | SL={sl_dist/c1*100:.2f}%",
+            debug_info=f"✅ Momentum {trend}"
         )
 
-    def _mean_reversion(self, sym, df1m, df5m, df15m, adx15, trend_str) -> Signal:
-        """🔥 اصلاح‌شده: فیلتر ADX و ضریب ATR بیشتر"""
+    def _mean_reversion_optimized(self, df1m, df5m, df15m, adx15, trend_str) -> Signal:
+        """نسخه اصلاح‌شده MeanReversion"""
         
         bb_lo, bb_mid, bb_hi = IND.bbands(df5m["close"], 20, 2.0)
         c5 = IND.safe(df5m["close"])
         rsi5 = IND.safe(IND.rsi(df5m["close"], 14))
-
+        
         if c5 <= 0:
             return Signal(debug_info="MeanRev: قيمت نامعتبر")
-
+        
+        if abs(trend_str) > 0.8:
+            return Signal(debug_info=f"MeanRev: روند قوي Trend={trend_str:.2f}")
+        
         bb_lo_val = IND.safe(bb_lo)
         bb_hi_val = IND.safe(bb_hi)
-
-        # 🔥 فقط در رنج کامل
-        if abs(trend_str) > 0.8:
-            return Signal(
-                debug_info=f"MeanRev: روند قوي Trend={trend_str:.2f}"
-            )
-
-        at_lower = c5 <= bb_lo_val and rsi5 < 32  # 🔥 سخت‌تر
-        at_upper = c5 >= bb_hi_val and rsi5 > 68  # 🔥 سخت‌تر
-
+        
+        at_lower = c5 <= bb_lo_val and rsi5 < 32
+        at_upper = c5 >= bb_hi_val and rsi5 > 68
+        
         if not (at_lower or at_upper):
-            return Signal(
-                debug_info=f"MeanRev: باند نخورده "
-                           f"RSI5={rsi5:.1f}"
-            )
-
+            return Signal(debug_info=f"MeanRev: باند نخورده RSI5={rsi5:.1f}")
+        
         c1 = IND.safe(df1m["close"])
         rsi1 = IND.safe(IND.rsi(df1m["close"], 7))
-
+        
         if c1 <= 0:
             return Signal(debug_info="MeanRev: C1=0")
-
-        # 🔥 ATR از ۱۵ دقیقه
-        atr15 = IND.safe(
-            IND.atr(df15m["high"], df15m["low"], df15m["close"])
-        )
+        
+        atr15 = IND.safe(IND.atr(df15m["high"], df15m["low"], df15m["close"]))
         min_sl_dist = c1 * 0.008
-        sl_dist = max(atr15 * 2.0, min_sl_dist)  # 🔥 ضریب ۲
-
-        if at_lower and rsi1 > 28:  # 🔥 سخت‌تر
+        sl_dist = max(atr15 * 2.0, min_sl_dist)
+        
+        if at_lower and rsi1 > 28:
             sl = c1 - sl_dist
             tp = c1 + (sl_dist * 1.5)
             conf = 50
-            if rsi5 < 28:
-                conf += 12
-            if rsi1 > 35:
-                conf += 8
-            if vol_ratio := IND.safe(df1m["vol"] / df1m["vol"].rolling(20).mean()) > 1.1:
-                conf += 5
+            if rsi5 < 28: conf += 12
+            if rsi1 > 35: conf += 8
+            vol_ratio = IND.safe(df1m["vol"] / df1m["vol"].rolling(20).mean())
+            if vol_ratio > 1.1: conf += 5
             return Signal(
                 action="buy",
                 strategy="MeanReversion",
                 confidence=min(conf, 88),
-                reason=f"BB_Low RSI5={rsi5:.0f} RSI1={rsi1:.0f}",
+                reason=f"BB_Low RSI5={rsi5:.0f}",
                 sl=sl, tp=tp, entry_estimate=c1,
-                debug_info="✅ MeanRev BUY",
+                debug_info="✅ MeanRev BUY"
             )
-
-        if at_upper and rsi1 < 72:  # 🔥 سخت‌تر
+        
+        if at_upper and rsi1 < 72:
             sl = c1 + sl_dist
             tp = c1 - (sl_dist * 1.5)
             conf = 50
-            if rsi5 > 72:
-                conf += 12
-            if rsi1 < 65:
-                conf += 8
-            if vol_ratio := IND.safe(df1m["vol"] / df1m["vol"].rolling(20).mean()) > 1.1:
-                conf += 5
+            if rsi5 > 72: conf += 12
+            if rsi1 < 65: conf += 8
+            vol_ratio = IND.safe(df1m["vol"] / df1m["vol"].rolling(20).mean())
+            if vol_ratio > 1.1: conf += 5
             return Signal(
                 action="sell",
                 strategy="MeanReversion",
                 confidence=min(conf, 88),
-                reason=f"BB_High RSI5={rsi5:.0f} RSI1={rsi1:.0f}",
+                reason=f"BB_High RSI5={rsi5:.0f}",
                 sl=sl, tp=tp, entry_estimate=c1,
-                debug_info="✅ MeanRev SELL",
+                debug_info="✅ MeanRev SELL"
             )
-
+        
         return Signal(debug_info="MeanRev: تأیید ۱دقيقه نداد")
 
-    def _breakout_strategy(self, sym, df1m, df5m, df15m, adx15, trend_str) -> Signal:
-        """🔥 اصلاح‌شده: تأیید با RSI و افزایش ضریب ATR"""
+    def _breakout_optimized(self, df1m, df5m, df15m, adx15, trend_str) -> Signal:
+        """نسخه اصلاح‌شده Breakout"""
         
         high5 = df5m["high"].rolling(20).max()
         low5 = df5m["low"].rolling(20).min()
-
+        
         current_high = IND.safe(high5)
         current_low = IND.safe(low5)
         c5 = IND.safe(df5m["close"])
         prev_c5 = IND.safe(df5m["close"], -2)
         vol = IND.safe(df5m["vol"])
         avg_vol = IND.safe(df5m["vol"].rolling(20).mean())
-
+        
         if c5 <= 0 or current_high <= 0 or current_low <= 0:
             return Signal(debug_info="Breakout: داده ناقص")
-
-        # 🔥 ATR از ۱۵ دقیقه
-        atr15 = IND.safe(
-            IND.atr(df15m["high"], df15m["low"], df15m["close"])
-        )
+        
+        atr15 = IND.safe(IND.atr(df15m["high"], df15m["low"], df15m["close"]))
         min_sl_dist = c5 * 0.01
-        sl_dist = max(atr15 * 2.5, min_sl_dist)  # 🔥 ضریب ۲.۵
-
-        # 🔥 تأیید RSI ۱ دقیقه
+        sl_dist = max(atr15 * 2.5, min_sl_dist)
         rsi1 = IND.safe(IND.rsi(df1m["close"], 7))
-
-        # شکست بالا با تأیید
+        
+        # شکست بالا
         if c5 >= current_high and prev_c5 < current_high:
-            if vol > avg_vol * 1.3 and rsi1 > 45:  # 🔥 فیلتر RSI
+            if vol > avg_vol * 1.3 and rsi1 > 45:
                 c1 = IND.safe(df1m["close"])
-                if c1 <= 0:
-                    c1 = c5
+                if c1 <= 0: c1 = c5
                 sl = c1 - sl_dist
                 tp = c1 + (sl_dist * 2.0)
                 conf = 60
-                if adx15 > 25:
-                    conf += 8
-                if vol > avg_vol * 1.6:
-                    conf += 8
-                if abs(trend_str) > 0.3:
-                    conf += 5
+                if adx15 > 25: conf += 8
+                if vol > avg_vol * 1.6: conf += 8
+                if abs(trend_str) > 0.3: conf += 5
                 return Signal(
                     action="buy",
                     strategy="Breakout_High",
                     confidence=min(conf, 90),
-                    reason=f"شکست سقف 🚀 Vol={vol/avg_vol:.1f}x",
+                    reason=f"شکست سقف 🚀",
                     sl=sl, tp=tp, entry_estimate=c1,
-                    debug_info="✅ Breakout UP",
+                    debug_info="✅ Breakout UP"
                 )
-
-        # شکست پایین با تأیید
+        
+        # شکست پایین
         if c5 <= current_low and prev_c5 > current_low:
-            if vol > avg_vol * 1.3 and rsi1 < 55:  # 🔥 فیلتر RSI
+            if vol > avg_vol * 1.3 and rsi1 < 55:
                 c1 = IND.safe(df1m["close"])
-                if c1 <= 0:
-                    c1 = c5
+                if c1 <= 0: c1 = c5
                 sl = c1 + sl_dist
                 tp = c1 - (sl_dist * 2.0)
                 conf = 60
-                if adx15 > 25:
-                    conf += 8
-                if vol > avg_vol * 1.6:
-                    conf += 8
-                if abs(trend_str) > 0.3:
-                    conf += 5
+                if adx15 > 25: conf += 8
+                if vol > avg_vol * 1.6: conf += 8
+                if abs(trend_str) > 0.3: conf += 5
                 return Signal(
                     action="sell",
                     strategy="Breakout_Low",
                     confidence=min(conf, 90),
-                    reason=f"شکست کف 📉 Vol={vol/avg_vol:.1f}x",
+                    reason=f"شکست کف 📉",
                     sl=sl, tp=tp, entry_estimate=c1,
-                    debug_info="✅ Breakout DOWN",
+                    debug_info="✅ Breakout DOWN"
                 )
-
+        
         return Signal(debug_info="Breakout: شکستي رخ نداده")
 
 
@@ -986,7 +1360,7 @@ STRATEGY = StrategyEngine()
 
 
 # ============================================================================
-# TELEGRAM HANDLER (بدون تغییر)
+# TELEGRAM HANDLER
 # ============================================================================
 class TelegramHandler:
 
@@ -1093,29 +1467,30 @@ class TelegramHandler:
         mode = "🧪 TESTNET" if TESTNET else "💰 MAINNET"
 
         msg = (
-            f"📊 <b>داشبورد ربات v3.1 (بهینه)</b>\n"
-            f"{'═' * 25}\n"
+            f"📊 <b>داشبورد ربات v4.0 (نهایی)</b>\n"
+            f"{'═' * 28}\n"
             f"⚡ وضعيت: {status}\n"
             f"🌐 شبکه: {mode}\n"
             f"🔗 اتصال: {'✅' if EX.is_connected else '❌'}\n"
-            f"{'═' * 25}\n"
+            f"{'═' * 28}\n"
             f"💰 موجودي آزاد: ${bal:,.2f}\n"
             f"💎 ارزش کل: ${equity:,.2f}\n"
             f"📈 سود/زيان: {stats['total_pnl']:+,.2f}$\n"
-            f"{'═' * 25}\n"
+            f"{'═' * 28}\n"
             f"📊 پوزيشن DB: {db_count}/{MAX_POS}\n"
             f"🏦 پوزيشن صرافي: {len(real_pos)}\n"
-            f"{'═' * 25}\n"
+            f"{'═' * 28}\n"
             f"📊 معاملات: {stats['total_trades']}\n"
             f"✅ برد: {stats['wins_count']} | ❌ باخت: {stats['losses_count']}\n"
             f"🎯 وين‌ريت: {stats['win_rate']}%\n"
             f"⚡ PF: {stats['profit_factor']}\n"
             f"🛡️ افت: {self.engine.current_dd:.1f}% / {MAX_DD}%\n"
-            f"{'═' * 25}\n"
+            f"{'═' * 28}\n"
+            f"🧠 استراتژی‌ها: ۹ استراتژی فعال\n"
             f"⏱️ فاصله اسکن: {SCAN_INTERVAL}s\n"
             f"🎯 حداقل اطمينان: {MIN_CONFIDENCE}%\n"
             f"📊 نمادها: {len(SYMBOLS)}\n"
-            f"🔧 نسخه: v3.1 (بهینه)"
+            f"🔧 نسخه: v4.0 (نهایی)"
         )
         self.send(msg, reply_markup=self._keyboard())
 
@@ -1124,10 +1499,7 @@ class TelegramHandler:
         db_pos = list(self.engine._pos.values())
 
         if not real_pos and not db_pos:
-            self.send(
-                "📭 <b>هيچ پوزيشني نيست</b>",
-                reply_markup=self._keyboard(),
-            )
+            self.send("📭 <b>هيچ پوزيشني نيست</b>", reply_markup=self._keyboard())
             return
 
         msg = "🏦 <b>پوزيشن‌هاي واقعي صرافي:</b>\n"
@@ -1144,7 +1516,7 @@ class TelegramHandler:
             msg += "❌ هيچ پوزيشني در صرافي نيست\n"
 
         if db_pos:
-            msg += f"\n{'═' * 25}\n📂 <b>DB ({len(db_pos)}):</b>\n"
+            msg += f"\n{'═' * 28}\n📂 <b>DB ({len(db_pos)}):</b>\n"
             for p in db_pos:
                 msg += (
                     f"📌 {p['symbol']} ({p['side']}) "
@@ -1152,23 +1524,11 @@ class TelegramHandler:
                     f"SL={p['sl']:.4f} TP={p['tp']:.4f}\n"
                 )
 
-        real_syms = {p["symbol"] for p in real_pos}
-        db_syms = {p["symbol"] for p in db_pos}
-        if real_syms != db_syms:
-            msg += (
-                f"\n⚠️ <b>ناهماهنگي!</b>\n"
-                f"فقط صرافي: {real_syms - db_syms or 'ندارد'}\n"
-                f"فقط DB: {db_syms - real_syms or 'ندارد'}\n"
-            )
-        else:
-            msg += "\n✅ همگام‌سازي صحيح\n"
-
         self.send(msg, reply_markup=self._keyboard())
 
     def _send_history(self):
         if not EX.is_connected:
-            self.send("❌ صرافي متصل نيست",
-                       reply_markup=self._keyboard())
+            self.send("❌ صرافي متصل نيست", reply_markup=self._keyboard())
             return
         all_trades = []
         for sym in SYMBOLS[:5]:
@@ -1176,10 +1536,7 @@ class TelegramHandler:
             all_trades.extend(trades)
 
         if not all_trades:
-            self.send(
-                "📭 <b>تاريخچه‌اي يافت نشد</b>",
-                reply_markup=self._keyboard(),
-            )
+            self.send("📭 <b>تاريخچه‌اي يافت نشد</b>", reply_markup=self._keyboard())
             return
 
         msg = "📜 <b>تاريخچه واقعي:</b>\n"
@@ -1197,8 +1554,8 @@ class TelegramHandler:
         bal = EX.balance() if connected else 0
 
         msg = (
-            f"⚙️ <b>وضعيت سيستم v3.1</b>\n"
-            f"{'═' * 25}\n"
+            f"⚙️ <b>وضعيت سيستم v4.0</b>\n"
+            f"{'═' * 28}\n"
             f"🔗 صرافي: {'✅ متصل' if connected else '❌ قطع'}\n"
             f"🌐 شبکه: {mode}\n"
             f"💰 موجودي: ${bal:,.2f}\n"
@@ -1209,22 +1566,26 @@ class TelegramHandler:
             f"🎯 Min Conf: {MIN_CONFIDENCE}%\n"
             f"⏱️ Scan: هر {SCAN_INTERVAL}s\n"
             f"📊 نمادها: {', '.join(s.split('/')[0] for s in SYMBOLS)}\n"
-            f"{'═' * 25}\n"
-            f"🔧 اصلاحات v3.1:\n"
-            f"• ATR ۱۵ دقيقه براي SL\n"
-            f"• حداقل SL ۰.۸٪\n"
-            f"• فیلتر حجم و RSI\n"
-            f"• R:R بهبود یافته"
+            f"{'═' * 28}\n"
+            f"🧠 استراتژی‌های فعال:\n"
+            f"1️⃣ MomentumScalp\n"
+            f"2️⃣ MeanReversion\n"
+            f"3️⃣ Breakout\n"
+            f"4️⃣ PullbackEMA\n"
+            f"5️⃣ SuperTrend_Vol\n"
+            f"6️⃣ DoublePattern\n"
+            f"7️⃣ ATR_Breakout\n"
+            f"8️⃣ RSI_Divergence\n"
+            f"9️⃣ OpeningRange\n"
         )
         self.send(msg, reply_markup=self._keyboard())
 
     def _send_debug_scan(self):
         if not EX.is_connected:
-            self.send("❌ صرافي متصل نيست",
-                       reply_markup=self._keyboard())
+            self.send("❌ صرافي متصل نيست", reply_markup=self._keyboard())
             return
 
-        msg = "🔍 <b>ديباگ اسکن نمادها (v3.1):</b>\n"
+        msg = "🔍 <b>ديباگ اسکن نمادها (v4.0):</b>\n"
         bal = EX.balance()
         msg += f"💰 موجودي: ${bal:,.2f}\n"
         msg += f"📊 پوزيشن فعال: {len(self.engine._pos)}/{MAX_POS}\n\n"
@@ -1271,7 +1632,7 @@ class TelegramHandler:
 
 
 # ============================================================================
-# CORE ENGINE - 🔥 اصلاح قیمت ورود
+# CORE ENGINE
 # ============================================================================
 class Engine:
 
@@ -1330,14 +1691,14 @@ class Engine:
                 database.insert(pos)
 
     def run_loop(self):
-        log.info("🚀  موتور اصلي شروع شد")
+        log.info("🚀 موتور اصلي شروع شد - v4.0 با ۹ استراتژی")
 
         while True:
             try:
                 self._cycle_count += 1
 
                 if not EX.is_connected:
-                    log.warning("⚠️  صرافي متصل نيست...")
+                    log.warning("⚠️ صرافي متصل نيست...")
                     time.sleep(30)
                     continue
 
@@ -1357,10 +1718,7 @@ class Engine:
                         self._scan_markets(equity)
                     else:
                         if self._cycle_count % 50 == 0:
-                            log.info(
-                                "📊  ظرفيت پر: %d/%d",
-                                pos_count, MAX_POS,
-                            )
+                            log.info("📊 ظرفيت پر: %d/%d", pos_count, MAX_POS)
 
                 time.sleep(SCAN_INTERVAL)
 
@@ -1377,9 +1735,7 @@ class Engine:
             )
             if self.current_dd >= MAX_DD and not self.is_dd_halted:
                 self.is_dd_halted = True
-                log.critical(
-                    "🛑 DRAWDOWN LIMIT! DD=%.1f%%", self.current_dd
-                )
+                log.critical("🛑 DRAWDOWN LIMIT! DD=%.1f%%", self.current_dd)
                 if self.tg:
                     self.tg.send(
                         f"🛑 <b>هشدار افت حساب!</b>\n"
@@ -1400,19 +1756,13 @@ class Engine:
         orphans = db_syms - real_syms
         for pid, pos in list(self._pos.items()):
             if pos["symbol"] in orphans:
-                log.warning(
-                    "⚠️  Orphan: %s در DB هست ولي در صرافي نيست",
-                    pos["symbol"],
-                )
+                log.warning("⚠️ Orphan: %s در DB هست ولي در صرافي نيست", pos["symbol"])
                 price = EX.get_current_price(pos["symbol"]) or pos["entry"]
                 self._close_position(pid, pos, price, "Sync_Orphan")
 
         for rp in real:
             if rp["symbol"] not in db_syms:
-                log.info(
-                    "📌 پوزيشن جديد در صرافي: %s - sync مي‌شود",
-                    rp["symbol"],
-                )
+                log.info("📌 پوزيشن جديد در صرافي: %s - sync مي‌شود", rp["symbol"])
                 pid = f"sync_{uuid.uuid4().hex[:6]}"
                 entry = rp["entry"]
                 atr_est = entry * 0.008
@@ -1465,10 +1815,7 @@ class Engine:
                 short_name = sym.split("/")[0]
 
                 if signal.action == "neutral":
-                    log.debug(
-                        "[%s] neutral: %s",
-                        short_name, signal.debug_info[:80],
-                    )
+                    log.debug("[%s] neutral: %s", short_name, signal.debug_info[:80])
                     continue
 
                 if signal.confidence < MIN_CONFIDENCE:
@@ -1490,10 +1837,8 @@ class Engine:
                 log.error("[%s] Scan Error: %s", sym, e)
 
     def _execute_signal(self, sym: str, sig: Signal, balance: float):
-        """🔥 اصلاح‌شده: SL بر اساس قیمت واقعی Fill"""
         short_name = sym.split("/")[0]
 
-        # محاسبه حجم با فاصله SL از سیگنال
         sl_dist_from_signal = abs(sig.entry_estimate - sig.sl)
         if sl_dist_from_signal <= 0:
             sl_dist_from_signal = sig.entry_estimate * 0.008
@@ -1518,7 +1863,7 @@ class Engine:
         order_result = EX.place_order(sym, side, qty, is_close=False)
 
         if not order_result:
-            log.warning("❌  [%s] سفارش اجرا نشد", short_name)
+            log.warning("❌ [%s] سفارش اجرا نشد", short_name)
             if self.tg:
                 self.tg.send(
                     f"❌ <b>سفارش رد شد</b>\n"
@@ -1531,8 +1876,6 @@ class Engine:
         fill_price = order_result["fill_price"]
         filled_qty = order_result["filled_qty"]
 
-        # 🔥 اصلاح: محاسبه SL بر اساس قیمت واقعی Fill
-        # نسبت فاصله SL به قیمت تخمینی را حفظ می‌کنیم
         sl_ratio = abs(sig.entry_estimate - sig.sl) / sig.entry_estimate
         tp_ratio = abs(sig.entry_estimate - sig.tp) / sig.entry_estimate
 
@@ -1545,22 +1888,16 @@ class Engine:
             real_sl = fill_price + (fill_price * sl_ratio)
             real_tp = fill_price - (fill_price * tp_ratio)
 
-        # 🔥 اطمینان از حداقل فاصله SL
-        min_sl_dist = fill_price * 0.008  # ۰.۸٪
+        min_sl_dist = fill_price * 0.008
         actual_sl_dist = abs(fill_price - real_sl)
         if actual_sl_dist < min_sl_dist:
             if pos_side == "long":
                 real_sl = fill_price - min_sl_dist
             else:
                 real_sl = fill_price + min_sl_dist
-            log.info("[%s] SL به حداقل %0.2f%% رسید", short_name, 0.8)
 
-        # ثبت SL در صرافی
-        sl_order_id = EX.place_stop_loss(
-            sym, pos_side, filled_qty, real_sl
-        )
+        sl_order_id = EX.place_stop_loss(sym, pos_side, filled_qty, real_sl)
 
-        # ذخیره
         pid = f"p_{uuid.uuid4().hex[:8]}"
         pos = {
             "id": pid,
@@ -1585,14 +1922,14 @@ class Engine:
 
         sl_pct = abs(real_sl - fill_price) / fill_price * 100
         log.info(
-            "✅ [%s] پوزيشن باز شد | %s | ورود: %.4f | SL: %.4f (%.2f%%) | TP: %.4f",
-            short_name, pos_side.upper(), fill_price, real_sl, sl_pct, real_tp,
+            "✅ [%s] پوزيشن باز شد | %s | ورود: %.4f | SL: %.4f (%.2f%%)",
+            short_name, pos_side.upper(), fill_price, real_sl, sl_pct,
         )
 
         if self.tg:
             self.tg.send(
-                f"🚀 <b>پوزيشن جديد ({sig.strategy}) v3.1</b>\n"
-                f"{'═' * 25}\n"
+                f"🚀 <b>پوزيشن جديد ({sig.strategy}) v4.0</b>\n"
+                f"{'═' * 28}\n"
                 f"📊 نماد: {sym}\n"
                 f"📈 جهت: {pos_side.upper()}\n"
                 f"💰 ورود: {fill_price:.4f}\n"
@@ -1601,7 +1938,6 @@ class Engine:
                 f"📊 حجم: {filled_qty}\n"
                 f"🎯 اطمينان: {sig.confidence}%\n"
                 f"📝 دليل: {sig.reason}\n"
-                f"🛡️ SL صرافي: {'✅' if sl_order_id else '❌'}\n"
                 f"{'🧪 TESTNET' if TESTNET else '💰 REAL'}"
             )
 
@@ -1622,10 +1958,7 @@ class Engine:
                     or (side == "short" and price >= pos["sl"])
                 )
                 if sl_hit:
-                    log.info(
-                        "🛑 [%s] SL خورد! price=%.4f sl=%.4f",
-                        pos["symbol"], price, pos["sl"],
-                    )
+                    log.info("🛑 [%s] SL خورد! price=%.4f sl=%.4f", pos["symbol"], price, pos["sl"])
                     self._close_position(pid, pos, price, "StopLoss")
                     continue
 
@@ -1635,10 +1968,7 @@ class Engine:
                         or (side == "short" and price <= pos["tp"])
                     )
                     if tp_hit:
-                        log.info(
-                            "🎯 [%s] TP1 خورد! price=%.4f tp=%.4f",
-                            pos["symbol"], price, pos["tp"],
-                        )
+                        log.info("🎯 [%s] TP1 خورد! price=%.4f", pos["symbol"], price)
                         self._partial_exit(pid, pos, price)
 
             except Exception as e:
@@ -1648,9 +1978,7 @@ class Engine:
         half_qty = pos["qty"] / 2.0
         close_side = "sell" if pos["side"] == "long" else "buy"
 
-        result = EX.place_order(
-            pos["symbol"], close_side, half_qty, is_close=True
-        )
+        result = EX.place_order(pos["symbol"], close_side, half_qty, is_close=True)
         if not result:
             return
 
@@ -1660,9 +1988,7 @@ class Engine:
             EX.cancel_order_safe(pos["symbol"], pos["sl_order_id"])
 
         new_sl = pos["entry"]
-        new_sl_id = EX.place_stop_loss(
-            pos["symbol"], pos["side"], half_qty, new_sl
-        )
+        new_sl_id = EX.place_stop_loss(pos["symbol"], pos["side"], half_qty, new_sl)
 
         with self._lock:
             if pid in self._pos:
@@ -1690,14 +2016,10 @@ class Engine:
                 f"SL جديد: {new_sl:.4f} (Break Even)"
             )
 
-    def _close_position(self, pid: str, pos: Dict,
-                        price: float, reason: str):
+    def _close_position(self, pid: str, pos: Dict, price: float, reason: str):
         close_side = "sell" if pos["side"] == "long" else "buy"
 
-        result = EX.place_order(
-            pos["symbol"], close_side, pos["qty"], is_close=True
-        )
-
+        result = EX.place_order(pos["symbol"], close_side, pos["qty"], is_close=True)
         actual_price = result["fill_price"] if result else price
 
         if pos.get("sl_order_id"):
@@ -1721,10 +2043,7 @@ class Engine:
             self._pos.pop(pid, None)
 
         emoji = "✅" if pnl >= 0 else "❌"
-        log.info(
-            "%s [%s] بسته شد | PnL: %+.2f$ (%+.2f%%) | %s",
-            emoji, pos["symbol"], pnl, pct, reason,
-        )
+        log.info("%s [%s] بسته شد | PnL: %+.2f$ (%+.2f%%)", emoji, pos["symbol"], pnl, pct)
 
         if self.tg:
             self.tg.send(
@@ -1758,7 +2077,7 @@ def home():
     <html dir="rtl" lang="fa">
     <head>
         <meta charset="UTF-8">
-        <title>Quant Bot v3.1</title>
+        <title>Quant Bot v4.0</title>
         <meta http-equiv="refresh" content="30">
         <style>
             body {{
@@ -1779,11 +2098,12 @@ def home():
             h1 {{ color: #58a6ff; }}
             .status {{ font-size: 1.2em; margin: 10px; }}
             .badge {{ background: #238636; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; }}
+            .strategy-list {{ text-align: right; padding: 10px; }}
         </style>
     </head>
     <body>
-        <h1>🤖 Master-AI Quant Bot v3.1</h1>
-        <span class="badge">✅ بهینه‌شده</span>
+        <h1>🤖 Master-AI Quant Bot v4.0</h1>
+        <span class="badge">✅ ۹ استراتژی فعال</span>
 
         <div class="status">
             وضعيت: <b>{'▶️ فعال' if active else '⏹ متوقف'}</b> |
@@ -1807,11 +2127,19 @@ def home():
         {'<div class="card warn"><h3>🧪</h3><p>TESTNET فعال</p></div>' if TESTNET else ''}
 
         <br><br>
-        <div class="card">
-            <h3>🔧 تنظيمات v3.1</h3>
-            <p>لوريج: {LEVERAGE}x | ريسک: {RISK_PCT}% | اسکن: {SCAN_INTERVAL}s</p>
-            <p>Min Conf: {MIN_CONFIDENCE}% | SL Min: 0.8% | R:R: 1.8</p>
-            <p>نمادها: {len(SYMBOLS)}</p>
+        <div class="card" style="min-width: 300px;">
+            <h3>🧠 استراتژی‌های فعال</h3>
+            <div class="strategy-list">
+                1️⃣ MomentumScalp<br>
+                2️⃣ MeanReversion<br>
+                3️⃣ Breakout<br>
+                4️⃣ PullbackEMA<br>
+                5️⃣ SuperTrend_Vol<br>
+                6️⃣ DoublePattern<br>
+                7️⃣ ATR_Breakout<br>
+                8️⃣ RSI_Divergence<br>
+                9️⃣ OpeningRange
+            </div>
         </div>
     </body>
     </html>
@@ -1822,12 +2150,13 @@ def home():
 def health():
     return {
         "status": "ok",
-        "version": "3.1",
+        "version": "4.0",
         "connected": EX.is_connected,
         "testnet": TESTNET,
         "active": engine_instance.is_active if engine_instance else False,
         "positions": len(engine_instance._pos) if engine_instance else 0,
         "cycle": engine_instance._cycle_count if engine_instance else 0,
+        "strategies": 9,
     }
 
 
@@ -1845,11 +2174,11 @@ def api_positions():
                 "qty": p["qty"],
                 "sl": p["sl"],
                 "tp": p["tp"],
+                "strategy": p.get("strategy", "Unknown"),
             }
             for p in db
         ],
-        "synced": {p["symbol"] for p in real}
-        == {p["symbol"] for p in db},
+        "synced": {p["symbol"] for p in real} == {p["symbol"] for p in db},
     }
 
 
@@ -1861,7 +2190,7 @@ def api_debug():
         try:
             dfs = EX.fetch_multi_ohlcv(sym)
             if not dfs:
-                results[short] = "no data"
+                results[short] = {"error": "no data"}
                 continue
             sig = STRATEGY.analyze(sym, dfs)
             results[short] = {
@@ -1872,7 +2201,7 @@ def api_debug():
                 "debug": sig.debug_info,
             }
         except Exception as e:
-            results[short] = f"error: {e}"
+            results[short] = {"error": str(e)[:50]}
     return results
 
 
@@ -1883,7 +2212,8 @@ def main():
     global engine_instance
 
     log.info("=" * 60)
-    log.info("  🤖 Master-AI Quant Bot v3.1 (OPTIMIZED)")
+    log.info("  🤖 Master-AI Quant Bot v4.0 (FINAL)")
+    log.info("  🧠 9 Active Strategies")
     log.info("  🌐 Mode: %s", "TESTNET" if TESTNET else "MAINNET")
     log.info("  🔗 Connected: %s", EX.is_connected)
     log.info("  📊 Symbols: %d", len(SYMBOLS))
@@ -1892,12 +2222,16 @@ def main():
     log.info("  🎯 MinConfidence: %d%% | ScanInterval: %ds",
              MIN_CONFIDENCE, SCAN_INTERVAL)
     log.info("=" * 60)
-    log.info("  🔧 اصلاحات اعمال‌شده:")
-    log.info("  • ATR ۱۵ دقيقه براي محاسبه SL")
-    log.info("  • حداقل SL ۰.۸٪ از قيمت")
-    log.info("  • فیلتر حجم و RSI در تمام استراتژی‌ها")
-    log.info("  • محاسبه SL بر اساس قیمت واقعی Fill")
-    log.info("  • بهبود R:R به ۱.۸")
+    log.info("  🧠 استراتژی‌های فعال:")
+    log.info("  1. MomentumScalp      - روند با مومنتوم")
+    log.info("  2. MeanReversion      - برگشت به میانگین")
+    log.info("  3. Breakout           - شکست سطوح")
+    log.info("  4. PullbackEMA        - برگشت به EMA")
+    log.info("  5. SuperTrend_Vol     - تغییر روند + حجم")
+    log.info("  6. DoublePattern      - الگوی دوقلو")
+    log.info("  7. ATR_Breakout       - شکست با ATR")
+    log.info("  8. RSI_Divergence     - واگرایی RSI")
+    log.info("  9. OpeningRange       - محدوده بازگشایی")
     log.info("=" * 60)
 
     if not EX.is_connected:
@@ -1909,8 +2243,19 @@ def main():
 
     if TG_TOKEN and TG_CHAT:
         tg.send(
-            f"🚀 <b>ربات v3.1 (بهینه) شروع شد</b>\n"
-            f"{'═' * 25}\n"
+            f"🚀 <b>ربات v4.0 (نهایی) شروع شد</b>\n"
+            f"{'═' * 28}\n"
+            f"🧠 <b>۹ استراتژی فعال</b>\n"
+            f"1️⃣ MomentumScalp\n"
+            f"2️⃣ MeanReversion\n"
+            f"3️⃣ Breakout\n"
+            f"4️⃣ PullbackEMA\n"
+            f"5️⃣ SuperTrend_Vol\n"
+            f"6️⃣ DoublePattern\n"
+            f"7️⃣ ATR_Breakout\n"
+            f"8️⃣ RSI_Divergence\n"
+            f"9️⃣ OpeningRange\n"
+            f"{'═' * 28}\n"
             f"🌐 شبکه: {'🧪 TESTNET' if TESTNET else '💰 MAINNET'}\n"
             f"🔗 اتصال: {'✅' if EX.is_connected else '❌'}\n"
             f"📊 نمادها: {len(SYMBOLS)}\n"
@@ -1918,15 +2263,8 @@ def main():
             f"🎯 ريسک: {RISK_PCT}%\n"
             f"🎯 Min Conf: {MIN_CONFIDENCE}%\n"
             f"⏱️ Scan: {SCAN_INTERVAL}s\n"
-            f"{'═' * 25}\n"
-            f"🔧 اصلاحات v3.1:\n"
-            f"• حداقل SL ۰.۸%\n"
-            f"• ATR از ۱۵ دقيقه\n"
-            f"• فیلتر حجم و RSI\n"
-            f"• R:R بهبود یافته\n"
-            f"{'═' * 25}\n"
-            f"✅ ربات فعال است و در حال اسکن...\n"
-            f"🔍 دکمه ديباگ اسکن براي بررسي وضعيت",
+            f"{'═' * 28}\n"
+            f"✅ ربات فعال است و در حال اسکن...",
             reply_markup=tg._keyboard(),
         )
 
