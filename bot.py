@@ -3,10 +3,10 @@
 """
 Master Quant Engine v8.0 (Ultimate Edition)
 - Fully Async (ccxt, aiosqlite, aiohttp)
-- 5 Anti-Repainting Strategies
+- Anti-Repainting Strategies
 - Interactive Async Telegram Bot
 - Live AJAX Web Dashboard (Basic Auth)
-- Background Diagnostics Agent
+- Local Watchdog & Diagnostics
 """
 
 import asyncio
@@ -107,6 +107,13 @@ class AsyncDB:
                     "total_pnl": round(sum(pnls), 2)
                 }
 
+    # 🔴 FIX: The missing function has been added here
+    async def get_open_trades(self) -> List[Dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM trades WHERE status='open'") as cursor:
+                return [dict(row) for row in await cursor.fetchall()]
+
 # ============================================================================
 # 3. ANTI-REPAINTING STRATEGIES
 # ============================================================================
@@ -154,21 +161,21 @@ class StrategyEngine:
         
         signals = []
         
-        # 1. RSI Divergence / Trend
+        # 1. RSI
         rsi = Indicators.rsi(c)
         if rsi.iloc[-1] < 30 and rsi.iloc[-2] >= 30:
             signals.append({"strat": "RSI_Oversold", "side": "buy", "conf": 75})
         elif rsi.iloc[-1] > 70 and rsi.iloc[-2] <= 70:
             signals.append({"strat": "RSI_Overbought", "side": "sell", "conf": 75})
 
-        # 2. MACD Cross
+        # 2. MACD
         macd, sig = Indicators.macd(c)
         if macd.iloc[-1] > sig.iloc[-1] and macd.iloc[-2] <= sig.iloc[-2]:
             signals.append({"strat": "MACD_CrossUp", "side": "buy", "conf": 80})
         elif macd.iloc[-1] < sig.iloc[-1] and macd.iloc[-2] >= sig.iloc[-2]:
             signals.append({"strat": "MACD_CrossDown", "side": "sell", "conf": 80})
 
-        # 3. Bollinger Breakout
+        # 3. Bollinger
         up, down = Indicators.bollinger(c)
         if price > up.iloc[-1]:
             signals.append({"strat": "BB_BreakUp", "side": "buy", "conf": 70})
@@ -177,7 +184,6 @@ class StrategyEngine:
 
         if not signals: return {"action": "neutral"}
 
-        # Select Best Signal
         best = sorted(signals, key=lambda x: x['conf'], reverse=True)[0]
         
         return {
@@ -216,7 +222,6 @@ class AsyncTelegram:
         except Exception as e: log.error(f"TG Send Error: {e}")
 
     async def poll_updates(self):
-        """ Long Polling - Yields to event loop naturally """
         if not TG_TOKEN: return
         while True:
             try:
@@ -229,7 +234,7 @@ class AsyncTelegram:
                                 self.last_update_id = upd["update_id"]
                                 await self.handle_command(upd.get("message", {}).get("text", ""))
             except asyncio.TimeoutError: pass
-            except Exception as e: log.debug(f"TG Poll Error: {e}")
+            except Exception: pass
             await asyncio.sleep(1)
 
     async def handle_command(self, cmd: str):
@@ -266,15 +271,10 @@ class DiagnosticsAgent:
             score = 100
             issues = []
             
-            # Check Keys
             if not API_KEY:
-                score -= 50
-                issues.append("API Keys missing")
-                
-            # Check Balance
+                score -= 50; issues.append("API Keys missing")
             if SHARED_STATE["balance"] < 10:
-                score -= 20
-                issues.append("Low Balance (< $10)")
+                score -= 20; issues.append("Low Balance (< $10)")
                 
             SHARED_STATE["diagnostics"] = {"health_score": max(0, score), "issues": issues}
             await asyncio.sleep(60)
@@ -300,7 +300,6 @@ class QuantEngine:
         await self.db.init_db()
         await self.db.update_analytics()
         
-        # Load active positions
         open_trades = await self.db.get_open_trades()
         for t in open_trades:
             SHARED_STATE["active_positions"][t['id']] = t
@@ -356,11 +355,12 @@ class QuantEngine:
         bal = SHARED_STATE["balance"]
         
         risk = bal * (RISK_PCT / 100)
-        qty = max(1, int(risk / abs(price - sig['sl'])))
+        dist = abs(price - sig['sl'])
+        if dist == 0: return
+        qty = max(1, int(risk / dist))
         side = sig['action']
         
         try:
-            # Main Entry
             order = await self.ex.create_market_order(sym, side, qty)
             fill_price = order.get('average') or price
             pid = f"pos_{uuid.uuid4().hex[:8]}"
@@ -373,7 +373,6 @@ class QuantEngine:
             SHARED_STATE["active_positions"][pid] = pos_data
             await self.db.insert_trade(pos_data)
             
-            # Place Remote SL
             sl_side = 'sell' if side == 'buy' else 'buy'
             await self.ex.create_order(sym, 'stop', sl_side, qty, sig['sl'], params={'stopPrice': sig['sl'], 'reduceOnly': True})
             
@@ -405,7 +404,7 @@ class QuantEngine:
             await asyncio.sleep(1)
 
 # ============================================================================
-# 7. LIVE AJAX WEB DASHBOARD (No hard-reloads)
+# 7. LIVE AJAX WEB DASHBOARD
 # ============================================================================
 app = Flask(__name__)
 auth = HTTPBasicAuth()
@@ -466,7 +465,7 @@ def dashboard():
                     
                 } catch (e) { console.error("Update failed", e); }
             }
-            setInterval(fetchData, 2000); // Live update every 2 seconds
+            setInterval(fetchData, 2000);
             window.onload = fetchData;
         </script>
     </head>
