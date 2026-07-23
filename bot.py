@@ -94,7 +94,7 @@ TESTNET    = Cfg.b("PHEMEX_TESTNET", True) or TESTNET_FORCE   # ← تغییر �
 
 # نمادهای خواسته‌شده - بدون :USDT
 SYMBOLS_WANTED = Cfg.lst("SYMBOLS") or [
-    "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "BNB/USDT",
+    "ETH/USDT", "SOL/USDT", "XRP/USDT", "BNB/USDT",
     "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "DOT/USDT", "LINK/USDT",
 ]
 
