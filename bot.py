@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master-AI Quant Bot v6.4
-- رفع خطای code:30000 Phemex
-- رفع خطای 401 API Key
-- OHLCV با پارامترهای صحیح Phemex
+Master-AI Quant Bot v6.4 - FIXED for Testnet
+- فعال‌سازی اجباری تست‌نت
+- تنظیم مستقیم API Key/Secret
+- رفع خطای 30000 و 401
 """
 
 import json
@@ -31,6 +31,13 @@ try:
     load_dotenv()
 except ImportError:
     pass
+
+# ============================================================================
+# تنظیم مستقیم API برای تست‌نت (برای راحتی)
+# ============================================================================
+API_KEY = "94ed8a1b-44fe-459f-ba12-f42373a8bbae"
+API_SECRET = "SfudDNp5rtkOief_Sj_aaSaKBf6hYMl0MjamI5woKlc5NWVkMTRmYS02MGRlLTRlZTItOWVhZi1hYjcwY2VkZTk0ODk"
+TESTNET_FORCE = True   # اجبار به تست‌نت
 
 # ============================================================================
 # LOGGING
@@ -77,11 +84,12 @@ class Cfg:
         return [x.strip() for x in raw.split(",") if x.strip()] if raw else []
 
 
-API_KEY    = Cfg.s("PHEMEX_API_KEY")
-API_SECRET = Cfg.s("PHEMEX_API_SECRET")
+# کلیدها از متغیرهای محیطی خوانده می‌شوند ولی اگر خالی باشند از مقادیر مستقیم استفاده می‌شود
+API_KEY    = Cfg.s("PHEMEX_API_KEY") or API_KEY
+API_SECRET = Cfg.s("PHEMEX_API_SECRET") or API_SECRET
 TG_TOKEN   = Cfg.s("TELEGRAM_BOT_TOKEN")
 TG_CHAT    = Cfg.s("TELEGRAM_CHAT_ID")
-TESTNET    = Cfg.b("PHEMEX_TESTNET", False)
+TESTNET    = Cfg.b("PHEMEX_TESTNET", True) or TESTNET_FORCE   # ← تغییر به True
 
 # نمادهای خواسته‌شده - بدون :USDT
 SYMBOLS_WANTED = Cfg.lst("SYMBOLS") or [
@@ -191,7 +199,7 @@ RESOLVER = SymbolResolver()
 
 
 # ============================================================================
-# DIAGNOSTIC AI
+# DIAGNOSTIC AI (بدون تغییر)
 # ============================================================================
 @dataclass
 class DiagIssue:
@@ -924,7 +932,7 @@ database = DB()
 
 
 # ============================================================================
-# EXCHANGE - رفع خطای 30000 و 401
+# EXCHANGE - با فعال‌سازی تست‌نت
 # ============================================================================
 class Exchange:
     def __init__(self):
@@ -948,11 +956,9 @@ class Exchange:
                 "timeout":         REQUEST_TIMEOUT * 1000,
             }
             self._ex = ccxt.phemex(params)
-            if TESTNET:
-                self._ex.set_sandbox_mode(True)
-                log.warning("⚠️  TESTNET فعال")
-            else:
-                log.info("💰 MAINNET فعال")
+            # ★★★ فعال‌سازی اجباری تست‌نت ★★★
+            self._ex.set_sandbox_mode(True)   # ← این خط را بدون شرط قرار دادم
+            log.warning("⚠️  TESTNET فعال (اجباری)")
 
             markets = self._ex.load_markets()
             log.info("📊 %d بازار لود شد", len(markets))
@@ -1261,7 +1267,7 @@ SYMBOLS = RESOLVER.active_wanted
 
 
 # ============================================================================
-# STRATEGY ENGINE
+# STRATEGY ENGINE (بدون تغییر)
 # ============================================================================
 @dataclass
 class Signal:
@@ -2081,7 +2087,7 @@ def api_debug():
 def main():
     global engine_instance
     log.info("="*60)
-    log.info("  🤖 Master-AI Quant Bot v6.4")
+    log.info("  🤖 Master-AI Quant Bot v6.4 (FIXED for Testnet)")
     log.info("  🔧 رفع خطای code:30000 و 401")
     log.info("  🌐 %s", "TESTNET" if TESTNET else "MAINNET")
     log.info("  ⏱️  TF: %s | Conf: %d%%", PRIMARY_TF, MIN_CONFIDENCE)
