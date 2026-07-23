@@ -5,6 +5,7 @@ Master-AI Quant Bot v6.4 - FIXED for Testnet
 - فعال‌سازی اجباری تست‌نت
 - تنظیم مستقیم API Key/Secret
 - رفع خطای 30000 و 401
+- رفع SyntaxError در /diagnose
 """
 
 import json
@@ -957,7 +958,7 @@ class Exchange:
             }
             self._ex = ccxt.phemex(params)
             # ★★★ فعال‌سازی اجباری تست‌نت ★★★
-            self._ex.set_sandbox_mode(True)   # ← این خط را بدون شرط قرار دادم
+            self._ex.set_sandbox_mode(True)   # ← بدون شرط
             log.warning("⚠️  TESTNET فعال (اجباری)")
 
             markets = self._ex.load_markets()
@@ -1959,12 +1960,13 @@ def diagnose():
         if not ook:
             if ot.get("is_30000"): note=" ← خطای 30000: TF یا API مشکل"
             elif ot.get("is_auth"): note=" ← خطای 401: API Key نامعتبر"
+        # --- رفع خطای نحوی در این خط ---
         ohlcv_rows+=(
             "<tr><td><b>"+base+"</b></td>"
             "<td>"+real+"</td>"
-            "<td style='color:"+oc+"'>"+
-            ("✅ "+str(ot.get("candles",0))+" کندل ["+ot.get("tf","?")]+"]"
-             if ook else "❌ "+str(ot.get("error","")[:40]+note)+
+            "<td style='color:"+oc+"'>" +
+            (("✅ "+str(ot.get("candles",0))+" کندل ["+ot.get("tf","?")+"]")
+             if ook else "❌ "+str(ot.get("error",""))[:40]+note) +
             "</td></tr>"
         )
 
