@@ -1963,8 +1963,8 @@ def diagnose():
             "<tr><td><b>"+base+"</b></td>"
             "<td>"+real+"</td>"
             "<td style='color:"+oc+"'>"+
-            ("✅ "+str(ot.get("candles",0))+" کندل ["+ot.get("tf","?"),]+"]"
-             if ook else "❌ "+str(ot.get("error",""))[:40]+note)+
+            ("✅ "+str(ot.get("candles",0))+" کندل ["+ot.get("tf","?")]+"]"
+             if ook else "❌ "+str(ot.get("error","")[:40]+note)+
             "</td></tr>"
         )
 
