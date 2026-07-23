@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v8.0 (Ultimate Edition)
+Master Quant Engine v8.1 (Pro Money Management)
 - Fully Async (ccxt, aiosqlite, aiohttp)
 - Anti-Repainting Strategies
-- Interactive Async Telegram Bot
+- Advanced Position Sizing & Risk Management
 - Live AJAX Web Dashboard (Basic Auth)
 - Local Watchdog & Diagnostics
 """
@@ -43,7 +43,8 @@ WEB_PASS = os.getenv("WEB_ADMIN_PASS", "admin123")
 
 SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"]
 TIMEFRAME = "5m"
-RISK_PCT = 1.0
+RISK_PCT = 1.0    # Percentage of total balance to risk per trade
+LEVERAGE = 10     # Default Leverage
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-7s | %(message)s")
 log = logging.getLogger("QuantV8")
@@ -107,7 +108,6 @@ class AsyncDB:
                     "total_pnl": round(sum(pnls), 2)
                 }
 
-    # 🔴 FIX: The missing function has been added here
     async def get_open_trades(self) -> List[Dict]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -161,21 +161,18 @@ class StrategyEngine:
         
         signals = []
         
-        # 1. RSI
         rsi = Indicators.rsi(c)
         if rsi.iloc[-1] < 30 and rsi.iloc[-2] >= 30:
             signals.append({"strat": "RSI_Oversold", "side": "buy", "conf": 75})
         elif rsi.iloc[-1] > 70 and rsi.iloc[-2] <= 70:
             signals.append({"strat": "RSI_Overbought", "side": "sell", "conf": 75})
 
-        # 2. MACD
         macd, sig = Indicators.macd(c)
         if macd.iloc[-1] > sig.iloc[-1] and macd.iloc[-2] <= sig.iloc[-2]:
             signals.append({"strat": "MACD_CrossUp", "side": "buy", "conf": 80})
         elif macd.iloc[-1] < sig.iloc[-1] and macd.iloc[-2] >= sig.iloc[-2]:
             signals.append({"strat": "MACD_CrossDown", "side": "sell", "conf": 80})
 
-        # 3. Bollinger
         up, down = Indicators.bollinger(c)
         if price > up.iloc[-1]:
             signals.append({"strat": "BB_BreakUp", "side": "buy", "conf": 70})
@@ -219,7 +216,7 @@ class AsyncTelegram:
         try:
             async with aiohttp.ClientSession() as session:
                 await session.post(f"{self.base_url}/sendMessage", json=payload)
-        except Exception as e: log.error(f"TG Send Error: {e}")
+        except Exception: pass
 
     async def poll_updates(self):
         if not TG_TOKEN: return
@@ -233,7 +230,6 @@ class AsyncTelegram:
                             for upd in data.get("result", []):
                                 self.last_update_id = upd["update_id"]
                                 await self.handle_command(upd.get("message", {}).get("text", ""))
-            except asyncio.TimeoutError: pass
             except Exception: pass
             await asyncio.sleep(1)
 
@@ -280,7 +276,7 @@ class DiagnosticsAgent:
             await asyncio.sleep(60)
 
 # ============================================================================
-# 6. CORE QUANT ENGINE
+# 6. CORE QUANT ENGINE (With Money Management)
 # ============================================================================
 class QuantEngine:
     def __init__(self):
@@ -300,11 +296,21 @@ class QuantEngine:
         await self.db.init_db()
         await self.db.update_analytics()
         
+        # 🔴 V8.1: Load markets & Set Leverage at startup
+        try:
+            await self.ex.load_markets()
+            for sym in SYMBOLS:
+                try:
+                    await self.ex.set_leverage(LEVERAGE, sym)
+                except Exception: pass # Ignore if already set
+        except Exception as e:
+            log.warning(f"Market init warning: {e}")
+
         open_trades = await self.db.get_open_trades()
         for t in open_trades:
             SHARED_STATE["active_positions"][t['id']] = t
             
-        await self.tg.send_message("🚀 <b>Quant V8 Online</b>")
+        await self.tg.send_message("🚀 <b>Quant V8.1 Online (Pro Money Management)</b>")
         
         await asyncio.gather(
             self.update_prices_loop(),
@@ -354,10 +360,29 @@ class QuantEngine:
         if not price: return
         bal = SHARED_STATE["balance"]
         
-        risk = bal * (RISK_PCT / 100)
-        dist = abs(price - sig['sl'])
-        if dist == 0: return
-        qty = max(1, int(risk / dist))
+        # 🔴 V8.1: Safe Money Management
+        if bal < 10.0:
+            log.info(f"Skipping trade {sym}: Insufficient balance (${bal:.2f})")
+            return
+            
+        sl_distance = abs(price - sig['sl'])
+        if sl_distance == 0: return
+
+        # Calculate exact quantity based on Risk %
+        risk_amount = bal * (RISK_PCT / 100)
+        raw_qty = risk_amount / sl_distance
+        
+        # Format quantity to match exchange precision rules
+        try:
+            qty_str = self.ex.amount_to_precision(sym, raw_qty)
+            qty = float(qty_str)
+        except Exception:
+            qty = round(raw_qty, 3) # Fallback
+
+        if qty <= 0:
+            log.warning(f"Calculated qty for {sym} is 0. Check risk settings.")
+            return
+
         side = sig['action']
         
         try:
@@ -376,7 +401,7 @@ class QuantEngine:
             sl_side = 'sell' if side == 'buy' else 'buy'
             await self.ex.create_order(sym, 'stop', sl_side, qty, sig['sl'], params={'stopPrice': sig['sl'], 'reduceOnly': True})
             
-            await self.tg.send_message(f"✅ <b>Trade Opened</b>\n{sym} | {side.upper()}\nStrat: {sig['strategy']}\nEn: {fill_price:.4f}")
+            await self.tg.send_message(f"✅ <b>Trade Opened</b>\n{sym} | {side.upper()}\nStrat: {sig['strategy']}\nQty: {qty}\nEn: {fill_price:.4f}")
         except Exception as e: log.error(f"Exec err {sym}: {e}")
 
     async def local_watchdog_loop(self):
@@ -458,7 +483,7 @@ def dashboard():
                         let p = data.active_positions[id];
                         posDiv.innerHTML += `<div class='pos-item'>
                             <b>${p.symbol}</b> <span class='badge'>${p.side.toUpperCase()}</span><br>
-                            Strategy: ${p.strategy} | Entry: ${p.entry.toFixed(4)}
+                            Strategy: ${p.strategy} | Entry: ${p.entry.toFixed(4)} | Qty: ${p.qty}
                         </div>`;
                     }
                     if (count === 0) posDiv.innerHTML = "<p style='color:#8b949e'>No active positions.</p>";
