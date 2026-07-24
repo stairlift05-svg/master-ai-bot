@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v9.7 (Optimized - No BTC)
-- Removed Bitcoin completely to avoid balance issues
-- Optimized for altcoins only
-- Enhanced balance management for cross-margin
-- Fixed all order placement issues
-- Better error handling and reporting
+Master Quant Engine v9.8 (Phemex Format Fixed)
+- Fixed symbol format for Phemex (SYMBOL/USDT:USDT)
+- Removed Bitcoin completely
+- Optimized for altcoins with correct Phemex format
+- Enhanced balance management
 """
 
 import asyncio
@@ -26,7 +25,7 @@ from flask import Flask, jsonify, render_template_string
 from flask_httpauth import HTTPBasicAuth
 
 # ============================================================================
-# 1. CONFIGURATION - NO BTC
+# 1. CONFIGURATION - CORRECT PHEMEX FORMAT
 # ============================================================================
 load_dotenv()
 
@@ -43,8 +42,20 @@ if not WEB_USER or not WEB_PASS:
     WEB_USER = "admin"
     WEB_PASS = "admin123"
 
-# REMOVED BTC - Using only altcoins
-SYMBOLS = ["ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT", "DOT/USDT"]
+# CRITICAL: Correct Phemex format for perpetual swaps
+# Format: BASE/QUOTE:QUOTE (e.g., ETH/USDT:USDT)
+SYMBOLS = [
+    "ETH/USDT:USDT", 
+    "SOL/USDT:USDT", 
+    "BNB/USDT:USDT", 
+    "XRP/USDT:USDT", 
+    "ADA/USDT:USDT", 
+    "DOT/USDT:USDT"
+]
+
+# Simple format for internal mapping (without :USDT)
+SIMPLE_SYMBOLS = [s.split(':')[0] for s in SYMBOLS]
+
 TIMEFRAME = "5m"
 RISK_PCT = 1.0
 LEVERAGE = 5
@@ -74,7 +85,7 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-log = logging.getLogger("QuantV9.7")
+log = logging.getLogger("QuantV9.8")
 
 SHARED_STATE = {
     "is_active": True, 
@@ -268,7 +279,7 @@ class AsyncTelegram:
         if not TG_TOKEN: 
             return
         mode = "TESTNET" if TESTNET else "MAINNET (Real Money)"
-        await self.send(f"🚀 <b>Master Quant V9.7 Online</b>\nNetwork: <b>{mode}</b>\n<u>No BTC - Altcoins Only</u>\nSelect an option below:", self.main_menu())
+        await self.send(f"🚀 <b>Master Quant V9.8 Online</b>\nNetwork: <b>{mode}</b>\n<u>No BTC - Altcoins Only</u>\nSelect an option below:", self.main_menu())
         
         while True:
             try:
@@ -355,16 +366,16 @@ class QuantEngine:
         
         try:
             self.markets_cache = await self.ex.load_markets()
-            # Update contract sizes from exchange
+            log.info(f"Loaded {len(self.markets_cache)} markets")
+            
+            # Set leverage for each symbol
             for sym in SYMBOLS:
-                if sym in self.markets_cache:
-                    market = self.markets_cache[sym]
-                    if market.get('contractSize'):
-                        self.contract_sizes[sym] = float(market['contractSize'])
                 try:
                     await self.ex.set_leverage(LEVERAGE, sym)
+                    log.info(f"Leverage {LEVERAGE}x set for {sym}")
                 except Exception as e:
                     log.warning(f"Leverage set failed for {sym}: {e}")
+                    
         except Exception as e:
             log.error(f"Market loading failed: {e}")
         
@@ -381,6 +392,19 @@ class QuantEngine:
             self.watchdog_loop(), 
             self.tg.poll()
         )
+
+    # ========================================================================
+    # Helper: Get simple symbol from Phemex format
+    # ========================================================================
+    def get_simple_symbol(self, phemex_symbol: str) -> str:
+        """Convert ETH/USDT:USDT to ETH/USDT"""
+        return phemex_symbol.split(':')[0]
+    
+    def get_phemex_symbol(self, simple_symbol: str) -> str:
+        """Convert ETH/USDT to ETH/USDT:USDT"""
+        if simple_symbol in [s.split(':')[0] for s in SYMBOLS]:
+            return f"{simple_symbol}:USDT"
+        return simple_symbol
 
     # ========================================================================
     # FIXED: Balance Check Before Trade
@@ -404,7 +428,6 @@ class QuantEngine:
                     
             else:  # sell/short
                 # For SHORT positions: Need base currency for collateral
-                # Usually 10-20% margin is required
                 required_margin = (qty * price) * 0.1  # 10% margin
                 available_base = balance.get(base_currency, {}).get('free', 0)
                 available_usdt = balance.get(quote_currency, {}).get('free', 0)
@@ -803,7 +826,7 @@ class QuantEngine:
                 return
             
             # Choose 2 altcoins for testing
-            test_symbols = ["ETH/USDT", "SOL/USDT"]
+            test_symbols = ["ETH/USDT:USDT", "SOL/USDT:USDT"]
             test_positions = []
             
             # Calculate max test amount (10% of balance per position)
@@ -1008,12 +1031,12 @@ def dashboard():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Quant V9.7 - No BTC</title>
+    <title>Quant V9.8 - No BTC</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
         .container { max-width: 1400px; margin: 0 auto; }
-        h1 { text-align: center; color: #58a6ff; margin-bottom: 30px; font-size: 2.5em; }
+        h1 { text-align: center; color: #58a6ff; margin-bottom: 10px; font-size: 2.5em; }
         .subtitle { text-align: center; color: #d29922; margin-bottom: 20px; font-size: 1em; }
         .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 20px; }
         .card { background: #161b22; border: 1px solid #30363d; padding: 20px; border-radius: 10px; }
@@ -1042,7 +1065,7 @@ def dashboard():
 </head>
 <body>
 <div class="container">
-    <h1>🤖 Master Quant Engine V9.7</h1>
+    <h1>🤖 Master Quant Engine V9.8</h1>
     <div class="subtitle"><span class="no-btc">⛔ NO BITCOIN - Altcoins Only</span></div>
     
     <div class="grid">
@@ -1074,7 +1097,7 @@ def dashboard():
     </div>
     
     <div class="footer">
-        Master Quant Engine v9.7 | Phemex {'TESTNET' if TESTNET else 'MAINNET'} | No BTC | Auto-updates every 2s
+        Master Quant Engine v9.8 | Phemex {'TESTNET' if TESTNET else 'MAINNET'} | No BTC | Auto-updates every 2s
     </div>
 </div>
 
