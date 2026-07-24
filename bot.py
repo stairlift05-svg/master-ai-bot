@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v9.5 (Ultimate Clean Edition)
-- Fixes TE_ORDER_VALUE_TOO_SMALL ($15+ Order Forcer)
-- Fuzzy Sync & Auto Adopt Manual Trades
-- 30-Sec Live Test Button in Telegram
+Master Quant Engine v9.6 (Hedge Mode Compatible)
+- Fix: All orders include posSide based on account mode
+- Fix: smart_sync reads posSide from info, not just Buy/Sell
+- Fix: SL/TP orders work in both OneWay and Hedged modes
 """
 
 import asyncio
@@ -47,18 +47,19 @@ RISK_PCT = 1.0
 LEVERAGE = 5
 MAX_POS = 4
 MAX_DD = 10.0  
-MIN_ORDER_USD = 16.0 # Minimum order value to bypass Phemex Reject
+MIN_ORDER_USD = 16.0
 
 TRAIL_ACT = 1.5    
 TRAIL_STEP = 0.5   
 PARTIAL_TP = True  
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-7s | %(message)s")
-log = logging.getLogger("QuantV9.5")
+log = logging.getLogger("QuantV9.6")
 
 SHARED_STATE = {
     "is_active": True, "dd_halted": False, "balance": 0.0, "peak_balance": 0.0,
     "current_dd": 0.0, "active_positions": {}, "last_scan": "Never",
+    "pos_mode": "Hedged",
     "stats": {"total_trades": 0, "win_rate": 0.0, "total_pnl": 0.0}
 }
 
@@ -152,7 +153,7 @@ class StrategyEngine:
         return sig
 
 # ============================================================================
-# 4. PRO ASYNC TELEGRAM
+# 4. TELEGRAM
 # ============================================================================
 class AsyncTelegram:
     def __init__(self, engine):
@@ -186,7 +187,7 @@ class AsyncTelegram:
     async def poll(self):
         if not TG_TOKEN: return
         mode = "TESTNET" if TESTNET else "MAINNET (Real Money)"
-        await self.send(f"🚀 <b>Master Quant V9.5 Online</b>\nNetwork: <b>{mode}</b>\nSelect an option below:", self.main_menu())
+        await self.send(f"🚀 <b>Master Quant V9.6 Online</b>\nNetwork: <b>{mode}</b>\nPosMode: <b>{SHARED_STATE['pos_mode']}</b>", self.main_menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -202,7 +203,7 @@ class AsyncTelegram:
                                 await self.answer_callback(cb_id, "Processing...")
                                 if data == "cmd_start": 
                                     SHARED_STATE["is_active"] = True
-                                    await self.send("▶️ <b>Bot Started Scanning.</b>", self.main_menu())
+                                    await self.send("▶️ <b>Bot Started.</b>", self.main_menu())
                                 elif data == "cmd_pause": 
                                     SHARED_STATE["is_active"] = False
                                     await self.send("⏹ <b>Bot Paused.</b>", self.main_menu())
@@ -210,7 +211,7 @@ class AsyncTelegram:
                                     await self.send("🔄 Force Syncing...")
                                     await self.engine.smart_sync_positions()
                                 elif data == "cmd_dash": 
-                                    await self.send(f"📊 <b>Pro Dashboard</b>\nState: {'🟢 Running' if SHARED_STATE['is_active'] else '🔴 Paused'}\nBalance: <b>${SHARED_STATE['balance']:.2f}</b>\nTotal PnL: <b>${SHARED_STATE['stats']['total_pnl']:.2f}</b>\nActive Pos: {len(SHARED_STATE['active_positions'])}/{MAX_POS}", self.main_menu())
+                                    await self.send(f"📊 <b>Pro Dashboard</b>\nState: {'🟢 Running' if SHARED_STATE['is_active'] else '🔴 Paused'}\nBalance: <b>${SHARED_STATE['balance']:.2f}</b>\nTotal PnL: <b>${SHARED_STATE['stats']['total_pnl']:.2f}</b>\nActive: {len(SHARED_STATE['active_positions'])}/{MAX_POS}\nPosMode: {SHARED_STATE['pos_mode']}", self.main_menu())
                                 elif data == "cmd_pos":
                                     pos = SHARED_STATE["active_positions"]
                                     if not pos: 
@@ -229,7 +230,7 @@ class AsyncTelegram:
             await asyncio.sleep(1)
 
 # ============================================================================
-# 5. CORE QUANT ENGINE
+# 5. CORE QUANT ENGINE (FIXED)
 # ============================================================================
 class QuantEngine:
     def __init__(self):
@@ -248,15 +249,35 @@ class QuantEngine:
         try:
             self.markets_cache = await self.ex.load_markets()
             for sym in SYMBOLS:
-                try: await self.ex.set_leverage(LEVERAGE, sym)
+                try: 
+                    await self.ex.set_leverage(LEVERAGE, sym)
                 except: pass
         except: pass
+        
+        await self._detect_pos_mode()
         
         for t in await self.db.get_open_trades(): 
             SHARED_STATE["active_positions"][t['id']] = t
             
         await self.smart_sync_positions()
         await asyncio.gather(self.price_loop(), self.scan_loop(), self.watchdog_loop(), self.tg.poll())
+
+    async def _detect_pos_mode(self):
+        try:
+            positions = await self.ex.fetch_positions()
+            for p in positions:
+                pos_mode = p.get('info', {}).get('posMode', 'OneWay')
+                SHARED_STATE["pos_mode"] = pos_mode
+                log.info(f"Detected posMode: {pos_mode}")
+                return
+        except Exception as e:
+            log.debug(f"pos_mode detect error: {e}")
+        SHARED_STATE["pos_mode"] = "OneWay"
+
+    def _order_params(self, side: str) -> dict:
+        if SHARED_STATE["pos_mode"] == "Hedged":
+            return {"posSide": "long" if side == "buy" else "short"}
+        return {}
 
     async def price_loop(self):
         while True:
@@ -281,15 +302,11 @@ class QuantEngine:
             await asyncio.sleep(2)
 
     def get_safe_qty(self, sym: str, target_usd_value: float, price: float) -> float:
-        """ Forces qty to match contract size and minimum $16 value """
         market = self.markets_cache.get(sym, {})
         fallback_cs = {"BTC/USDT": 0.001, "ETH/USDT": 0.01, "SOL/USDT": 1.0, "XRP/USDT": 1.0, "BNB/USDT": 0.01}
         contract_size = market.get('contractSize') or fallback_cs.get(sym, 1.0)
         
-        # Calculate how many contracts we need
         contracts = int(max(1, (target_usd_value / price) / contract_size))
-        
-        # Force the total value to be at least $16
         while (contracts * contract_size * price) < MIN_ORDER_USD:
             contracts += 1
             
@@ -329,20 +346,27 @@ class QuantEngine:
         qty = self.get_safe_qty(sym, target_usd, price)
         side = sig['action']
         
+        order_params = self._order_params(side)
         try:
-            order = await self.ex.create_market_order(sym, side, qty)
+            order = await self.ex.create_market_order(sym, side, qty, params=order_params)
             fill_price = order.get('average') or price
             pid = f"pos_{uuid.uuid4().hex[:8]}"
             pos = {"id": pid, "symbol": sym, "side": side, "strategy": sig['strat'], "entry": fill_price, "qty": qty, "sl": sig['sl'], "tp": sig['tp'], "tp1": sig['tp1'], "is_partial": 0, "highest_pnl_pct": 0}
             SHARED_STATE["active_positions"][pid] = pos
             await self.db.insert_trade(pos)
-            await self.tg.send(f"✅ <b>Entry {side.upper()}</b>\n{sym} @ {fill_price:.4f}\nQty: {qty}")
+            await self.tg.send(f"✅ <b>Entry {side.upper()}</b>\n{sym} @ {fill_price:.4f}\nQty: {qty}\nPosMode: {SHARED_STATE['pos_mode']}")
             sl_side = 'sell' if side == 'buy' else 'buy'
-            await self.ex.create_order(sym, 'stop', sl_side, qty, sig['sl'], params={'stopPrice': sig['sl'], 'reduceOnly': True})
-        except Exception as e: log.error(f"Exec {sym}: {e}")
+            sl_params = {**self._order_params(side), 'stopPrice': sig['sl'], 'reduceOnly': True}
+            try:
+                await self.ex.create_order(sym, 'stop', sl_side, qty, sig['sl'], params=sl_params)
+            except Exception as sl_err:
+                log.warning(f"SL order failed (will manage manually): {sl_err}")
+        except Exception as e: 
+            log.error(f"Exec {sym}: {e}")
+            await self.tg.send(f"❌ <b>Entry Failed</b>\n{sym}: {str(e)[:100]}")
 
     async def run_live_test(self):
-        await self.tg.send("🧪 <b>Initiating 30-Second Live Test...</b>\nForcing trades at safe contract sizes.")
+        await self.tg.send(f"🧪 <b>30-Sec Live Test</b>\nPosMode: {SHARED_STATE['pos_mode']}\nForcing trades...")
         try:
             btc_price = self.prices.get("BTC/USDT", 60000)
             eth_price = self.prices.get("ETH/USDT", 3000)
@@ -350,23 +374,23 @@ class QuantEngine:
             btc_qty = self.get_safe_qty("BTC/USDT", MIN_ORDER_USD, btc_price)
             eth_qty = self.get_safe_qty("ETH/USDT", MIN_ORDER_USD, eth_price)
             
-            await self.ex.create_market_order("BTC/USDT", "buy", btc_qty)
+            await self.ex.create_market_order("BTC/USDT", "buy", btc_qty, params=self._order_params("buy"))
             btc_pid = f"test_{uuid.uuid4().hex[:6]}"
             SHARED_STATE["active_positions"][btc_pid] = {"id": btc_pid, "symbol": "BTC/USDT", "side": "buy", "strategy": "LiveTest", "entry": btc_price, "qty": btc_qty, "sl": 0, "tp": 999999, "tp1": 999999, "is_partial": 0, "highest_pnl_pct": 0}
             
-            await self.ex.create_market_order("ETH/USDT", "sell", eth_qty)
+            await self.ex.create_market_order("ETH/USDT", "sell", eth_qty, params=self._order_params("sell"))
             eth_pid = f"test_{uuid.uuid4().hex[:6]}"
             SHARED_STATE["active_positions"][eth_pid] = {"id": eth_pid, "symbol": "ETH/USDT", "side": "sell", "strategy": "LiveTest", "entry": eth_price, "qty": eth_qty, "sl": 999999, "tp": 0, "tp1": 0, "is_partial": 0, "highest_pnl_pct": 0}
             
-            await self.tg.send("✅ <b>Test Trades Opened!</b>\nCheck Phemex. Closing in 30 seconds...")
+            await self.tg.send("✅ <b>Test Trades Opened!</b>\nClosing in 30 seconds...")
             await asyncio.sleep(30)
             
             await self.tg.send("⏳ Closing test trades...")
             await self.force_close_position(btc_pid, "End of Live Test")
             await self.force_close_position(eth_pid, "End of Live Test")
-            await self.tg.send("🎉 <b>Live Test Successfully Completed!</b>")
+            await self.tg.send("🎉 <b>Live Test Completed!</b>")
         except Exception as e: 
-            await self.tg.send(f"❌ <b>Live Test Failed:</b>\n{str(e)}")
+            await self.tg.send(f"❌ <b>Live Test Failed:</b>\n{str(e)[:200]}")
 
     async def watchdog_loop(self):
         while True:
@@ -392,7 +416,8 @@ class QuantEngine:
                         try:
                             half_qty = self.get_safe_qty(pos['symbol'], (half_qty * price), price)
                             if half_qty > 0:
-                                await self.ex.create_market_order(pos['symbol'], close_side, half_qty, params={'reduceOnly': True})
+                                close_params = {**self._order_params(pos['side']), 'reduceOnly': True}
+                                await self.ex.create_market_order(pos['symbol'], close_side, half_qty, params=close_params)
                                 pos['qty'] -= half_qty
                                 pos['is_partial'] = 1
                                 pos['sl'] = pos['entry']
@@ -412,15 +437,18 @@ class QuantEngine:
         if not pos: return
         price = self.prices.get(pos['symbol'], pos['entry'])
         close_side = 'sell' if pos['side'] == 'buy' else 'buy'
+        close_params = {**self._order_params(pos['side']), 'reduceOnly': True}
         try:
-            await self.ex.create_market_order(pos['symbol'], close_side, pos['qty'], params={'reduceOnly': True})
+            await self.ex.create_market_order(pos['symbol'], close_side, pos['qty'], params=close_params)
             pnl = (price - pos['entry']) * pos['qty'] * (1 if pos['side'] == 'buy' else -1)
             if pos['strategy'] != "LiveTest": await self.db.close_trade(pid, pnl)
             del SHARED_STATE["active_positions"][pid]
             await self.db.update_analytics()
             icon = "🟢" if pnl >= 0 else "🔴"
             await self.tg.send(f"{icon} <b>Closed ({reason})</b>\n{pos['symbol']} | PnL: ${pnl:.2f}")
-        except Exception as e: log.error(f"Force Close {pid}: {e}")
+        except Exception as e: 
+            log.error(f"Force Close {pid}: {e}")
+            await self.tg.send(f"❌ Force Close Failed: {pos['symbol']}\n{str(e)[:100]}")
 
     async def smart_sync_positions(self):
         try:
@@ -434,14 +462,40 @@ class QuantEngine:
                     if not matched_sym: continue
                     active_remote_syms.append(matched_sym)
                     if not any(pos['symbol'] == matched_sym for pos in SHARED_STATE["active_positions"].values()):
-                        pid = f"sync_{uuid.uuid4().hex[:8]}"
+                        info_side = p.get('info', {}).get('side', '')
+                        info_pos_side = p.get('info', {}).get('posSide', 'Merged')
+                        
+                        if info_pos_side in ('Long', 'long'):
+                            side = 'buy'
+                        elif info_pos_side in ('Short', 'short'):
+                            side = 'sell'
+                        else:
+                            size_raw = float(p.get('info', {}).get('size', 0))
+                            if size_raw > 0:
+                                side = 'buy'
+                            elif size_raw < 0:
+                                side = 'sell'
+                            else:
+                                side = 'buy' if info_side == 'Buy' else 'sell'
+                        
                         entry = float(p.get('entryPrice', 0))
-                        side = 'buy' if p.get('side') == 'long' else 'sell'
                         price = self.prices.get(matched_sym, entry)
-                        pos_data = {"id": pid, "symbol": matched_sym, "side": side, "strategy": "Manual/Adopted", "entry": entry, "qty": size, "sl": entry * 0.9 if side == 'buy' else entry * 1.1, "tp": entry * 1.1 if side == 'buy' else entry * 0.9, "tp1": entry * 1.05 if side == 'buy' else entry * 0.95, "is_partial": 0, "highest_pnl_pct": ((price - entry)/entry*100) if side=='buy' else ((entry-price)/entry*100)}
+                        pid = f"sync_{uuid.uuid4().hex[:8]}"
+                        pos_data = {
+                            "id": pid, "symbol": matched_sym, "side": side, 
+                            "strategy": "Manual/Adopted", "entry": entry, "qty": size, 
+                            "sl": entry * 0.9 if side == 'buy' else entry * 1.1, 
+                            "tp": entry * 1.1 if side == 'buy' else entry * 0.9, 
+                            "tp1": entry * 1.05 if side == 'buy' else entry * 0.95, 
+                            "is_partial": 0, 
+                            "highest_pnl_pct": ((price - entry)/entry*100) if side=='buy' else ((entry-price)/entry*100)
+                        }
                         SHARED_STATE["active_positions"][pid] = pos_data
                         await self.db.insert_trade(pos_data)
                         await self.tg.send(f"🔄 <b>Adopted Manual Position</b>\n{matched_sym} ({side.upper()}) is now managed by Bot.")
+            
+            await self._detect_pos_mode()
+            
             for pid, pos in list(SHARED_STATE["active_positions"].items()):
                 if pos['symbol'] not in active_remote_syms and pos['strategy'] != 'LiveTest':
                     await self.db.close_trade(pid, 0.0)
@@ -467,7 +521,7 @@ def api_status(): return jsonify(SHARED_STATE)
 
 @app.route("/")
 def dashboard():
-    html = """<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Quant V9.5 Pro Dashboard</title><style>body { font-family: Tahoma; background: #0d1117; color: #c9d1d9; padding: 20px; } .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; } .card { background: #161b22; border: 1px solid #30363d; padding: 20px; border-radius: 10px; } h2 { color: #58a6ff; margin-top: 0; } .val { font-size: 1.5em; color: #3fb950; }</style><script>async function update() { let r = await fetch('/api/status'); let d = await r.json(); document.getElementById('bal').innerText = '$' + d.balance.toFixed(2); document.getElementById('pnl').innerText = '$' + d.stats.total_pnl; let pDiv = document.getElementById('pos'); pDiv.innerHTML = ''; for (let id in d.active_positions) { let p = d.active_positions[id]; pDiv.innerHTML += `<div style="background:#21262d; margin:5px; padding:10px; border-radius:5px; border-left:4px solid #58a6ff;"><b>${p.symbol}</b> (${p.side.toUpperCase()})<br>Strategy: ${p.strategy} | Entry: ${p.entry.toFixed(4)} | Qty: ${p.qty}</div>`; } if(Object.keys(d.active_positions).length === 0) pDiv.innerHTML = "<span style='color:#8b949e'>No active positions.</span>"; } setInterval(update, 2000); window.onload = update;</script></head><body><h1 style="text-align:center">🤖 Master Quant Engine V9.5</h1><div class="grid"><div class="card"><h2>System</h2><p>Balance: <span id="bal" class="val"></span></p></div><div class="card"><h2>Stats</h2><p>Total PnL: <span id="pnl" class="val"></span></p></div><div class="card" style="grid-column: 1 / -1;"><h2>Live Positions</h2><div id="pos"></div></div></div></body></html>"""
+    html = """<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Quant V9.6 Pro Dashboard</title><style>body { font-family: Tahoma; background: #0d1117; color: #c9d1d9; padding: 20px; } .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; } .card { background: #161b22; border: 1px solid #30363d; padding: 20px; border-radius: 10px; } h2 { color: #58a6ff; margin-top: 0; } .val { font-size: 1.5em; color: #3fb950; }</style><script>async function update() { let r = await fetch('/api/status'); let d = await r.json(); document.getElementById('bal').innerText = '$' + d.balance.toFixed(2); document.getElementById('pnl').innerText = '$' + d.stats.total_pnl; document.getElementById('mode').innerText = d.pos_mode; let pDiv = document.getElementById('pos'); pDiv.innerHTML = ''; for (let id in d.active_positions) { let p = d.active_positions[id]; pDiv.innerHTML += `<div style="background:#21262d; margin:5px; padding:10px; border-radius:5px; border-left:4px solid #58a6ff;"><b>${p.symbol}</b> (${p.side.toUpperCase()})<br>Strategy: ${p.strategy} | Entry: ${p.entry.toFixed(4)} | Qty: ${p.qty}</div>`; } if(Object.keys(d.active_positions).length === 0) pDiv.innerHTML = "<span style='color:#8b949e'>No active positions.</span>"; } setInterval(update, 2000); window.onload = update;</script></head><body><h1 style="text-align:center">🤖 Master Quant Engine V9.6</h1><div class="grid"><div class="card"><h2>System</h2><p>Balance: <span id="bal" class="val"></span></p><p>PosMode: <span id="mode" class="val"></span></p></div><div class="card"><h2>Stats</h2><p>Total PnL: <span id="pnl" class="val"></span></p></div><div class="card" style="grid-column: 1 / -1;"><h2>Live Positions</h2><div id="pos"></div></div></div></body></html>"""
     return render_template_string(html)
 
 def run_web(): 
@@ -478,4 +532,6 @@ if __name__ == "__main__":
     engine = QuantEngine()
     try: asyncio.run(engine.start())
     except KeyboardInterrupt: log.info("🛑 Shutting down...")
-    finally: asyncio.run(engine.ex.close())
+    finally: 
+        try: asyncio.run(engine.ex.close())
+        except: pass
