@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v9.8 (Phemex Format Fixed)
-- Fixed symbol format for Phemex (SYMBOL/USDT:USDT)
+Master Quant Engine v9.9 (Phemex Balance Fixed)
+- Fixed balance checking for Phemex perpetual swaps
+- Correct symbol format for Phemex
 - Removed Bitcoin completely
-- Optimized for altcoins with correct Phemex format
-- Enhanced balance management
+- Optimized for altcoins
 """
 
 import asyncio
@@ -42,7 +42,7 @@ if not WEB_USER or not WEB_PASS:
     WEB_USER = "admin"
     WEB_PASS = "admin123"
 
-# CRITICAL: Correct Phemex format for perpetual swaps
+# Correct Phemex format for perpetual swaps
 # Format: BASE/QUOTE:QUOTE (e.g., ETH/USDT:USDT)
 SYMBOLS = [
     "ETH/USDT:USDT", 
@@ -85,7 +85,7 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-log = logging.getLogger("QuantV9.8")
+log = logging.getLogger("QuantV9.9")
 
 SHARED_STATE = {
     "is_active": True, 
@@ -279,7 +279,7 @@ class AsyncTelegram:
         if not TG_TOKEN: 
             return
         mode = "TESTNET" if TESTNET else "MAINNET (Real Money)"
-        await self.send(f"🚀 <b>Master Quant V9.8 Online</b>\nNetwork: <b>{mode}</b>\n<u>No BTC - Altcoins Only</u>\nSelect an option below:", self.main_menu())
+        await self.send(f"🚀 <b>Master Quant V9.9 Online</b>\nNetwork: <b>{mode}</b>\n<u>No BTC - Altcoins Only</u>\nSelect an option below:", self.main_menu())
         
         while True:
             try:
@@ -407,38 +407,28 @@ class QuantEngine:
         return simple_symbol
 
     # ========================================================================
-    # FIXED: Balance Check Before Trade
+    # FIXED: Balance Check Before Trade - CORRECTED FOR PHEMEX
     # ========================================================================
     async def check_balance_before_trade(self, symbol: str, side: str, qty: float, price: float) -> Tuple[bool, str]:
         """
-        بررسی موجودی کافی قبل از اجرای معامله
+        بررسی موجودی کافی قبل از اجرای معامله - اصلاح شده برای Phemex
         """
         try:
             balance = await self.ex.fetch_balance()
-            base_currency = symbol.split('/')[0]
-            quote_currency = symbol.split('/')[1]
             
-            if side == 'buy':
-                # For LONG positions: Need USDT
-                needed_usdt = qty * price * 1.01  # 1% extra for fees
-                available_usdt = balance.get(quote_currency, {}).get('free', 0)
-                
-                if available_usdt < needed_usdt:
-                    return False, f"Insufficient {quote_currency}. Need ${needed_usdt:.2f}, Have ${available_usdt:.2f}"
-                    
-            else:  # sell/short
-                # For SHORT positions: Need base currency for collateral
-                required_margin = (qty * price) * 0.1  # 10% margin
-                available_base = balance.get(base_currency, {}).get('free', 0)
-                available_usdt = balance.get(quote_currency, {}).get('free', 0)
-                
-                # Check base currency for margin
-                if available_base < qty * 0.05:  # 5% of position as margin
-                    return False, f"Insufficient {base_currency}. Need {qty * 0.05:.6f}, Have {available_base:.6f}"
-                
-                # Check USDT for additional margin
-                if available_usdt < required_margin:
-                    return False, f"Insufficient {quote_currency} for margin. Need ${required_margin:.2f}, Have ${available_usdt:.2f}"
+            # For Phemex perpetual swaps, balance is in USDT
+            # The currency is always USDT, not USDT:USDT
+            available_usdt = balance.get('USDT', {}).get('free', 0)
+            
+            # Calculate required USDT for the trade
+            # For futures, we need margin, not full position value
+            required_margin = qty * price / LEVERAGE
+            
+            # Add some buffer for fees
+            required_usdt = required_margin * 1.01
+            
+            if available_usdt < required_usdt:
+                return False, f"Insufficient USDT balance. Need ${required_usdt:.2f}, Have ${available_usdt:.2f}"
             
             return True, "OK"
             
@@ -446,11 +436,11 @@ class QuantEngine:
             return False, f"Balance check error: {str(e)}"
 
     # ========================================================================
-    # FIXED: Auto Adjust Order Size Based on Balance
+    # FIXED: Auto Adjust Order Size Based on Balance - CORRECTED
     # ========================================================================
     async def auto_adjust_order_size(self, symbol: str, target_usd: float) -> float:
         """
-        تنظیم خودکار اندازه معامله بر اساس موجودی موجود
+        تنظیم خودکار اندازه معامله بر اساس موجودی موجود - اصلاح شده
         """
         try:
             balance = await self.ex.fetch_balance()
@@ -458,14 +448,24 @@ class QuantEngine:
             if not price or price <= 0:
                 return 0
                 
-            quote_currency = symbol.split('/')[1]
+            # Get available USDT balance
+            available_usdt = balance.get('USDT', {}).get('free', 0)
             
             # Maximum 20% of available balance per trade
             max_usage_pct = 0.2
-            available_usdt = balance.get(quote_currency, {}).get('free', 0) * max_usage_pct
+            max_usdt_per_trade = available_usdt * max_usage_pct
+            
+            # Calculate margin required for target
+            # For futures, margin = position_value / leverage
+            margin_required = target_usd / LEVERAGE
             
             # Limit target to available balance
-            adjusted_target = min(target_usd, available_usdt)
+            if margin_required > max_usdt_per_trade:
+                # Reduce target based on available margin
+                max_target = max_usdt_per_trade * LEVERAGE
+                adjusted_target = min(target_usd, max_target)
+            else:
+                adjusted_target = target_usd
             
             # Ensure minimum order value
             if adjusted_target < MIN_ORDER_USD:
@@ -475,7 +475,7 @@ class QuantEngine:
             # Calculate quantity
             qty = self.calculate_safe_order_amount(symbol, adjusted_target, price)
             
-            log.info(f"Auto-adjusted order for {symbol}: ${adjusted_target:.2f} -> {qty}")
+            log.info(f"Auto-adjusted order for {symbol}: ${adjusted_target:.2f} -> {qty} (margin: ${adjusted_target/LEVERAGE:.2f})")
             return qty
             
         except Exception as e:
@@ -806,11 +806,11 @@ class QuantEngine:
             await self.tg.send(f"❌ <b>Trade Failed</b>\n{sym}\n{error_msg}")
 
     # ========================================================================
-    # FIXED: Live Test - No BTC, Only Altcoins
+    # FIXED: Live Test - CORRECTED FOR PHEMEX
     # ========================================================================
     async def run_live_test(self):
         """
-        اجرای تست زنده با آلتکوین‌ها - بدون بیتکوین
+        اجرای تست زنده با آلتکوین‌ها - اصلاح شده برای Phemex
         """
         await self.tg.send("🧪 <b>Initiating 30-Second Live Test...</b>\n<u>Altcoins Only - No BTC</u>")
         
@@ -838,12 +838,14 @@ class QuantEngine:
                     await self.tg.send(f"⚠️ No price for {sym}, skipping...")
                     continue
                 
-                # Random side for test
-                side = "buy" if len(test_positions) % 2 == 0 else "sell"
+                # Calculate safe quantity
                 qty = self.calculate_safe_order_amount(sym, max_test_usdt, price)
                 
                 if qty <= 0:
                     continue
+                
+                # Random side for test
+                side = "buy" if len(test_positions) % 2 == 0 else "sell"
                 
                 try:
                     # Check balance before opening
@@ -1031,7 +1033,7 @@ def dashboard():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Quant V9.8 - No BTC</title>
+    <title>Quant V9.9 - No BTC</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
@@ -1065,7 +1067,7 @@ def dashboard():
 </head>
 <body>
 <div class="container">
-    <h1>🤖 Master Quant Engine V9.8</h1>
+    <h1>🤖 Master Quant Engine V9.9</h1>
     <div class="subtitle"><span class="no-btc">⛔ NO BITCOIN - Altcoins Only</span></div>
     
     <div class="grid">
@@ -1097,7 +1099,7 @@ def dashboard():
     </div>
     
     <div class="footer">
-        Master Quant Engine v9.8 | Phemex {'TESTNET' if TESTNET else 'MAINNET'} | No BTC | Auto-updates every 2s
+        Master Quant Engine v9.9 | Phemex {'TESTNET' if TESTNET else 'MAINNET'} | No BTC | Auto-updates every 2s
     </div>
 </div>
 
