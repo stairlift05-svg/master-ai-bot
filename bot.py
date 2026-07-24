@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v10.1 (Render & Phemex Fix)
-- Kept 100% of Phemex, Telegram, Strategy Engine & Web Architecture intact
-- Fixed Phemex Code 30000 (fetch_ohlcv argument issue on HTF)
-- Handled Phemex Code 20004 (Inconsistent Position Mode for specific alts like XRP)
+Master Quant Engine v10.2 (Hybrid Strategy Edition)
+- Improved strategy engine with 4 entry signals (Breakout, MTF Pullback, SuperTrend, Volume)
+- Increased trade frequency without sacrificing quality
+- 100% Phemex, Telegram, Database & Web Architecture intact
+- Fixed Phemex Code 30000 & 20004
 - Fully compatible with UptimeRobot (Flask Port 10000)
 """
 
@@ -82,7 +83,7 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-log = logging.getLogger("QuantV10.1")
+log = logging.getLogger("QuantV10.2")
 
 SHARED_STATE = {
     "is_active": True, 
@@ -170,7 +171,7 @@ class AsyncDB:
                 }
 
 # ============================================================================
-# 3. ENHANCED STRATEGY ENGINE (V10 - MTF & MOMENTUM REVERSAL)
+# 3. ENHANCED STRATEGY ENGINE (V10.2 - HYBRID MULTI-STRATEGY)
 # ============================================================================
 class Indicators:
     @staticmethod
@@ -189,6 +190,57 @@ class Indicators:
             (df['low'] - df['close'].shift()).abs()
         ], axis=1).max(axis=1)
         return tr.ewm(com=n-1, adjust=False).mean()
+    
+    @staticmethod
+    def supertrend(df: pd.DataFrame, period=10, multiplier=3):
+        """Calculate SuperTrend indicator"""
+        atr = Indicators.atr(df, period)
+        hl2 = (df['high'] + df['low']) / 2
+        upper_band = hl2 + (multiplier * atr)
+        lower_band = hl2 - (multiplier * atr)
+        
+        upper_band_series = pd.Series(index=df.index, dtype=float)
+        lower_band_series = pd.Series(index=df.index, dtype=float)
+        trend = pd.Series(index=df.index, dtype=int)
+        
+        for i in range(1, len(df)):
+            if i == 1:
+                upper_band_series.iloc[i] = upper_band.iloc[i]
+                lower_band_series.iloc[i] = lower_band.iloc[i]
+                trend.iloc[i] = 1 if df['close'].iloc[i] > upper_band.iloc[i] else -1
+                continue
+                
+            prev_upper = upper_band_series.iloc[i-1]
+            prev_lower = lower_band_series.iloc[i-1]
+            prev_trend = trend.iloc[i-1]
+            
+            if prev_trend == 1:
+                lower_band_series.iloc[i] = max(lower_band.iloc[i], prev_lower)
+                upper_band_series.iloc[i] = upper_band.iloc[i]
+                if df['close'].iloc[i] < lower_band_series.iloc[i]:
+                    trend.iloc[i] = -1
+                else:
+                    trend.iloc[i] = 1
+            else:
+                upper_band_series.iloc[i] = min(upper_band.iloc[i], prev_upper)
+                lower_band_series.iloc[i] = lower_band.iloc[i]
+                if df['close'].iloc[i] > upper_band_series.iloc[i]:
+                    trend.iloc[i] = 1
+                else:
+                    trend.iloc[i] = -1
+        return trend, upper_band_series, lower_band_series
+
+    @staticmethod
+    def highest(series: pd.Series, period: int):
+        return series.rolling(window=period).max()
+
+    @staticmethod
+    def lowest(series: pd.Series, period: int):
+        return series.rolling(window=period).min()
+
+    @staticmethod
+    def sma(series: pd.Series, period: int):
+        return series.rolling(window=period).mean()
 
 class StrategyEngine:
     def analyze(self, df_5m: pd.DataFrame, df_1h: pd.DataFrame) -> Dict:
@@ -206,6 +258,8 @@ class StrategyEngine:
         
         # 2. Lower Timeframe Indicators
         c = df_c['close']
+        high = df_c['high']
+        low = df_c['low']
         atr = Indicators.atr(df_c, 14).iloc[-1]
         price = c.iloc[-1]
         
@@ -216,22 +270,76 @@ class StrategyEngine:
         ema20 = c.ewm(span=20, adjust=False).mean().iloc[-1]
         ema50 = c.ewm(span=50, adjust=False).mean().iloc[-1]
         
+        # New indicators for hybrid strategy
+        supertrend_trend, _, supertrend_lower = Indicators.supertrend(df_c)
+        vol_sma = Indicators.sma(df_c['volume'], 20).iloc[-1]
+        vol_curr = df_c['volume'].iloc[-1]
+        highest_10 = Indicators.highest(high, 10).iloc[-1]
+        lowest_10 = Indicators.lowest(low, 10).iloc[-1]
+        prev_high_10 = Indicators.highest(high, 10).iloc[-2]
+        prev_low_10 = Indicators.lowest(low, 10).iloc[-2]
+
         sig = {"action": "neutral"}
 
-        # 3. Entry Logic
-        if htf_trend == "bullish" and price > ema20 > ema50:
-            if rsi_prev <= 42 and rsi_curr > rsi_prev:
-                sig = {"action": "buy", "strat": "MTF_Pullback_Long"}
+        # 3. HYBRID STRATEGY ENGINE (Priority-based)
+        
+        # STRATEGY 1: Breakout Momentum (Highest Priority)
+        # Conditions: Price above EMA20, breaks 10-period high, RSI > 55
+        if htf_trend == "bullish" and price > ema20 and price > highest_10 and prev_high_10 == highest_10 and rsi_curr > 55:
+            sig = {"action": "buy", "strat": "Breakout_Momentum"}
+        elif htf_trend == "bearish" and price < ema20 and price < lowest_10 and prev_low_10 == lowest_10 and rsi_curr < 45:
+            sig = {"action": "sell", "strat": "Breakout_Momentum"}
+            
+        # STRATEGY 2: MTF Pullback (Original Strategy)
+        if sig['action'] == 'neutral':
+            if htf_trend == "bullish" and price > ema20 > ema50:
+                if rsi_prev <= 42 and rsi_curr > rsi_prev:
+                    sig = {"action": "buy", "strat": "MTF_Pullback"}
+            elif htf_trend == "bearish" and price < ema20 < ema50:
+                if rsi_prev >= 58 and rsi_curr < rsi_prev:
+                    sig = {"action": "sell", "strat": "MTF_Pullback"}
 
-        elif htf_trend == "bearish" and price < ema20 < ema50:
-            if rsi_prev >= 58 and rsi_curr < rsi_prev:
-                sig = {"action": "sell", "strat": "MTF_Pullback_Short"}
+        # STRATEGY 3: SuperTrend Pullback
+        if sig['action'] == 'neutral':
+            if htf_trend == "bullish" and supertrend_trend.iloc[-1] == 1:
+                # Price bounces from SuperTrend lower band
+                if low.iloc[-1] <= supertrend_lower.iloc[-1] and price > low.iloc[-1] and c.iloc[-1] > c.iloc[-2]:
+                    sig = {"action": "buy", "strat": "SuperTrend_Pullback"}
+            elif htf_trend == "bearish" and supertrend_trend.iloc[-1] == -1:
+                # Price bounces from SuperTrend upper band
+                if high.iloc[-1] >= supertrend_trend.iloc[-1] and price < high.iloc[-1] and c.iloc[-1] < c.iloc[-2]:
+                    sig = {"action": "sell", "strat": "SuperTrend_Pullback"}
 
+        # STRATEGY 4: Volume Surge (Lowest Priority)
+        if sig['action'] == 'neutral':
+            if htf_trend == "bullish" and price > ema20 and vol_curr > vol_sma * 1.5 and c.iloc[-1] > c.iloc[-2] and rsi_curr > 50:
+                sig = {"action": "buy", "strat": "Volume_Surge"}
+            elif htf_trend == "bearish" and price < ema20 and vol_curr > vol_sma * 1.5 and c.iloc[-1] < c.iloc[-2] and rsi_curr < 50:
+                sig = {"action": "sell", "strat": "Volume_Surge"}
+
+        # 4. Adaptive SL/TP based on strategy type
         if sig['action'] != 'neutral':
             side = sig['action']
-            sig['sl'] = price - (atr * 1.5) if side == 'buy' else price + (atr * 1.5)
-            sig['tp'] = price + (atr * 3.0) if side == 'buy' else price - (atr * 3.0)
-            sig['tp1'] = price + (atr * 1.5) if side == 'buy' else price - (atr * 1.5) 
+            strat = sig['strat']
+            
+            # Default settings (for MTF_Pullback and SuperTrend_Pullback)
+            sl_multiplier = 1.5
+            tp_multiplier = 3.0
+            tp1_multiplier = 1.5
+            
+            # Strategy-specific adjustments
+            if strat == "Breakout_Momentum":
+                sl_multiplier = 1.2  # Tighter stop loss
+                tp_multiplier = 3.5  # Extended take profit
+                tp1_multiplier = 2.0
+            elif strat == "Volume_Surge":
+                sl_multiplier = 1.4
+                tp_multiplier = 2.5
+                tp1_multiplier = 1.5
+            
+            sig['sl'] = price - (atr * sl_multiplier) if side == 'buy' else price + (atr * sl_multiplier)
+            sig['tp'] = price + (atr * tp_multiplier) if side == 'buy' else price - (atr * tp_multiplier)
+            sig['tp1'] = price + (atr * tp1_multiplier) if side == 'buy' else price - (atr * tp1_multiplier)
             
         return sig
 
@@ -245,13 +353,13 @@ class AsyncTelegram:
         self.offset = 0
         
     def main_menu(self):
-        btn_state = "⏸ Pause Bot" if SHARED_STATE["is_active"] else "▶️ Start Bot"
+        btn_state = "⏸️ Pause Bot" if SHARED_STATE["is_active"] else "▶️ Start Bot"
         action_state = "cmd_pause" if SHARED_STATE["is_active"] else "cmd_start"
         return {
             "inline_keyboard": [
                 [{"text": "📊 Dashboard", "callback_data": "cmd_dash"}, {"text": "💼 Active Pos", "callback_data": "cmd_pos"}],
                 [{"text": "🔄 Sync Broker", "callback_data": "cmd_sync"}, {"text": btn_state, "callback_data": action_state}],
-                [{"text": "🧪 30-SEC LIVE TEST", "callback_data": "cmd_livetest"}]
+                [{"text": "⚡ 30-SEC LIVE TEST", "callback_data": "cmd_livetest"}]
             ]
         }
         
@@ -285,7 +393,7 @@ class AsyncTelegram:
         if not TG_TOKEN: 
             return
         mode = "TESTNET" if TESTNET else "MAINNET (Real Money)"
-        await self.send(f"🤖 <b>Master Quant V10.1 Online</b>\nNetwork: <b>{mode}</b>\n<u>Phemex Fix Applied</u>\nSelect an option below:", self.main_menu())
+        await self.send(f"🚀 <b>Master Quant V10.2 Online</b>\nNetwork: <b>{mode}</b>\n<u>Hybrid Strategy Active</u>\nSelect an option below:", self.main_menu())
         
         while True:
             try:
@@ -297,7 +405,7 @@ class AsyncTelegram:
                             
                             if "message" in upd:
                                 if upd["message"].get("text", "") in ("/start", "/menu"): 
-                                    await self.send("🎛 <b>Main Control Panel</b>", self.main_menu())
+                                    await self.send("🎛️ <b>Main Control Panel</b>", self.main_menu())
                                     
                             if "callback_query" in upd:
                                 cb = upd["callback_query"]
@@ -310,14 +418,14 @@ class AsyncTelegram:
                                     await self.send("▶️ <b>Bot Started Scanning.</b>", self.main_menu())
                                 elif data == "cmd_pause": 
                                     SHARED_STATE["is_active"] = False
-                                    await self.send("⏸ <b>Bot Paused.</b>", self.main_menu())
+                                    await self.send("⏸️ <b>Bot Paused.</b>", self.main_menu())
                                 elif data == "cmd_sync": 
                                     await self.send("🔄 Force Syncing...")
                                     await self.engine.smart_sync_positions()
                                 elif data == "cmd_dash": 
                                     await self.send(
-                                        f"📊 <b>Pro Dashboard v10.1</b>\n"
-                                        f"State: {'🟢 Running' if SHARED_STATE['is_active'] else '🔴 Paused'}\n"
+                                        f"📊 <b>Pro Dashboard v10.2</b>\n"
+                                        f"State: {'✅ Running' if SHARED_STATE['is_active'] else '⏸️ Paused'}\n"
                                         f"Balance: <b>${SHARED_STATE['balance']:.2f}</b>\n"
                                         f"Total PnL: <b>${SHARED_STATE['stats']['total_pnl']:.2f}</b>\n"
                                         f"Active Pos: {len(SHARED_STATE['active_positions'])}/{MAX_POS}",
@@ -326,14 +434,14 @@ class AsyncTelegram:
                                 elif data == "cmd_pos":
                                     pos = SHARED_STATE["active_positions"]
                                     if not pos: 
-                                        await self.send("🟢 No active positions.", self.main_menu())
+                                        await self.send("💤 No active positions.", self.main_menu())
                                     else:
-                                        await self.send("💼 <b>Live Positions:</b>")
+                                        await self.send("📈 <b>Live Positions:</b>")
                                         for pid, p in pos.items():
                                             c_price = self.engine.prices.get(p['symbol'], p['entry'])
                                             pnl = (c_price - p['entry']) * p['qty'] * (1 if p['side']=='buy' else -1)
                                             await self.send(
-                                                f"{'📈' if pnl>0 else '📉'} <b>{p['symbol']}</b> ({p['side'].upper()})\n"
+                                                f"{'🟢' if pnl>0 else '🔴'} <b>{p['symbol']}</b> ({p['side'].upper()})\n"
                                                 f"Entry: {p['entry']:.4f}\n"
                                                 f"PnL: ${pnl:.2f}",
                                                 self.close_menu(pid)
@@ -569,7 +677,7 @@ class QuantEngine:
                     
                     if dd >= MAX_DD and not SHARED_STATE["dd_halted"]: 
                         SHARED_STATE["dd_halted"] = True
-                        await self.tg.send(f"🚨 <b>HALTED</b>\nDrawdown: {dd:.1f}%")
+                        await self.tg.send(f"⛔ <b>HALTED</b>\nDrawdown: {dd:.1f}%")
                     elif dd < MAX_DD * 0.8 and SHARED_STATE["dd_halted"]: 
                         SHARED_STATE["dd_halted"] = False
                         await self.tg.send(f"✅ <b>Resumed</b>\nDrawdown recovered to {dd:.1f}%")
@@ -668,7 +776,7 @@ class QuantEngine:
             await self.db.insert_trade(pos)
             
             await self.tg.send(
-                f"🚀 <b>Entry {side.upper()} (v10.1 MTF)</b>\n"
+                f"🎯 <b>Entry {side.upper()} (v10.2 {sig['strat']})</b>\n"
                 f"{sym} @ {fill_price:.4f}\n"
                 f"Qty: {qty}\n"
                 f"Value: ${qty * fill_price:.2f}"
@@ -688,7 +796,7 @@ class QuantEngine:
             log.error(f"Trade execution failed for {sym}: {error_msg}")
 
     async def run_live_test(self):
-        await self.tg.send("🧪 <b>Initiating 30-Second Live Test (v10.1)...</b>\n<u>Altcoins Only</u>")
+        await self.tg.send("⚡ <b>Initiating 30-Second Live Test (v10.2)...</b>\n<u>Altcoins Only</u>")
         try:
             balance = await self.ex.fetch_balance()
             usdt_balance = balance.get('USDT', {}).get('free', 0)
@@ -724,7 +832,7 @@ class QuantEngine:
                 }
                 SHARED_STATE["active_positions"][pid] = pos
                 test_positions.append(pid)
-                await self.tg.send(f"✅ Test Position Opened {sym} ({side.upper()})")
+                await self.tg.send(f"🧪 Test Position Opened {sym} ({side.upper()})")
             
             if not test_positions:
                 return
@@ -732,7 +840,7 @@ class QuantEngine:
             await asyncio.sleep(30)
             for pid in test_positions:
                 await self.force_close_position(pid, "End of Live Test")
-            await self.tg.send("🎉 Live Test Completed Successfully!")
+            await self.tg.send("✅ Live Test Completed Successfully!")
             
         except Exception as e:
             log.error(f"Live test failed: {e}")
@@ -804,7 +912,7 @@ class QuantEngine:
                                 pos['is_partial'] = 1
                                 pos['sl'] = pos['entry']
                                 await self.db.update_trade(pid, pos['qty'], pos['sl'], 1, pos['highest_pnl_pct'])
-                                await self.tg.send(f"🎯 <b>Partial TP Hit</b>\n{pos['symbol']} 50% Closed")
+                                await self.tg.send(f"🔹 <b>Partial TP Hit</b>\n{pos['symbol']} 50% Closed")
                         except Exception as e:
                             log.error(f"Partial TP failed: {e}")
                 
@@ -841,18 +949,30 @@ def dashboard():
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Quant V10.1 - Active Engine</title>
+    <title>Quant V10.2 - Hybrid Engine</title>
     <style>
         body { font-family: sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
         .card { background: #161b22; border: 1px solid #30363d; padding: 20px; border-radius: 8px; margin-bottom: 15px; }
+        .badge { background: #238636; color: white; padding: 3px 8px; border-radius: 12px; font-size: 12px; }
     </style>
 </head>
 <body>
-    <h1>🤖 Master Quant Engine V10.1</h1>
+    <h1>🚀 Master Quant Engine V10.2</h1>
     <div class="card">
-        <h2>System Status: ONLINE</h2>
+        <h2>System Status: <span class="badge">ONLINE</span></h2>
         <p>Phemex Integration: STABLE</p>
+        <p>Strategy: Hybrid (Breakout + MTF + SuperTrend + Volume)</p>
+        <p>Active Positions: <span id="pos-count">0</span></p>
+        <p>Balance: $<span id="balance">0.00</span></p>
     </div>
+    <script>
+        setInterval(async () => {
+            const res = await fetch('/api/status');
+            const data = await res.json();
+            document.getElementById('pos-count').textContent = Object.keys(data.active_positions).length;
+            document.getElementById('balance').textContent = data.balance.toFixed(2);
+        }, 5000);
+    </script>
 </body>
 </html>"""
     return render_template_string(html)
@@ -869,7 +989,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(engine.start())
     except KeyboardInterrupt:
-        log.info("👋 Shutting down...")
+        log.info("🛑 Shutting down...")
     except Exception as e:
         log.error(f"Fatal error: {e}")
     finally:
