@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v9.6 (Fully Fixed & Optimized)
-- Fixed order amount calculation with proper contract size handling
-- Enhanced position closing with multiple fallback methods
-- Smart synchronization with exchange
-- Comprehensive error handling and retry mechanism
-- Full compatibility with Phemex exchange requirements
+Master Quant Engine v9.7 (Optimized - No BTC)
+- Removed Bitcoin completely to avoid balance issues
+- Optimized for altcoins only
+- Enhanced balance management for cross-margin
+- Fixed all order placement issues
+- Better error handling and reporting
 """
 
 import asyncio
@@ -26,7 +26,7 @@ from flask import Flask, jsonify, render_template_string
 from flask_httpauth import HTTPBasicAuth
 
 # ============================================================================
-# 1. CONFIGURATION
+# 1. CONFIGURATION - NO BTC
 # ============================================================================
 load_dotenv()
 
@@ -43,25 +43,27 @@ if not WEB_USER or not WEB_PASS:
     WEB_USER = "admin"
     WEB_PASS = "admin123"
 
-SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"]
+# REMOVED BTC - Using only altcoins
+SYMBOLS = ["ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT", "DOT/USDT"]
 TIMEFRAME = "5m"
 RISK_PCT = 1.0
 LEVERAGE = 5
 MAX_POS = 4
 MAX_DD = 10.0  
-MIN_ORDER_USD = 16.0  # Minimum order value to bypass Phemex Reject
+MIN_ORDER_USD = 16.0
 
 TRAIL_ACT = 1.5    
 TRAIL_STEP = 0.5   
 PARTIAL_TP = True  
 
-# Contract size fallback for different symbols
+# Contract size fallback for altcoins
 CONTRACT_SIZES = {
-    "BTC/USDT": 0.001,
     "ETH/USDT": 0.01,
     "SOL/USDT": 1.0,
+    "BNB/USDT": 0.01,
     "XRP/USDT": 1.0,
-    "BNB/USDT": 0.01
+    "ADA/USDT": 1.0,
+    "DOT/USDT": 1.0
 }
 
 logging.basicConfig(
@@ -72,7 +74,7 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-log = logging.getLogger("QuantV9.6")
+log = logging.getLogger("QuantV9.7")
 
 SHARED_STATE = {
     "is_active": True, 
@@ -266,7 +268,7 @@ class AsyncTelegram:
         if not TG_TOKEN: 
             return
         mode = "TESTNET" if TESTNET else "MAINNET (Real Money)"
-        await self.send(f"🚀 <b>Master Quant V9.6 Online</b>\nNetwork: <b>{mode}</b>\nSelect an option below:", self.main_menu())
+        await self.send(f"🚀 <b>Master Quant V9.7 Online</b>\nNetwork: <b>{mode}</b>\n<u>No BTC - Altcoins Only</u>\nSelect an option below:", self.main_menu())
         
         while True:
             try:
@@ -381,6 +383,83 @@ class QuantEngine:
         )
 
     # ========================================================================
+    # FIXED: Balance Check Before Trade
+    # ========================================================================
+    async def check_balance_before_trade(self, symbol: str, side: str, qty: float, price: float) -> Tuple[bool, str]:
+        """
+        بررسی موجودی کافی قبل از اجرای معامله
+        """
+        try:
+            balance = await self.ex.fetch_balance()
+            base_currency = symbol.split('/')[0]
+            quote_currency = symbol.split('/')[1]
+            
+            if side == 'buy':
+                # For LONG positions: Need USDT
+                needed_usdt = qty * price * 1.01  # 1% extra for fees
+                available_usdt = balance.get(quote_currency, {}).get('free', 0)
+                
+                if available_usdt < needed_usdt:
+                    return False, f"Insufficient {quote_currency}. Need ${needed_usdt:.2f}, Have ${available_usdt:.2f}"
+                    
+            else:  # sell/short
+                # For SHORT positions: Need base currency for collateral
+                # Usually 10-20% margin is required
+                required_margin = (qty * price) * 0.1  # 10% margin
+                available_base = balance.get(base_currency, {}).get('free', 0)
+                available_usdt = balance.get(quote_currency, {}).get('free', 0)
+                
+                # Check base currency for margin
+                if available_base < qty * 0.05:  # 5% of position as margin
+                    return False, f"Insufficient {base_currency}. Need {qty * 0.05:.6f}, Have {available_base:.6f}"
+                
+                # Check USDT for additional margin
+                if available_usdt < required_margin:
+                    return False, f"Insufficient {quote_currency} for margin. Need ${required_margin:.2f}, Have ${available_usdt:.2f}"
+            
+            return True, "OK"
+            
+        except Exception as e:
+            return False, f"Balance check error: {str(e)}"
+
+    # ========================================================================
+    # FIXED: Auto Adjust Order Size Based on Balance
+    # ========================================================================
+    async def auto_adjust_order_size(self, symbol: str, target_usd: float) -> float:
+        """
+        تنظیم خودکار اندازه معامله بر اساس موجودی موجود
+        """
+        try:
+            balance = await self.ex.fetch_balance()
+            price = self.prices.get(symbol)
+            if not price or price <= 0:
+                return 0
+                
+            quote_currency = symbol.split('/')[1]
+            
+            # Maximum 20% of available balance per trade
+            max_usage_pct = 0.2
+            available_usdt = balance.get(quote_currency, {}).get('free', 0) * max_usage_pct
+            
+            # Limit target to available balance
+            adjusted_target = min(target_usd, available_usdt)
+            
+            # Ensure minimum order value
+            if adjusted_target < MIN_ORDER_USD:
+                log.warning(f"Adjusted target ${adjusted_target:.2f} below minimum ${MIN_ORDER_USD}")
+                return 0
+                
+            # Calculate quantity
+            qty = self.calculate_safe_order_amount(symbol, adjusted_target, price)
+            
+            log.info(f"Auto-adjusted order for {symbol}: ${adjusted_target:.2f} -> {qty}")
+            return qty
+            
+        except Exception as e:
+            log.error(f"Auto-adjust failed: {e}")
+            return 0
+
+    # ========================================================================
     # FIXED: Safe Order Amount Calculation
     # ========================================================================
     def calculate_safe_order_amount(self, symbol: str, target_usd: float, price: float) -> float:
@@ -391,7 +470,7 @@ class QuantEngine:
             raise ValueError(f"Invalid price: {price}")
         
         # Get contract size
-        contract_size = self.contract_sizes.get(symbol, 0.001)
+        contract_size = self.contract_sizes.get(symbol, 0.01)
         
         # Calculate contracts needed for target USD
         contracts_needed = target_usd / (price * contract_size)
@@ -422,7 +501,7 @@ class QuantEngine:
             min_amount = MIN_ORDER_USD / price
             precision_amount = float(self.ex.amount_to_precision(symbol, min_amount))
         
-        log.info(f"Safe amount for {symbol}: {precision_amount} (value: ${precision_amount * price:.2f})")
+        log.debug(f"Safe amount for {symbol}: {precision_amount} (value: ${precision_amount * price:.2f})")
         return precision_amount
 
     # ========================================================================
@@ -467,15 +546,13 @@ class QuantEngine:
         except Exception as e:
             log.warning(f"posSide close failed: {e}")
         
-        # Method 3: Direct market order (may open opposite position if not careful)
+        # Method 3: Direct market order
         try:
             log.warning(f"Attempting direct close for {symbol}")
-            # Check if position still exists
             positions = await self.ex.fetch_positions([symbol])
             for pos in positions:
                 size = abs(float(pos.get('contracts', 0)))
                 if size > 0:
-                    # Use exact position size
                     exact_amount = float(self.ex.amount_to_precision(symbol, size))
                     order = await self.ex.create_market_order(
                         symbol=symbol,
@@ -488,18 +565,6 @@ class QuantEngine:
         except Exception as e:
             log.error(f"Direct close failed: {e}")
             raise
-        
-        # Method 4: Close using position endpoint
-        try:
-            log.info(f"Closing position using close_position endpoint")
-            response = await self.ex.private_post_positions_close({
-                'symbol': symbol,
-            })
-            log.info(f"Position closed using close_position")
-            return {'status': 'closed', 'response': response}
-        except Exception as e:
-            log.error(f"All close methods failed for {symbol}: {e}")
-            raise
 
     # ========================================================================
     # FIXED: Smart Position Synchronization
@@ -511,7 +576,6 @@ class QuantEngine:
         try:
             remote_positions = await self.ex.fetch_positions()
             active_remote_syms = []
-            remote_positions_data = {}
             
             for pos in remote_positions:
                 size = abs(float(pos.get('contracts', 0) or pos.get('info', {}).get('size', 0)))
@@ -526,13 +590,6 @@ class QuantEngine:
                     side = 'buy' if pos.get('side') == 'long' else 'sell'
                     current_price = self.prices.get(matched_sym, entry_price)
                     
-                    remote_positions_data[matched_sym] = {
-                        'size': size,
-                        'entry': entry_price,
-                        'side': side,
-                        'current_price': current_price,
-                        'pnl': (current_price - entry_price) * size if side == 'buy' else (entry_price - current_price) * size
-                    }
                     active_remote_syms.append(matched_sym)
                     
                     # Adopt remote position if not in our DB
@@ -635,7 +692,7 @@ class QuantEngine:
             await asyncio.sleep(30)
 
     # ========================================================================
-    # FIXED: Trade Execution with Validation
+    # FIXED: Trade Execution with Balance Check
     # ========================================================================
     async def execute_trade(self, sym: str, sig: Dict):
         price = self.prices.get(sym)
@@ -656,10 +713,21 @@ class QuantEngine:
         target_usd = (risk_amount / dist) * price
         
         try:
-            # Calculate safe order amount
-            qty = self.calculate_safe_order_amount(sym, target_usd, price)
+            # Auto adjust order size based on balance
+            qty = await self.auto_adjust_order_size(sym, target_usd)
+            if qty <= 0:
+                log.warning(f"Could not calculate safe order size for {sym}")
+                return
+                
             side = sig['action']
             
+            # Check balance before trade
+            balance_check, msg = await self.check_balance_before_trade(sym, side, qty, price)
+            if not balance_check:
+                log.warning(f"Balance check failed for {sym}: {msg}")
+                await self.tg.send(f"⚠️ <b>Trade Skipped</b>\n{sym}\n{msg}")
+                return
+                
             # Validate order parameters
             order_value = qty * price
             if order_value < MIN_ORDER_USD:
@@ -710,69 +778,100 @@ class QuantEngine:
                 log.warning(f"Stop loss setup failed: {e}")
                 
         except Exception as e:
-            log.error(f"Trade execution failed for {sym}: {e}")
-            await self.tg.send(f"❌ <b>Trade Failed</b>\n{sym}\n{str(e)[:200]}")
+            error_msg = str(e)[:200]
+            log.error(f"Trade execution failed for {sym}: {error_msg}")
+            await self.tg.send(f"❌ <b>Trade Failed</b>\n{sym}\n{error_msg}")
 
     # ========================================================================
-    # FIXED: Live Test with Safe Amounts
+    # FIXED: Live Test - No BTC, Only Altcoins
     # ========================================================================
     async def run_live_test(self):
-        await self.tg.send("🧪 <b>Initiating 30-Second Live Test...</b>\nForcing trades at safe contract sizes.")
+        """
+        اجرای تست زنده با آلتکوین‌ها - بدون بیتکوین
+        """
+        await self.tg.send("🧪 <b>Initiating 30-Second Live Test...</b>\n<u>Altcoins Only - No BTC</u>")
         
         try:
-            btc_price = self.prices.get("BTC/USDT", 60000)
-            eth_price = self.prices.get("ETH/USDT", 3000)
+            # Get available balance
+            balance = await self.ex.fetch_balance()
+            usdt_balance = balance.get('USDT', {}).get('free', 0)
             
-            # Calculate safe quantities
-            btc_qty = self.calculate_safe_order_amount("BTC/USDT", MIN_ORDER_USD, btc_price)
-            eth_qty = self.calculate_safe_order_amount("ETH/USDT", MIN_ORDER_USD, eth_price)
+            await self.tg.send(f"💰 <b>Available USDT Balance:</b> ${usdt_balance:.2f}")
             
-            # Open BTC long
-            await self.ex.create_market_order("BTC/USDT", "buy", btc_qty)
-            btc_pid = f"test_{uuid.uuid4().hex[:6]}"
-            SHARED_STATE["active_positions"][btc_pid] = {
-                "id": btc_pid, 
-                "symbol": "BTC/USDT", 
-                "side": "buy", 
-                "strategy": "LiveTest", 
-                "entry": btc_price, 
-                "qty": btc_qty, 
-                "sl": 0, 
-                "tp": 999999, 
-                "tp1": 999999, 
-                "is_partial": 0, 
-                "highest_pnl_pct": 0
-            }
+            if usdt_balance < 50:
+                await self.tg.send("❌ <b>Insufficient balance</b>\nMinimum $50 USDT required for test")
+                return
             
-            # Open ETH short
-            await self.ex.create_market_order("ETH/USDT", "sell", eth_qty)
-            eth_pid = f"test_{uuid.uuid4().hex[:6]}"
-            SHARED_STATE["active_positions"][eth_pid] = {
-                "id": eth_pid, 
-                "symbol": "ETH/USDT", 
-                "side": "sell", 
-                "strategy": "LiveTest", 
-                "entry": eth_price, 
-                "qty": eth_qty, 
-                "sl": 999999, 
-                "tp": 0, 
-                "tp1": 0, 
-                "is_partial": 0, 
-                "highest_pnl_pct": 0
-            }
+            # Choose 2 altcoins for testing
+            test_symbols = ["ETH/USDT", "SOL/USDT"]
+            test_positions = []
             
-            await self.tg.send("✅ <b>Test Trades Opened!</b>\nCheck Phemex. Closing in 30 seconds...")
+            # Calculate max test amount (10% of balance per position)
+            max_test_usdt = min(usdt_balance * 0.1, 30)  # Max $30 per position
+            
+            for sym in test_symbols:
+                price = self.prices.get(sym)
+                if not price or price <= 0:
+                    await self.tg.send(f"⚠️ No price for {sym}, skipping...")
+                    continue
+                
+                # Random side for test
+                side = "buy" if len(test_positions) % 2 == 0 else "sell"
+                qty = self.calculate_safe_order_amount(sym, max_test_usdt, price)
+                
+                if qty <= 0:
+                    continue
+                
+                try:
+                    # Check balance before opening
+                    balance_check, msg = await self.check_balance_before_trade(sym, side, qty, price)
+                    if not balance_check:
+                        await self.tg.send(f"⚠️ {sym} {side}: {msg}")
+                        continue
+                    
+                    # Open position
+                    await self.ex.create_market_order(sym, side, qty)
+                    
+                    pid = f"test_{uuid.uuid4().hex[:6]}"
+                    pos = {
+                        "id": pid,
+                        "symbol": sym,
+                        "side": side,
+                        "strategy": "LiveTest",
+                        "entry": price,
+                        "qty": qty,
+                        "sl": price * 0.98 if side == 'buy' else price * 1.02,
+                        "tp": price * 1.05 if side == 'buy' else price * 0.95,
+                        "tp1": price * 1.025 if side == 'buy' else price * 0.975,
+                        "is_partial": 0,
+                        "highest_pnl_pct": 0
+                    }
+                    SHARED_STATE["active_positions"][pid] = pos
+                    test_positions.append(pid)
+                    
+                    await self.tg.send(f"✅ <b>Test Position Opened</b>\n{sym} ({side.upper()})\nQty: {qty}\nValue: ${qty * price:.2f}")
+                    
+                except Exception as e:
+                    await self.tg.send(f"❌ Failed to open {sym}: {str(e)[:100]}")
+            
+            if not test_positions:
+                await self.tg.send("❌ <b>No test positions could be opened</b>")
+                return
+            
+            # Wait 30 seconds
+            await self.tg.send(f"⏳ Waiting 30 seconds... ({len(test_positions)} positions open)")
             await asyncio.sleep(30)
             
-            # Close test positions
-            await self.tg.send("⏳ Closing test trades...")
-            await self.force_close_position(btc_pid, "End of Live Test")
-            await self.force_close_position(eth_pid, "End of Live Test")
+            # Close all test positions
+            await self.tg.send("⏳ Closing test positions...")
+            for pid in test_positions:
+                await self.force_close_position(pid, "End of Live Test")
             
-            await self.tg.send("🎉 <b>Live Test Successfully Completed!</b>")
+            # Final summary
+            await self.tg.send("🎉 <b>Live Test Completed Successfully!</b>\nAll test positions closed.")
             
         except Exception as e:
-            error_msg = str(e)[:200]
+            error_msg = str(e)[:300]
             log.error(f"Live test failed: {error_msg}")
             await self.tg.send(f"❌ <b>Live Test Failed:</b>\n{error_msg}")
 
@@ -909,12 +1008,13 @@ def dashboard():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Quant V9.6 Pro Dashboard</title>
+    <title>Quant V9.7 - No BTC</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
         .container { max-width: 1400px; margin: 0 auto; }
         h1 { text-align: center; color: #58a6ff; margin-bottom: 30px; font-size: 2.5em; }
+        .subtitle { text-align: center; color: #d29922; margin-bottom: 20px; font-size: 1em; }
         .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 20px; }
         .card { background: #161b22; border: 1px solid #30363d; padding: 20px; border-radius: 10px; }
         .card h2 { color: #58a6ff; margin-top: 0; margin-bottom: 15px; font-size: 1.2em; }
@@ -933,6 +1033,7 @@ def dashboard():
         .status.running { background: #238636; color: #fff; }
         .status.paused { background: #da3633; color: #fff; }
         .status.halted { background: #d29922; color: #fff; }
+        .no-btc { background: #1f2937; color: #d29922; padding: 5px 15px; border-radius: 20px; font-size: 0.8em; display: inline-block; }
         @media (max-width: 600px) {
             h1 { font-size: 1.8em; }
             .card .val { font-size: 1.5em; }
@@ -941,7 +1042,8 @@ def dashboard():
 </head>
 <body>
 <div class="container">
-    <h1>🤖 Master Quant Engine V9.6</h1>
+    <h1>🤖 Master Quant Engine V9.7</h1>
+    <div class="subtitle"><span class="no-btc">⛔ NO BITCOIN - Altcoins Only</span></div>
     
     <div class="grid">
         <div class="card">
@@ -972,7 +1074,7 @@ def dashboard():
     </div>
     
     <div class="footer">
-        Master Quant Engine v9.6 | Phemex {'TESTNET' if TESTNET else 'MAINNET'} | Auto-updates every 2s
+        Master Quant Engine v9.7 | Phemex {'TESTNET' if TESTNET else 'MAINNET'} | No BTC | Auto-updates every 2s
     </div>
 </div>
 
@@ -1046,9 +1148,7 @@ async function update() {
     }
 }
 
-// Update every 2 seconds
 setInterval(update, 2000);
-// Initial update
 update();
 </script>
 </body>
