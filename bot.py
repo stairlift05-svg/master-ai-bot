@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v12.0 (Diagnostics + AI Observer)
-- Full decision logging (why no trade / rejected / early exit)
-- AI Observer: analyzes performance, rejection reasons, early exits, losses
-- Rich diagnostics sent to Telegram + stored in DB
-- Slightly relaxed filters so the bot can actually trade
-- Ready for future real ML (data is now being collected)
+Master Quant Engine v12.1 (Phemex Fixed + AI Observer)
+- Fixed Phemex code 30000 (public instance for OHLCV)
+- Fixed / safely ignored code 20004 (position mode)
+- Full decision logging + AI Observer diagnostics
+- Risk management + fee estimation + trailing + partial TP
+- Compatible with UptimeRobot / Render (port 10000)
 """
 
 import asyncio
@@ -14,11 +14,10 @@ import logging
 import os
 import time
 import uuid
-import json
 from collections import Counter, defaultdict
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from threading import Thread
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple
 
 import aiohttp
 import aiosqlite
@@ -45,7 +44,7 @@ WEB_PASS = os.getenv("WEB_ADMIN_PASS", "")
 if not WEB_USER or not WEB_PASS:
     WEB_USER = "admin"
     WEB_PASS = "admin123"
-    print("⚠️ WARNING: Using default WEB credentials. Set them in .env!")
+    print("⚠️ WARNING: Using default WEB credentials. Set WEB_ADMIN_USER / WEB_ADMIN_PASS in .env!")
 
 SYMBOLS = [
     "ETH/USDT:USDT",
@@ -72,7 +71,7 @@ TRAIL_ACT = 1.8
 TRAIL_STEP = 0.6
 PARTIAL_TP = True
 
-# کمی شل‌تر برای اینکه سیگنال تولید شود (بعداً می‌توانید سخت کنید)
+# True = فیلترها کمی شل‌تر (برای تولید سیگنال بیشتر)
 RELAXED_MODE = True
 
 logging.basicConfig(
@@ -83,7 +82,7 @@ logging.basicConfig(
         logging.StreamHandler(),
     ],
 )
-log = logging.getLogger("QuantV12")
+log = logging.getLogger("QuantV12.1")
 
 SHARED_STATE = {
     "is_active": True,
@@ -105,7 +104,7 @@ SHARED_STATE = {
 STATE_LOCK = asyncio.Lock()
 
 # ============================================================================
-# 2. DATABASE (enriched for diagnostics)
+# 2. DATABASE
 # ============================================================================
 class AsyncDB:
     def __init__(self, db_path="bot_v12.db"):
@@ -245,7 +244,7 @@ class AsyncDB:
             await db.commit()
 
 # ============================================================================
-# 3. INDICATORS + STRATEGY (with detailed reasons)
+# 3. INDICATORS + STRATEGY
 # ============================================================================
 class Indicators:
     @staticmethod
@@ -305,12 +304,18 @@ class Indicators:
 
 class StrategyEngine:
     def analyze(self, df_5m: pd.DataFrame, df_1h: pd.DataFrame) -> Dict:
-        """Returns action + detailed reason for logging"""
         df_c = df_5m.iloc[:-1].copy()
         df_htf = df_1h.iloc[:-1].copy()
 
         if len(df_c) < 60 or len(df_htf) < 50:
-            return {"action": "neutral", "reason": "داده ناکافی (کمتر از ۶۰ کندل)", "strat": "", "rsi": 0, "atr": 0, "htf": ""}
+            return {
+                "action": "neutral",
+                "reason": "داده ناکافی (کمتر از ۶۰ کندل)",
+                "strat": "",
+                "rsi": 0,
+                "atr": 0,
+                "htf": "",
+            }
 
         htf_close = df_htf["close"]
         ema50_htf = htf_close.ewm(span=50, adjust=False).mean().iloc[-1]
@@ -324,7 +329,7 @@ class StrategyEngine:
         else:
             return {
                 "action": "neutral",
-                "reason": f"روند HTF نامشخص (قیمت={htf_price:.4f}, EMA50={ema50_htf:.4f})",
+                "reason": f"روند HTF نامشخص (price={htf_price:.4f})",
                 "strat": "",
                 "rsi": 0,
                 "atr": 0,
@@ -339,16 +344,15 @@ class StrategyEngine:
         atr_series = Indicators.atr(df_c, 14)
         atr = float(atr_series.iloc[-1])
         if atr <= 0:
-            return {"action": "neutral", "reason": "ATR صفر یا نامعتبر", "strat": "", "rsi": 0, "atr": 0, "htf": htf_trend}
+            return {"action": "neutral", "reason": "ATR نامعتبر", "strat": "", "rsi": 0, "atr": 0, "htf": htf_trend}
 
         atr_sma = float(Indicators.sma(atr_series, 20).iloc[-1])
-        # فیلتر نوسان (در حالت RELAXED کمی شل‌تر)
         low_mult = 0.45 if RELAXED_MODE else 0.55
         high_mult = 3.2 if RELAXED_MODE else 2.8
         if atr < atr_sma * low_mult:
             return {
                 "action": "neutral",
-                "reason": f"نوسان خیلی کم (ATR={atr:.5f} < {atr_sma*low_mult:.5f})",
+                "reason": f"نوسان خیلی کم (ATR={atr:.5f})",
                 "strat": "",
                 "rsi": 0,
                 "atr": atr,
@@ -357,7 +361,7 @@ class StrategyEngine:
         if atr > atr_sma * high_mult:
             return {
                 "action": "neutral",
-                "reason": f"نوسان خیلی زیاد (ATR={atr:.5f} > {atr_sma*high_mult:.5f})",
+                "reason": f"نوسان خیلی زیاد (ATR={atr:.5f})",
                 "strat": "",
                 "rsi": 0,
                 "atr": atr,
@@ -377,7 +381,7 @@ class StrategyEngine:
         prev_high_10 = float(Indicators.highest(high, 10).iloc[-2])
         prev_low_10 = float(Indicators.lowest(low, 10).iloc[-2])
 
-        # ---------- STRATEGY 1: Breakout ----------
+        # STRATEGY 1: Breakout Momentum
         if htf_trend == "bullish" and price > ema20 and price >= highest_10 * 0.999:
             if (prev_high_10 <= highest_10) and (48 < rsi_curr < 75) and (vol_curr > vol_sma * (1.15 if RELAXED_MODE else 1.3)):
                 return self._build_signal("buy", "Breakout_Momentum", price, atr, rsi_curr, htf_trend)
@@ -385,7 +389,7 @@ class StrategyEngine:
             if (prev_low_10 >= lowest_10) and (25 < rsi_curr < 52) and (vol_curr > vol_sma * (1.15 if RELAXED_MODE else 1.3)):
                 return self._build_signal("sell", "Breakout_Momentum", price, atr, rsi_curr, htf_trend)
 
-        # ---------- STRATEGY 2: MTF Pullback ----------
+        # STRATEGY 2: MTF Pullback
         if htf_trend == "bullish" and price > ema20 and ema20 > ema50 * 0.999:
             if rsi_prev <= (42 if RELAXED_MODE else 40) and rsi_curr > rsi_prev and rsi_curr < 62:
                 return self._build_signal("buy", "MTF_Pullback", price, atr, rsi_curr, htf_trend)
@@ -393,7 +397,7 @@ class StrategyEngine:
             if rsi_prev >= (58 if RELAXED_MODE else 60) and rsi_curr < rsi_prev and rsi_curr > 38:
                 return self._build_signal("sell", "MTF_Pullback", price, atr, rsi_curr, htf_trend)
 
-        # ---------- STRATEGY 3: SuperTrend Pullback ----------
+        # STRATEGY 3: SuperTrend Pullback
         if htf_trend == "bullish" and st_dir.iloc[-1] == 1:
             if low.iloc[-1] <= st_lower.iloc[-1] * 1.005 and price > low.iloc[-1] and c.iloc[-1] > c.iloc[-2]:
                 if 38 < rsi_curr < 65:
@@ -403,7 +407,7 @@ class StrategyEngine:
                 if 35 < rsi_curr < 62:
                     return self._build_signal("sell", "SuperTrend_Pullback", price, atr, rsi_curr, htf_trend)
 
-        # ---------- STRATEGY 4: Volume Surge ----------
+        # STRATEGY 4: Volume Surge
         if htf_trend == "bullish" and price > ema20 and vol_curr > vol_sma * (1.5 if RELAXED_MODE else 1.8):
             if c.iloc[-1] > c.iloc[-2] and 48 < rsi_curr < 70:
                 return self._build_signal("buy", "Volume_Surge", price, atr, rsi_curr, htf_trend)
@@ -413,7 +417,7 @@ class StrategyEngine:
 
         return {
             "action": "neutral",
-            "reason": f"هیچ استراتژی‌ای شرایط را نداشت (RSI={rsi_curr:.1f}, HTF={htf_trend}, VolRatio={vol_curr/vol_sma:.2f})",
+            "reason": f"هیچ استراتژی شرایط نداشت (RSI={rsi_curr:.1f}, HTF={htf_trend}, VolRatio={vol_curr/max(vol_sma,1e-9):.2f})",
             "strat": "",
             "rsi": rsi_curr,
             "atr": atr,
@@ -449,11 +453,9 @@ class StrategyEngine:
         }
 
 # ============================================================================
-# 4. AI OBSERVER (Diagnostic Engine)
+# 4. AI OBSERVER
 # ============================================================================
 class AIObserver:
-    """ناظر تشخیصی: مشکلات ربات را از لاگ‌ها استخراج می‌کند"""
-
     def __init__(self, db: AsyncDB):
         self.db = db
 
@@ -464,7 +466,6 @@ class AIObserver:
         lines = []
         lines.append("🤖 <b>گزارش ناظر هوش مصنوعی (AI Observer)</b>\n")
 
-        # 1. دلایل رد معامله
         if decisions:
             reasons = Counter()
             neutral_count = 0
@@ -472,28 +473,26 @@ class AIObserver:
             for d in decisions:
                 if d["action"] == "neutral":
                     neutral_count += 1
-                    # کوتاه کردن دلیل برای شمارش
-                    r = d["reason"][:60] if d["reason"] else "نامشخص"
+                    r = (d["reason"] or "نامشخص")[:70]
                     reasons[r] += 1
                 else:
                     signal_count += 1
 
             lines.append(f"📊 از {len(decisions)} تصمیم اخیر:")
             lines.append(f"   • سیگنال معتبر: {signal_count}")
-            lines.append(f"   • رد شده (neutral): {neutral_count}")
+            lines.append(f"   • رد شده: {neutral_count}")
             if reasons:
                 lines.append("\n🚫 <b>بیشترین دلایل عدم معامله:</b>")
                 for reason, cnt in reasons.most_common(6):
                     lines.append(f"   • {cnt}× {reason}")
         else:
-            lines.append("هنوز تصمیم‌ای ثبت نشده.")
+            lines.append("هنوز تصمیمی ثبت نشده.")
 
-        # 2. تحلیل معاملات بسته شده
         if closed:
             pnls = [t["pnl"] for t in closed]
             wins = [p for p in pnls if p > 0]
             losses = [p for p in pnls if p <= 0]
-            early_exits = [t for t in closed if t.get("hold_seconds", 9999) < 300]  # کمتر از ۵ دقیقه
+            early_exits = [t for t in closed if (t.get("hold_seconds") or 9999) < 300]
             by_strat = defaultdict(list)
             exit_reasons = Counter()
             for t in closed:
@@ -505,7 +504,7 @@ class AIObserver:
             if pnls:
                 lines.append(f"   • میانگین PnL: ${sum(pnls)/len(pnls):.2f}")
             if early_exits:
-                lines.append(f"   • خروج زودهنگام (<۵دقیقه): {len(early_exits)} مورد ⚠️")
+                lines.append(f"   • خروج زودهنگام (<۵ دقیقه): {len(early_exits)} ⚠️")
 
             lines.append("\n📉 <b>دلایل خروج:</b>")
             for reason, cnt in exit_reasons.most_common(5):
@@ -518,16 +517,15 @@ class AIObserver:
         else:
             lines.append("\nهنوز معامله بسته‌شده‌ای وجود ندارد.")
 
-        # 3. توصیه‌های ساده
         lines.append("\n💡 <b>توصیه ناظر:</b>")
         if decisions and neutral_count > signal_count * 8:
-            lines.append("• فیلترها خیلی سخت هستند → RELAXED_MODE را بررسی کنید یا شرایط RSI/حجم را شل‌تر کنید.")
+            lines.append("• فیلترها خیلی سخت هستند. RELAXED_MODE را چک کنید.")
         if closed and len(early_exits) > len(closed) * 0.35:
-            lines.append("• خروج‌های زودهنگام زیاد است → TRAIL_ACT یا SL را بررسی کنید.")
+            lines.append("• خروج‌های زودهنگام زیاد است → TRAIL یا SL را بررسی کنید.")
         if not closed and signal_count == 0:
-            lines.append("• هیچ سیگنالی تولید نشده → احتمالاً بازار رنج است یا فیلتر HTF مانع می‌شود.")
-        if not lines[-1].startswith("•"):
-            lines.append("• داده کافی جمع شده. می‌توانید بعداً مدل ML واقعی آموزش دهید.")
+            lines.append("• هیچ سیگنالی تولید نشده → بازار رنج یا فیلتر HTF مانع است.")
+        if not any(l.startswith("•") for l in lines[-3:]):
+            lines.append("• داده در حال جمع‌آوری است. بعداً می‌توان مدل ML واقعی آموزش داد.")
 
         report = "\n".join(lines)
         await self.db.save_observer_report(report)
@@ -556,7 +554,7 @@ class AsyncTelegram:
                     {"text": btn, "callback_data": action},
                 ],
                 [
-                    {"text": "🤖 AI Observer Report", "callback_data": "cmd_observer"},
+                    {"text": "🤖 AI Observer", "callback_data": "cmd_observer"},
                     {"text": "🚫 Last Rejections", "callback_data": "cmd_rejections"},
                 ],
                 [{"text": "⚡ Live Test", "callback_data": "cmd_livetest"}],
@@ -569,7 +567,6 @@ class AsyncTelegram:
     async def send(self, msg: str, reply_markup=None):
         if not TG_TOKEN:
             return
-        # تلگرام محدودیت طول دارد
         if len(msg) > 4000:
             msg = msg[:3900] + "\n\n... (truncated)"
         payload = {"chat_id": TG_CHAT, "text": msg, "parse_mode": "HTML"}
@@ -597,9 +594,9 @@ class AsyncTelegram:
             return
         mode = "TESTNET" if TESTNET else "MAINNET"
         await self.send(
-            f"🚀 <b>Master Quant V12.0 Online</b>\n"
+            f"🚀 <b>Master Quant V12.1 Online</b>\n"
             f"Network: <b>{mode}</b>\n"
-            f"AI Observer + Full Diagnostics Active\n"
+            f"Phemex 30000/20004 Fixed + AI Observer\n"
             f"RELAXED_MODE = {RELAXED_MODE}",
             self.main_menu(),
         )
@@ -613,7 +610,7 @@ class AsyncTelegram:
                         for upd in data.get("result", []):
                             self.offset = upd["update_id"]
                             if "message" in upd and upd["message"].get("text", "") in ("/start", "/menu"):
-                                await self.send("🎛️ Control Panel V12", self.main_menu())
+                                await self.send("🎛️ Control Panel V12.1", self.main_menu())
                             if "callback_query" in upd:
                                 cb = upd["callback_query"]
                                 data_cb = cb["data"]
@@ -633,7 +630,7 @@ class AsyncTelegram:
                                     async with STATE_LOCK:
                                         st = dict(SHARED_STATE)
                                     await self.send(
-                                        f"📊 <b>V12 Dashboard</b>\n"
+                                        f"📊 <b>V12.1 Dashboard</b>\n"
                                         f"State: {'✅' if st['is_active'] else '⏸️'}\n"
                                         f"Balance: <b>${st['balance']:.2f}</b>\n"
                                         f"DD: {st['current_dd']:.1f}% | Daily: ${st['daily_pnl']:.2f}\n"
@@ -667,21 +664,21 @@ class AsyncTelegram:
                                     report = await self.engine.observer.generate_report()
                                     await self.send(report, self.main_menu())
                                 elif data_cb == "cmd_rejections":
-                                    decs = await self.engine.db.get_recent_decisions(30)
+                                    decs = await self.engine.db.get_recent_decisions(25)
                                     if not decs:
                                         await self.send("هنوز ردشدگی ثبت نشده", self.main_menu())
                                     else:
-                                        msg = "🚫 <b>آخرین تصمیم‌ها (جدیدترین اول):</b>\n\n"
-                                        for d in decs[:15]:
+                                        msg = "🚫 <b>آخرین تصمیم‌ها:</b>\n\n"
+                                        for d in decs[:12]:
                                             icon = "✅" if d["action"] != "neutral" else "⛔"
-                                            msg += f"{icon} {d['symbol']} | {d['action']}\n{d['reason'][:80]}\n\n"
+                                            msg += f"{icon} <b>{d['symbol']}</b> | {d['action']}\n{d['reason'][:90]}\n\n"
                                         await self.send(msg, self.main_menu())
             except Exception as e:
                 log.error(f"TG poll error: {e}")
             await asyncio.sleep(1)
 
 # ============================================================================
-# 6. CORE ENGINE
+# 6. CORE ENGINE (Phemex Fixed)
 # ============================================================================
 class QuantEngine:
     def __init__(self):
@@ -689,19 +686,27 @@ class QuantEngine:
         self.strategy = StrategyEngine()
         self.observer = AIObserver(self.db)
         self.tg = AsyncTelegram(self)
-        self.ex = ccxt.phemex(
-            {
-                "apiKey": API_KEY,
-                "secret": API_SECRET,
-                "enableRateLimit": True,
-                "options": {"defaultType": "swap"},
-            }
-        )
+
+        # Private instance (برای معامله و بالانس)
+        self.ex = ccxt.phemex({
+            "apiKey": API_KEY,
+            "secret": API_SECRET,
+            "enableRateLimit": True,
+            "options": {"defaultType": "swap"},
+        })
         self.ex.set_sandbox_mode(TESTNET)
+
+        # Public instance (فقط برای OHLCV و تیکر - حل خطای 30000)
+        self.ex_public = ccxt.phemex({
+            "enableRateLimit": True,
+            "options": {"defaultType": "swap"},
+        })
+        self.ex_public.set_sandbox_mode(TESTNET)
+
         self.prices: Dict[str, float] = {}
         self.markets_cache = {}
         self.loop_count = 0
-        self.open_times: Dict[str, float] = {}  # pid -> timestamp
+        self.open_times: Dict[str, float] = {}
 
     async def start(self):
         await self.db.init_db()
@@ -709,14 +714,25 @@ class QuantEngine:
 
         try:
             self.markets_cache = await self.ex.load_markets()
+            await self.ex_public.load_markets()
             log.info(f"Loaded {len(self.markets_cache)} markets")
+
+            # تلاش برای تنظیم Position Mode به One-Way (حل 20004)
+            try:
+                await self.ex.set_position_mode(False)  # False = One-Way mode
+                log.info("Position mode set to One-Way")
+            except Exception as e:
+                log.warning(f"set_position_mode failed (ممکن است از قبل تنظیم باشد): {e}")
+
             for sym in SYMBOLS:
                 try:
                     await self.ex.set_leverage(LEVERAGE, sym)
+                    log.info(f"Leverage {LEVERAGE}x → {sym}")
                 except Exception as e:
-                    log.warning(f"Leverage {sym}: {e}")
+                    log.warning(f"Leverage set skipped for {sym}: {e}")
+
         except Exception as e:
-            log.error(f"Market load: {e}")
+            log.error(f"Market loading failed: {e}")
 
         for t in await self.db.get_open_trades():
             async with STATE_LOCK:
@@ -748,7 +764,6 @@ class QuantEngine:
         except Exception:
             pass
 
-        # هر ۶ ساعت یک گزارش خودکار ناظر
         asyncio.create_task(self.periodic_observer())
 
         await asyncio.gather(
@@ -898,10 +913,12 @@ class QuantEngine:
     async def price_loop(self):
         while True:
             try:
-                tickers = await self.ex.fetch_tickers(SYMBOLS)
+                # از public برای تیکر استفاده می‌کنیم
+                tickers = await self.ex_public.fetch_tickers(SYMBOLS)
                 for s, d in tickers.items():
                     if d.get("last"):
                         self.prices[s] = float(d["last"])
+
                 bal = await self.ex.fetch_balance()
                 current = float(bal.get("USDT", {}).get("total", 0) or 0)
                 async with STATE_LOCK:
@@ -919,7 +936,7 @@ class QuantEngine:
                             await self.tg.send(f"⛔ DD HALT {dd:.1f}%")
                         elif dd < MAX_DD * 0.75 and SHARED_STATE["dd_halted"]:
                             SHARED_STATE["dd_halted"] = False
-                            await self.tg.send(f"✅ DD recovered")
+                            await self.tg.send("✅ DD recovered")
                     day_start = SHARED_STATE["day_start_balance"]
                     if day_start > 0:
                         daily_pnl = current - day_start
@@ -951,13 +968,11 @@ class QuantEngine:
                     and not SHARED_STATE["daily_halted"]
                     and len(SHARED_STATE["active_positions"]) < MAX_POS
                 )
-                if not can_scan:
-                    reason = "ربات متوقف / DD / Daily limit / سقف پوزیشن"
-                    # فقط هر چند وقت یک‌بار لاگ کنیم تا دیتابیس پر نشود
-                    if self.loop_count % 20 == 0:
-                        await self.db.log_decision("ALL", "neutral", "", reason)
-                    await asyncio.sleep(6)
-                    continue
+            if not can_scan:
+                if self.loop_count % 20 == 0:
+                    await self.db.log_decision("ALL", "neutral", "", "ربات متوقف / DD / Daily / سقف پوزیشن")
+                await asyncio.sleep(6)
+                continue
 
             async with STATE_LOCK:
                 SHARED_STATE["last_scan"] = time.strftime("%H:%M:%S")
@@ -968,17 +983,20 @@ class QuantEngine:
                 if has_pos:
                     continue
                 try:
-                    raw_5m = await self.ex.fetch_ohlcv(sym, timeframe=TIMEFRAME, limit=120)
-                    await asyncio.sleep(0.25)
-                    raw_1h = await self.ex.fetch_ohlcv(sym, timeframe=HTF_TIMEFRAME, limit=100)
-                    if not raw_5m or not raw_1h:
-                        await self.db.log_decision(sym, "neutral", "", "OHLCV خالی از صرافی")
+                    # ===== حل خطای 30000: استفاده از ex_public =====
+                    raw_5m = await self.ex_public.fetch_ohlcv(sym, timeframe=TIMEFRAME, limit=120)
+                    await asyncio.sleep(0.3)
+                    raw_1h = await self.ex_public.fetch_ohlcv(sym, timeframe=HTF_TIMEFRAME, limit=100)
+
+                    if not raw_5m or not raw_1h or len(raw_5m) < 50:
+                        await self.db.log_decision(sym, "neutral", "", "OHLCV خالی یا ناکافی")
                         continue
+
                     df_5m = pd.DataFrame(raw_5m, columns=["ts", "open", "high", "low", "close", "volume"])
                     df_1h = pd.DataFrame(raw_1h, columns=["ts", "open", "high", "low", "close", "volume"])
+
                     sig = self.strategy.analyze(df_5m, df_1h)
 
-                    # همیشه تصمیم را لاگ کن
                     await self.db.log_decision(
                         sym,
                         sig["action"],
@@ -992,9 +1010,11 @@ class QuantEngine:
 
                     if sig["action"] != "neutral":
                         await self.execute_trade(sym, sig)
+
                 except Exception as e:
-                    log.error(f"Scan {sym}: {e}")
-                    await self.db.log_decision(sym, "neutral", "", f"خطای اسکن: {str(e)[:80]}")
+                    err_msg = str(e)
+                    log.error(f"Scan {sym}: {err_msg}")
+                    await self.db.log_decision(sym, "neutral", "", f"خطای اسکن: {err_msg[:100]}")
                 await asyncio.sleep(0.55)
             await asyncio.sleep(16)
 
@@ -1151,7 +1171,6 @@ class QuantEngine:
                     if pos["side"] == "buy"
                     else ((pos["entry"] - price) / pos["entry"]) * 100
                 )
-                # Trailing
                 if pnl_pct > TRAIL_ACT:
                     if pnl_pct > pos["highest_pnl_pct"]:
                         pos["highest_pnl_pct"] = pnl_pct
@@ -1165,7 +1184,6 @@ class QuantEngine:
                             if new_sl < pos["sl"]:
                                 pos["sl"] = new_sl
                                 await self.db.update_trade(pid, pos["qty"], pos["sl"], pos["is_partial"], pos["highest_pnl_pct"])
-                # Partial
                 if PARTIAL_TP and pos["is_partial"] == 0:
                     hit = (pos["side"] == "buy" and price >= pos["tp1"]) or (pos["side"] == "sell" and price <= pos["tp1"])
                     if hit:
@@ -1180,7 +1198,6 @@ class QuantEngine:
                                 await self.tg.send(f"🔹 Partial TP → BE  {pos['symbol']}")
                         except Exception as e:
                             log.error(f"Partial: {e}")
-                # SL/TP
                 sl_hit = (pos["side"] == "buy" and price <= pos["sl"]) or (pos["side"] == "sell" and price >= pos["sl"])
                 tp_hit = (pos["side"] == "buy" and price >= pos["tp"]) or (pos["side"] == "sell" and price <= pos["tp"])
                 if sl_hit or tp_hit:
@@ -1188,7 +1205,7 @@ class QuantEngine:
             await asyncio.sleep(1.2)
 
 # ============================================================================
-# 7. WEB
+# 7. WEB DASHBOARD
 # ============================================================================
 app = Flask(__name__)
 auth = HTTPBasicAuth()
@@ -1209,26 +1226,33 @@ def api_status():
 @app.route("/")
 def dashboard():
     html = """<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>Quant V12</title>
-<style>body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
+<html><head><meta charset="UTF-8"><title>Quant V12.1</title>
+<style>
+body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
 .card{background:#161b22;border:1px solid #30363d;padding:18px;border-radius:8px;margin-bottom:12px}
 .badge{background:#238636;color:#fff;padding:3px 8px;border-radius:10px;font-size:12px}
-.stat{display:inline-block;margin-right:28px}.stat-value{font-size:22px;font-weight:700;color:#58a6ff}
+.stat{display:inline-block;margin-right:28px}
+.stat-value{font-size:22px;font-weight:700;color:#58a6ff}
 </style></head><body>
-<h1>🚀 Master Quant V12 (AI Observer)</h1>
+<h1>🚀 Master Quant Engine V12.1</h1>
 <div class="card"><h2>Status: <span class="badge">ONLINE</span></h2>
-<p>Full Diagnostics + Rejection Logging + AI Observer</p></div>
-<div class="card"><h3>Live</h3>
-<div class="stat"><span class="stat-value" id="pos">0</span><br>Pos</div>
+<p>Phemex Fixed (30000/20004) + AI Observer + Full Diagnostics</p></div>
+<div class="card"><h3>Live Stats</h3>
+<div class="stat"><span class="stat-value" id="pos">0</span><br>Positions</div>
 <div class="stat"><span class="stat-value" id="bal">0.00</span><br>Balance</div>
-<div class="stat"><span class="stat-value" id="pnl">0.00</span><br>PnL</div>
-<div class="stat"><span class="stat-value" id="wr">0%</span><br>WR</div>
+<div class="stat"><span class="stat-value" id="pnl">0.00</span><br>Total PnL</div>
+<div class="stat"><span class="stat-value" id="wr">0%</span><br>Win Rate</div>
 </div>
-<script>setInterval(async()=>{const r=await fetch('/api/status');const d=await r.json();
-document.getElementById('pos').textContent=Object.keys(d.active_positions||{}).length;
-document.getElementById('bal').textContent=(d.balance||0).toFixed(2);
-document.getElementById('pnl').textContent=(d.stats?.total_pnl||0).toFixed(2);
-document.getElementById('wr').textContent=(d.stats?.win_rate||0)+'%';},4000);</script>
+<script>
+setInterval(async()=>{
+  const r=await fetch('/api/status');
+  const d=await r.json();
+  document.getElementById('pos').textContent=Object.keys(d.active_positions||{}).length;
+  document.getElementById('bal').textContent=(d.balance||0).toFixed(2);
+  document.getElementById('pnl').textContent=(d.stats?.total_pnl||0).toFixed(2);
+  document.getElementById('wr').textContent=(d.stats?.win_rate||0)+'%';
+},4000);
+</script>
 </body></html>"""
     return render_template_string(html)
 
@@ -1250,5 +1274,6 @@ if __name__ == "__main__":
     finally:
         try:
             asyncio.run(engine.ex.close())
+            asyncio.run(engine.ex_public.close())
         except Exception:
-            pass 
+            pass
