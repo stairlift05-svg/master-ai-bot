@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v13.0
-Modular Architecture | Fixed Risk Math | Real Test Trade | Pro Dashboard
+Master Quant Engine v13.1
+- Fixed OHLCV (correct Phemex endpoint + parsing)
+- Web Dashboard بدون پسورد
+- Modular + Fixed Risk Math + Real Test Trade
 """
 
 import asyncio
@@ -10,19 +12,16 @@ import logging
 import os
 import time
 import uuid
-import json
 from collections import Counter, defaultdict
-from datetime import datetime
 from threading import Thread, Lock
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Any
 
 import aiohttp
 import aiosqlite
 import ccxt.async_support as ccxt
 import pandas as pd
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template_string, request
-from flask_httpauth import HTTPBasicAuth
+from flask import Flask, jsonify, render_template_string
 
 # ============================================================================
 # 1. CONFIGURATION
@@ -34,8 +33,6 @@ API_SECRET       = os.getenv("PHEMEX_API_SECRET", "")
 TESTNET          = os.getenv("PHEMEX_TESTNET", "False").lower() in ("true", "1", "yes")
 TG_TOKEN         = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT          = os.getenv("TELEGRAM_CHAT_ID", "")
-WEB_USER         = os.getenv("WEB_ADMIN_USER", "") or "admin"
-WEB_PASS         = os.getenv("WEB_ADMIN_PASS", "") or "admin123"
 
 SYMBOLS = [
     "ETH/USDT:USDT",
@@ -48,7 +45,7 @@ SYMBOLS = [
 
 TIMEFRAME        = "5m"
 HTF_TIMEFRAME    = "1h"
-RISK_PCT         = 0.5          # درصد ریسک واقعی از موجودی
+RISK_PCT         = 0.5
 LEVERAGE         = 5
 MAX_POS          = 3
 MAX_DD           = 8.0
@@ -61,19 +58,16 @@ TRAIL_ACT        = 1.8
 TRAIL_STEP       = 0.6
 PARTIAL_TP       = True
 RELAXED_MODE     = True
-
-# کوین مخصوص تست واقعی (قیمت پایین)
 TEST_SYMBOL      = "ADA/USDT:USDT"
-TEST_USD         = 12.0         # حداکثر ارزش تست
+TEST_USD         = 12.0
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.FileHandler("quant_v13.log"), logging.StreamHandler()]
 )
-log = logging.getLogger("QuantV13")
+log = logging.getLogger("QuantV13.1")
 
-# State با قفل thread-safe
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True,
     "dd_halted": False,
@@ -87,11 +81,10 @@ SHARED_STATE: Dict[str, Any] = {
     "last_scan": "Never",
     "stats": {"total_trades": 0, "win_rate": 0.0, "total_pnl": 0.0},
 }
-STATE_LOCK = Lock()          # برای Flask (thread)
-ASYNC_LOCK = asyncio.Lock()  # برای حلقه‌های async
+STATE_LOCK = Lock()
 
 # ============================================================================
-# 2. DATABASE LAYER
+# 2. DATABASE
 # ============================================================================
 class Database:
     def __init__(self, path="bot_v13.db"):
@@ -101,17 +94,13 @@ class Database:
         async with aiosqlite.connect(self.path) as db:
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS trades (
-                    id TEXT PRIMARY KEY,
-                    symbol TEXT, side TEXT, strategy TEXT,
+                    id TEXT PRIMARY KEY, symbol TEXT, side TEXT, strategy TEXT,
                     entry_price REAL, qty REAL, original_qty REAL,
-                    sl REAL, tp1 REAL, tp REAL,
-                    is_partial INTEGER DEFAULT 0,
-                    highest_pnl_pct REAL DEFAULT 0,
-                    status TEXT DEFAULT 'open',
+                    sl REAL, tp1 REAL, tp REAL, is_partial INTEGER DEFAULT 0,
+                    highest_pnl_pct REAL DEFAULT 0, status TEXT DEFAULT 'open',
                     pnl REAL DEFAULT 0, fees_est REAL DEFAULT 0,
                     exit_reason TEXT, hold_seconds REAL DEFAULT 0,
-                    opened_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    closed_at TEXT
+                    opened_at TEXT DEFAULT CURRENT_TIMESTAMP, closed_at TEXT
                 )""")
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS decisions (
@@ -298,25 +287,21 @@ class StrategyEngine:
         h10 = float(Indicators.highest(high, 10).iloc[-1])
         l10 = float(Indicators.lowest(low, 10).iloc[-1])
 
-        # Breakout
         if htf_trend == "bullish" and price > ema20 and price >= h10 * 0.999 and 48 < rsi < 75 and vcur > vsma * (1.15 if RELAXED_MODE else 1.3):
             return self._build("buy", "Breakout_Momentum", price, atr, rsi, htf_trend)
         if htf_trend == "bearish" and price < ema20 and price <= l10 * 1.001 and 25 < rsi < 52 and vcur > vsma * (1.15 if RELAXED_MODE else 1.3):
             return self._build("sell", "Breakout_Momentum", price, atr, rsi, htf_trend)
 
-        # MTF Pullback
         if htf_trend == "bullish" and price > ema20 > ema50 * 0.999 and rsi_p <= (42 if RELAXED_MODE else 40) and rsi > rsi_p and rsi < 62:
             return self._build("buy", "MTF_Pullback", price, atr, rsi, htf_trend)
         if htf_trend == "bearish" and price < ema20 < ema50 * 1.001 and rsi_p >= (58 if RELAXED_MODE else 60) and rsi < rsi_p and rsi > 38:
             return self._build("sell", "MTF_Pullback", price, atr, rsi, htf_trend)
 
-        # SuperTrend
         if htf_trend == "bullish" and st_d.iloc[-1] == 1 and low.iloc[-1] <= st_l.iloc[-1] * 1.005 and c.iloc[-1] > c.iloc[-2] and 38 < rsi < 65:
             return self._build("buy", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
         if htf_trend == "bearish" and st_d.iloc[-1] == -1 and high.iloc[-1] >= st_u.iloc[-1] * 0.995 and c.iloc[-1] < c.iloc[-2] and 35 < rsi < 62:
             return self._build("sell", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
 
-        # Volume Surge
         if htf_trend == "bullish" and price > ema20 and vcur > vsma * (1.5 if RELAXED_MODE else 1.8) and c.iloc[-1] > c.iloc[-2] and 48 < rsi < 70:
             return self._build("buy", "Volume_Surge", price, atr, rsi, htf_trend)
         if htf_trend == "bearish" and price < ema20 and vcur > vsma * (1.5 if RELAXED_MODE else 1.8) and c.iloc[-1] < c.iloc[-2] and 30 < rsi < 52:
@@ -337,11 +322,9 @@ class StrategyEngine:
                 "tp1": price - atr * tp1_m, "reason": f"سیگنال {strat}", "rsi": rsi, "atr": atr, "htf": htf}
 
 # ============================================================================
-# 5. RISK MANAGER  (فرمول کاملاً اصلاح‌شده)
+# 5. RISK MANAGER
 # ============================================================================
 class RiskManager:
-    """محاسبه حجم استاندارد بر اساس ریسک ثابت دلاری"""
-
     @staticmethod
     def calculate_qty(balance: float, price: float, sl: float, free_usdt: float, symbol: str, exchange) -> float:
         if price <= 0 or balance <= 0:
@@ -349,19 +332,11 @@ class RiskManager:
         dist = abs(price - sl)
         if dist <= 0:
             return 0.0
-
-        # ریسک دلاری واقعی
         risk_usd = balance * (RISK_PCT / 100.0)
-
-        # تعداد کوین = ریسک دلاری / فاصله تا استاپ
         qty = risk_usd / dist
-
-        # سقف بر اساس موجودی آزاد و اکسپوژر
         max_by_free = (free_usdt * 0.18 * LEVERAGE) / price
         max_by_exposure = (balance * MAX_EXPOSURE_PCT / 100.0) / price
         qty = min(qty, max_by_free, max_by_exposure)
-
-        # دقت صرافی و حداقل سفارش
         try:
             qty = float(exchange.amount_to_precision(symbol, qty))
             if qty * price < MIN_ORDER_USD:
@@ -371,7 +346,7 @@ class RiskManager:
         return max(qty, 0.0)
 
 # ============================================================================
-# 6. AI OBSERVER / ANALYTICS
+# 6. ANALYTICS
 # ============================================================================
 class Analytics:
     def __init__(self, db: Database):
@@ -380,7 +355,7 @@ class Analytics:
     async def full_report(self) -> str:
         decisions = await self.db.get_recent_decisions(300)
         closed = await self.db.get_closed_trades(100)
-        lines = ["🤖 <b>AI Observer v13 – گزارش کامل</b>\n"]
+        lines = ["🤖 <b>AI Observer v13.1 – گزارش کامل</b>\n"]
 
         if decisions:
             reasons = Counter()
@@ -415,11 +390,11 @@ class Analytics:
         else:
             lines.append("\nهنوز معامله بسته‌شده‌ای وجود ندارد.")
 
-        lines.append("\n💡 داده برای تحلیل بعدی در دیتابیس ذخیره می‌شود.")
+        lines.append("\n💡 داده برای تحلیل در دیتابیس bot_v13.db ذخیره می‌شود.")
         return "\n".join(lines)
 
 # ============================================================================
-# 7. TELEGRAM CONTROLLER
+# 7. TELEGRAM
 # ============================================================================
 class TelegramController:
     def __init__(self, engine):
@@ -454,7 +429,7 @@ class TelegramController:
     async def poll(self):
         if not TG_TOKEN:
             return
-        await self.send(f"🚀 <b>Master Quant v13.0 Online</b>\nModular + Fixed Risk Math + Real Test", self.menu())
+        await self.send(f"🚀 <b>Master Quant v13.1 Online</b>\nFixed OHLCV + No-Password Dashboard", self.menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -485,11 +460,11 @@ class TelegramController:
                                 with STATE_LOCK:
                                     st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>Dashboard v13</b>\n"
+                                    f"📊 <b>Dashboard v13.1</b>\n"
                                     f"Balance: <b>${st['balance']:.2f}</b>\n"
-                                    f"DD: {st['current_dd']:.1f}% | Daily PnL: ${st['daily_pnl']:.2f}\n"
-                                    f"Positions: {len(st['active_positions'])}/{MAX_POS}\n"
-                                    f"Total PnL: ${st['stats']['total_pnl']:.2f} | WR: {st['stats']['win_rate']}%\n"
+                                    f"DD: {st['current_dd']:.1f}% | Daily: ${st['daily_pnl']:.2f}\n"
+                                    f"Pos: {len(st['active_positions'])}/{MAX_POS}\n"
+                                    f"PnL: ${st['stats']['total_pnl']:.2f} | WR: {st['stats']['win_rate']}%\n"
                                     f"Last scan: {st['last_scan']}", self.menu())
                             elif d == "cmd_pos":
                                 with STATE_LOCK:
@@ -520,7 +495,7 @@ class TelegramController:
             await asyncio.sleep(1)
 
 # ============================================================================
-# 8. EXCHANGE ENGINE
+# 8. ENGINE (Fixed OHLCV)
 # ============================================================================
 class QuantEngine:
     def __init__(self):
@@ -539,26 +514,41 @@ class QuantEngine:
         self.base_url = "https://testnet-api.phemex.com" if TESTNET else "https://api.phemex.com"
 
     async def fetch_ohlcv_direct(self, symbol: str, timeframe: str, limit: int = 100) -> list:
+        """نسخه نهایی و اصلاح‌شده"""
         try:
             market = self.ex.market(symbol)
             sym_id = market["id"]
-            res_map = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400}
+
+            res_map = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
             resolution = res_map.get(timeframe, 300)
-            url = f"{self.base_url}/md/v2/kline"
+
+            url = f"{self.base_url}/exchange/public/md/v2/kline"
             params = {"symbol": sym_id, "resolution": resolution, "limit": limit}
+
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=10) as resp:
+                async with session.get(url, params=params, timeout=12) as resp:
                     data = await resp.json()
+
             rows = []
-            if isinstance(data, dict):
-                rows = data.get("data", {}).get("rows") or data.get("data") or []
+            if isinstance(data, dict) and data.get("code") == 0:
+                rows = data.get("data", {}).get("rows") or []
+            elif isinstance(data, dict):
+                rows = data.get("data", {}).get("rows") or data.get("rows") or []
+
             ohlcv = []
             for row in rows:
-                if isinstance(row, (list, tuple)) and len(row) >= 5:
+                if isinstance(row, (list, tuple)) and len(row) >= 7:
                     ts = int(row[0])
                     if ts < 1e12:
                         ts *= 1000
-                    ohlcv.append([ts, float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[5] if len(row) > 5 else 0)])
+                    o = float(row[3])
+                    h = float(row[4])
+                    l = float(row[5])
+                    c = float(row[6])
+                    v = float(row[7]) if len(row) > 7 else 0.0
+                    ohlcv.append([ts, o, h, l, c, v])
+
+            ohlcv.sort(key=lambda x: x[0])
             return ohlcv[-limit:] if ohlcv else []
         except Exception as e:
             log.warning(f"OHLCV {symbol}: {e}")
@@ -655,7 +645,7 @@ class QuantEngine:
                         continue
                 try:
                     raw5 = await self.fetch_ohlcv_direct(sym, TIMEFRAME, 120)
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.25)
                     raw1 = await self.fetch_ohlcv_direct(sym, HTF_TIMEFRAME, 80)
                     if not raw5 or len(raw5) < 50:
                         await self.db.log_decision(sym, "neutral", "", "OHLCV خالی")
@@ -683,7 +673,7 @@ class QuantEngine:
             free = float(bal_data.get("USDT", {}).get("free", 0) or 0)
             qty = self.risk.calculate_qty(bal, price, sig["sl"], free, sym, self.ex)
             if qty <= 0:
-                await self.db.log_decision(sym, "rejected", sig.get("strat", ""), "حجم صفر پس از محاسبه ریسک")
+                await self.db.log_decision(sym, "rejected", sig.get("strat", ""), "حجم صفر")
                 return
             order = await self.ex.create_market_order(sym, sig["action"], qty)
             fill = float(order.get("average") or price)
@@ -698,26 +688,23 @@ class QuantEngine:
             self.open_times[pid] = time.time()
             await self.db.insert_trade(pos)
             await self.tg.send(f"🎯 <b>ورود {sig['action'].upper()}</b> ({sig['strat']})\n{sym} @ {fill:.4f}\nQty: {qty:.4f}")
-
-            # تلاش برای ثبت استاپ واقعی روی صرافی
             try:
                 sl_side = "sell" if sig["action"] == "buy" else "buy"
                 await self.ex.create_order(sym, "stop", sl_side, qty, None,
                                            params={"stopPrice": sig["sl"], "reduceOnly": True})
             except Exception as e:
-                log.warning(f"Exchange SL failed (will use client-side): {e}")
+                log.warning(f"Exchange SL failed: {e}")
         except Exception as e:
             log.error(f"execute: {e}")
             await self.db.log_decision(sym, "rejected", sig.get("strat", ""), str(e)[:90])
 
     async def real_test_trade(self):
-        """تست واقعی ۳۰ ثانیه‌ای روی ADA"""
         await self.tg.send("⚡ <b>شروع تست واقعی ۳۰ ثانیه‌ای روی ADA...</b>")
         try:
             bal = await self.ex.fetch_balance()
             free = float(bal.get("USDT", {}).get("free", 0) or 0)
             if free < 20:
-                await self.tg.send("❌ موجودی آزاد کافی نیست (حداقل ۲۰ دلار)")
+                await self.tg.send("❌ موجودی آزاد کافی نیست")
                 return
             price = self.prices.get(TEST_SYMBOL)
             if not price:
@@ -741,7 +728,7 @@ class QuantEngine:
             await self.tg.send(f"🧪 پوزیشن تست باز شد\n{TEST_SYMBOL} @ {fill:.5f}\nQty: {qty:.2f}\n۳۰ ثانیه صبر...")
             await asyncio.sleep(30)
             await self.force_close(pid, "RealTest 30s completed")
-            await self.tg.send("✅ <b>تست واقعی با موفقیت انجام و بسته شد</b>\nربات توانایی معامله واقعی دارد.")
+            await self.tg.send("✅ <b>تست واقعی با موفقیت انجام و بسته شد</b>")
         except Exception as e:
             await self.tg.send(f"❌ خطا در تست واقعی: {e}")
             log.error(f"real_test: {e}")
@@ -803,14 +790,12 @@ class QuantEngine:
                 if not price:
                     continue
                 pnl_pct = ((price - pos["entry"]) / pos["entry"] * 100) if pos["side"] == "buy" else ((pos["entry"] - price) / pos["entry"] * 100)
-                # Trailing
                 if pnl_pct > TRAIL_ACT and pnl_pct > pos["highest_pnl_pct"]:
                     pos["highest_pnl_pct"] = pnl_pct
                     new_sl = price * (1 - TRAIL_STEP / 100) if pos["side"] == "buy" else price * (1 + TRAIL_STEP / 100)
                     if (pos["side"] == "buy" and new_sl > pos["sl"]) or (pos["side"] == "sell" and new_sl < pos["sl"]):
                         pos["sl"] = new_sl
                         await self.db.update_trade(pid, pos["qty"], pos["sl"], pos["is_partial"], pos["highest_pnl_pct"])
-                # Partial TP
                 if PARTIAL_TP and pos["is_partial"] == 0:
                     hit = (pos["side"] == "buy" and price >= pos["tp1"]) or (pos["side"] == "sell" and price <= pos["tp1"])
                     if hit:
@@ -826,7 +811,6 @@ class QuantEngine:
                                 await self.tg.send(f"🔹 Partial TP → Break-even  {pos['symbol']}")
                         except Exception:
                             pass
-                # SL / TP
                 sl_hit = (pos["side"] == "buy" and price <= pos["sl"]) or (pos["side"] == "sell" and price >= pos["sl"])
                 tp_hit = (pos["side"] == "buy" and price >= pos["tp"]) or (pos["side"] == "sell" and price <= pos["tp"])
                 if sl_hit or tp_hit:
@@ -834,29 +818,14 @@ class QuantEngine:
             await asyncio.sleep(1.5)
 
 # ============================================================================
-# 9. WEB DASHBOARD (حرفه‌ای)
+# 9. WEB DASHBOARD (بدون پسورد)
 # ============================================================================
 app = Flask(__name__)
-auth = HTTPBasicAuth()
-
-@auth.verify_password
-def verify(u, p):
-    return u == WEB_USER and p == WEB_PASS
-
-@app.before_request
-@auth.login_required
-def require_auth():
-    pass
 
 @app.route("/api/status")
 def api_status():
     with STATE_LOCK:
         return jsonify(dict(SHARED_STATE))
-
-@app.route("/api/decisions")
-def api_decisions():
-    # برای استخراج داده
-    return jsonify({"message": "Use Telegram Report or check DB file for full data"})
 
 @app.route("/")
 def dashboard():
@@ -866,48 +835,43 @@ def dashboard():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Master Quant v13 – Pro Dashboard</title>
+<title>Master Quant v13.1</title>
 <style>
   :root { --bg:#0d1117; --card:#161b22; --border:#30363d; --text:#c9d1d9; --accent:#58a6ff; --green:#3fb950; --red:#f85149; }
   * { box-sizing:border-box; margin:0; padding:0; }
   body { font-family: 'Segoe UI', system-ui, sans-serif; background:var(--bg); color:var(--text); padding:20px; line-height:1.5; }
   h1 { color:var(--accent); margin-bottom:8px; font-size:1.6rem; }
   .subtitle { color:#8b949e; margin-bottom:24px; font-size:0.95rem; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px,1fr)); gap:14px; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px,1fr)); gap:14px; margin-bottom:24px; }
   .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px; }
-  .card h3 { font-size:0.8rem; color:#8b949e; margin-bottom:6px; text-transform:uppercase; letter-spacing:0.5px; }
-  .value { font-size:1.5rem; font-weight:700; color:var(--accent); }
+  .card h3 { font-size:0.8rem; color:#8b949e; margin-bottom:6px; text-transform:uppercase; }
+  .value { font-size:1.45rem; font-weight:700; color:var(--accent); }
   .badge { display:inline-block; background:var(--green); color:#fff; padding:2px 8px; border-radius:20px; font-size:0.75rem; }
-  table { width:100%; border-collapse:collapse; font-size:0.85rem; }
-  th, td { padding:8px 10px; text-align:right; border-bottom:1px solid var(--border); }
-  th { color:#8b949e; font-weight:600; }
-  .pos { color:var(--green); } .neg { color:var(--red); }
   .footer { margin-top:30px; font-size:0.8rem; color:#8b949e; text-align:center; }
-  @media (max-width:600px) { .value { font-size:1.25rem; } }
 </style>
 </head>
 <body>
-  <h1>🚀 Master Quant Engine v13.0</h1>
-  <p class="subtitle">Modular Architecture • Fixed Risk Math • Real Test Trade • Pro Analytics</p>
+  <h1>🚀 Master Quant Engine v13.1</h1>
+  <p class="subtitle">Fixed OHLCV • No Password Dashboard • Real Test Trade</p>
 
   <div class="grid">
-    <div class="card"><h3>وضعیت</h3><div class="value"><span class="badge" id="status">ONLINE</span></div></div>
-    <div class="card"><h3>موجودی (USDT)</h3><div class="value" id="balance">0.00</div></div>
-    <div class="card"><h3>پوزیشن‌های فعال</h3><div class="value" id="pos">0</div></div>
+    <div class="card"><h3>وضعیت</h3><div class="value"><span class="badge">ONLINE</span></div></div>
+    <div class="card"><h3>موجودی</h3><div class="value" id="balance">0.00</div></div>
+    <div class="card"><h3>پوزیشن‌ها</h3><div class="value" id="pos">0</div></div>
     <div class="card"><h3>Total PnL</h3><div class="value" id="pnl">0.00</div></div>
     <div class="card"><h3>Win Rate</h3><div class="value" id="wr">0%</div></div>
     <div class="card"><h3>Drawdown</h3><div class="value" id="dd">0.0%</div></div>
   </div>
 
-  <div class="card" style="margin-bottom:20px;">
-    <h3 style="margin-bottom:12px;">آخرین اسکن و وضعیت سیستم</h3>
-    <p>آخرین اسکن: <strong id="lastscan">–</strong></p>
-    <p style="margin-top:6px; font-size:0.85rem; color:#8b949e;">برای گزارش کامل و استخراج داده از دکمه Full Report در تلگرام استفاده کنید. تمام تصمیم‌ها و معاملات در دیتابیس bot_v13.db ذخیره می‌شوند.</p>
+  <div class="card">
+    <h3 style="margin-bottom:10px;">آخرین اسکن</h3>
+    <p id="lastscan">–</p>
+    <p style="margin-top:10px; font-size:0.85rem; color:#8b949e;">
+      برای گزارش کامل و استخراج داده از تلگرام استفاده کنید.
+    </p>
   </div>
 
-  <div class="footer">
-    Master Quant v13.0 • Data ready for analysis • Real Test Trade available via Telegram
-  </div>
+  <div class="footer">Master Quant v13.1 • Dashboard بدون پسورد</div>
 
 <script>
 async function refresh() {
@@ -934,7 +898,7 @@ def run_web():
     app.run(host="0.0.0.0", port=10000, debug=False, use_reloader=False)
 
 # ============================================================================
-# 10. MAIN ENTRY
+# 10. MAIN
 # ============================================================================
 if __name__ == "__main__":
     Thread(target=run_web, daemon=True).start()
@@ -942,7 +906,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(engine.start())
     except KeyboardInterrupt:
-        log.info("Shutdown requested")
+        log.info("Shutdown")
     except Exception as e:
         log.error(f"Fatal: {e}")
         raise
