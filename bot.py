@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v13.7.1
-- رفع مشکل نشناختن پوزیشن‌های قدیمی (بازیابی از صرافی)
-- Cooldown + Exponential Backoff برای خطاها
-- محدودیت ضرر متوالی
-- آستانه اختلاف قیمت جداگانه برای هر نماد
-- بهینه‌سازی RR استراتژی‌ها
-- گزارش TXT
+Master Quant Engine v14.0
+- حذف کامل وابستگی به بایننس (کندل فقط از Phemex)
+- افزایش کنترل‌شده تعداد معاملات
+- گزارش TXT کاملاً حرفه‌ای و تشخیصی
+- Position Recovery + Cooldown + Consecutive Loss Limit
 """
 
 import asyncio
@@ -15,10 +13,10 @@ import logging
 import os
 import time
 import uuid
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime
 from threading import Thread, Lock
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 import aiohttp
 import aiosqlite
@@ -46,20 +44,21 @@ SYMBOLS = [
     "DOT/USDT:USDT",
 ]
 
-BINANCE_SYMBOL_MAP = {
-    "ETH/USDT:USDT": "ETH/USDT",
-    "BNB/USDT:USDT": "BNB/USDT",
-    "XRP/USDT:USDT": "XRP/USDT",
-    "ADA/USDT:USDT": "ADA/USDT",
-    "DOT/USDT:USDT": "DOT/USDT",
+# شناسه نماد برای API عمومی Phemex
+PHEMEX_SYMBOL_ID = {
+    "ETH/USDT:USDT": "ETHUSDT",
+    "BNB/USDT:USDT": "BNBUSDT",
+    "XRP/USDT:USDT": "XRPUSDT",
+    "ADA/USDT:USDT": "ADAUSDT",
+    "DOT/USDT:USDT": "DOTUSDT",
 }
 
 SYMBOL_CONFIG = {
-    "ETH/USDT:USDT": {"max_price_diff": 0.9,  "min_vol_mult": 1.1},
-    "BNB/USDT:USDT": {"max_price_diff": 1.1,  "min_vol_mult": 1.1},
-    "XRP/USDT:USDT": {"max_price_diff": 1.6,  "min_vol_mult": 1.15},
-    "ADA/USDT:USDT": {"max_price_diff": 1.6,  "min_vol_mult": 1.15},
-    "DOT/USDT:USDT": {"max_price_diff": 3.5,  "min_vol_mult": 1.2},
+    "ETH/USDT:USDT": {"max_price_diff": 1.2},
+    "BNB/USDT:USDT": {"max_price_diff": 1.4},
+    "XRP/USDT:USDT": {"max_price_diff": 1.8},
+    "ADA/USDT:USDT": {"max_price_diff": 1.8},
+    "DOT/USDT:USDT": {"max_price_diff": 3.5},
 }
 
 STRATEGY_PARAMS = {
@@ -77,7 +76,7 @@ MAX_POS                = 10
 MAX_DD                 = 8.0
 MAX_DAILY_LOSS         = 4.0
 MIN_ORDER_USD          = 16.0
-MAX_EXPOSURE_PCT       = 30.0
+MAX_EXPOSURE_PCT       = 35.0
 TAKER_FEE              = 0.0006
 FEE_BUFFER             = 1.2
 TRAIL_ACT              = 1.8
@@ -88,15 +87,21 @@ TEST_SYMBOL            = "ADA/USDT:USDT"
 TEST_USD               = 12.0
 CONSECUTIVE_LOSS_LIMIT = 2
 SYMBOL_COOLDOWN_HOURS  = 4
-SCAN_INTERVAL          = 50
-SYMBOL_DELAY           = 2.0
+SCAN_INTERVAL          = 40
+SYMBOL_DELAY           = 1.5
+
+# Resolution mapping for Phemex kline
+RESOLUTION_MAP = {
+    "1m": 60, "5m": 300, "15m": 900, "30m": 1800,
+    "1h": 3600, "4h": 14400, "1d": 86400
+}
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(message)s",
-    handlers=[logging.FileHandler("quant_v13.log"), logging.StreamHandler()]
+    handlers=[logging.FileHandler("quant_v14.log"), logging.StreamHandler()]
 )
-log = logging.getLogger("QuantV13.7.1")
+log = logging.getLogger("QuantV14")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True,
@@ -121,7 +126,7 @@ SYMBOL_ERROR_COUNT: Dict[str, int] = {}
 # 2. DATABASE
 # ============================================================================
 class Database:
-    def __init__(self, path="bot_v13.db"):
+    def __init__(self, path="bot_v14.db"):
         self.path = path
 
     async def init(self):
@@ -181,7 +186,7 @@ class Database:
             await db.execute("""
                 INSERT INTO decisions (symbol,action,strategy,reason,price,rsi,atr,htf_trend,extra)
                 VALUES (?,?,?,?,?,?,?,?,?)""",
-                (symbol, action, strategy, reason, price, rsi, atr, htf, str(extra)[:400]))
+                (symbol, action, strategy, reason, price, rsi, atr, htf, str(extra)[:500]))
             await db.commit()
 
     async def log_equity(self, balance, peak, dd):
@@ -202,7 +207,7 @@ class Database:
                 "SELECT * FROM trades WHERE status='closed' ORDER BY closed_at DESC LIMIT ?", (limit,)) as c:
                 return [dict(r) for r in await c.fetchall()]
 
-    async def get_recent_decisions(self, limit=200) -> List[dict]:
+    async def get_recent_decisions(self, limit=250) -> List[dict]:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
@@ -224,69 +229,150 @@ class Database:
                         "total_pnl": round(sum(pnls), 2)
                     }
 
-    async def generate_txt_report(self) -> str:
-        decisions = await self.get_recent_decisions(150)
-        closed = await self.get_closed_trades(20)
+    async def generate_txt_report(self, prices: Dict[str, float] = None) -> str:
+        prices = prices or {}
+        decisions = await self.get_recent_decisions(200)
+        closed = await self.get_closed_trades(30)
         open_trades = await self.get_open_trades()
 
         lines = []
-        lines.append("=" * 60)
-        lines.append("      MASTER QUANT ENGINE v13.7.1 - REPORT")
-        lines.append(f"      Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
-        lines.append("=" * 60)
+        lines.append("=" * 70)
+        lines.append("       MASTER QUANT ENGINE v14.0 – FULL DIAGNOSTIC REPORT")
+        lines.append(f"       Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        lines.append("=" * 70)
         lines.append("")
 
+        # 1. DASHBOARD
         with STATE_LOCK:
             st = dict(SHARED_STATE)
-        lines.append("📊 DASHBOARD")
-        lines.append(f"   Balance      : ${st.get('balance', 0):.2f}")
-        lines.append(f"   Peak Balance : ${st.get('peak_balance', 0):.2f}")
-        lines.append(f"   Current DD   : {st.get('current_dd', 0):.2f}%")
-        lines.append(f"   Daily PnL    : ${st.get('daily_pnl', 0):.2f}")
-        lines.append(f"   Open Positions: {len(st.get('active_positions', {}))}")
-        lines.append(f"   Total Trades : {st.get('stats', {}).get('total_trades', 0)}")
-        lines.append(f"   Win Rate     : {st.get('stats', {}).get('win_rate', 0)}%")
-        lines.append(f"   Total PnL    : ${st.get('stats', {}).get('total_pnl', 0):.2f}")
+        lines.append("┌─ 1. DASHBOARD ─────────────────────────────────────────────────────")
+        lines.append(f"│  Balance        : ${st.get('balance', 0):.2f}")
+        lines.append(f"│  Peak Balance   : ${st.get('peak_balance', 0):.2f}")
+        lines.append(f"│  Current DD     : {st.get('current_dd', 0):.2f}%")
+        lines.append(f"│  Daily PnL      : ${st.get('daily_pnl', 0):.2f}")
+        lines.append(f"│  Open Positions : {len(st.get('active_positions', {}))} / {MAX_POS}")
+        lines.append(f"│  Total Trades   : {st.get('stats', {}).get('total_trades', 0)}")
+        lines.append(f"│  Win Rate       : {st.get('stats', {}).get('win_rate', 0)}%")
+        lines.append(f"│  Total PnL      : ${st.get('stats', {}).get('total_pnl', 0):.2f}")
+        lines.append(f"│  Last Scan      : {st.get('last_scan', 'Never')}")
+        lines.append(f"│  Bot Active     : {st.get('is_active')}")
+        lines.append("└────────────────────────────────────────────────────────────────────")
         lines.append("")
 
-        if open_trades:
-            lines.append("🟢 OPEN POSITIONS")
-            for t in open_trades:
-                lines.append(f"   {t['symbol']} | {t['side'].upper()} | Entry: {t['entry_price']:.5f} | Qty: {t['qty']}")
-            lines.append("")
+        # 2. OPEN POSITIONS
+        lines.append("┌─ 2. OPEN POSITIONS ────────────────────────────────────────────────")
+        if not open_trades and not st.get("active_positions"):
+            lines.append("│  (هیچ پوزیشن بازی وجود ندارد)")
+        else:
+            active = st.get("active_positions", {})
+            for pid, p in active.items():
+                pr = prices.get(p["symbol"], p["entry"])
+                pnl = (pr - p["entry"]) * p["qty"] * (1 if p["side"] == "buy" else -1)
+                lines.append(f"│  {p['symbol']:<18} {p['side'].upper():<5} Entry:{p['entry']:.5f}  "
+                             f"Qty:{p['qty']:.4f}  PnL:${pnl:+.3f}  Strat:{p.get('strategy','')}")
+                lines.append(f"│     SL:{p['sl']:.5f}  TP:{p['tp']:.5f}  Partial:{p.get('is_partial',0)}")
+        lines.append("└────────────────────────────────────────────────────────────────────")
+        lines.append("")
 
-        if closed:
-            lines.append("📈 CLOSED TRADES (Last 20)")
+        # 3. CLOSED TRADES
+        lines.append("┌─ 3. CLOSED TRADES (Last 30) ───────────────────────────────────────")
+        if not closed:
+            lines.append("│  (هنوز معامله بسته‌شده‌ای ثبت نشده)")
+        else:
             for t in closed:
-                emoji = "✅" if t["pnl"] > 0 else "❌"
-                lines.append(f"   {emoji} {t['symbol']} | {t['side']} | PnL: ${t['pnl']:.3f} | {t.get('exit_reason', '')}")
-            lines.append("")
+                emoji = "WIN " if t["pnl"] > 0 else "LOSS"
+                hold_m = (t.get("hold_seconds") or 0) / 60
+                lines.append(f"│  [{emoji}] {t['symbol']:<16} {t['side']:<4} PnL:${t['pnl']:+.3f}  "
+                             f"Hold:{hold_m:.1f}m  Reason:{t.get('exit_reason','')}")
+                lines.append(f"│         Entry:{t['entry_price']:.5f}  Strat:{t.get('strategy','')}")
+        lines.append("└────────────────────────────────────────────────────────────────────")
+        lines.append("")
 
+        # 4. DECISION BREAKDOWN
+        lines.append("┌─ 4. DECISION BREAKDOWN ────────────────────────────────────────────")
         if decisions:
             reasons = Counter()
+            by_symbol = defaultdict(lambda: {"sig": 0, "rej": 0})
             signals = 0
             for d in decisions:
                 if d["action"] == "neutral":
-                    reasons[(d["reason"] or "Unknown")[:55]] += 1
+                    reasons[(d["reason"] or "Unknown")[:60]] += 1
+                    by_symbol[d["symbol"]]["rej"] += 1
                 else:
                     signals += 1
-            lines.append(f"🤖 DECISIONS SUMMARY (Last {len(decisions)})")
-            lines.append(f"   Signals : {signals}")
-            lines.append(f"   Rejected: {len(decisions) - signals}")
-            lines.append("")
-            lines.append("🚫 TOP REJECTION REASONS")
-            for reason, count in reasons.most_common(8):
-                lines.append(f"   {count:3d} × {reason}")
-            lines.append("")
-            lines.append("📋 LAST 12 DECISIONS")
-            for d in decisions[:12]:
-                icon = "✅" if d["action"] != "neutral" else "⛔"
-                lines.append(f"   {icon} {d['symbol']:<18} | {d['reason'][:50]}")
-            lines.append("")
+                    by_symbol[d["symbol"]]["sig"] += 1
+            lines.append(f"│  Total Decisions : {len(decisions)}")
+            lines.append(f"│  Signals         : {signals}")
+            lines.append(f"│  Rejected        : {len(decisions) - signals}")
+            lines.append("│")
+            lines.append("│  Top Rejection Reasons:")
+            for reason, count in reasons.most_common(10):
+                lines.append(f"│    {count:3d} × {reason}")
+            lines.append("│")
+            lines.append("│  Per Symbol:")
+            for sym, v in sorted(by_symbol.items()):
+                lines.append(f"│    {sym:<18} Signal:{v['sig']:3d}  Reject:{v['rej']:3d}")
+        else:
+            lines.append("│  (هنوز تصمیمی ثبت نشده)")
+        lines.append("└────────────────────────────────────────────────────────────────────")
+        lines.append("")
 
-        lines.append("=" * 60)
-        lines.append("End of Report")
-        lines.append("=" * 60)
+        # 5. LAST DECISIONS (detailed)
+        lines.append("┌─ 5. LAST 15 DECISIONS (Detailed) ──────────────────────────────────")
+        for d in (decisions or [])[:15]:
+            icon = "SIG" if d["action"] != "neutral" else "REJ"
+            lines.append(f"│  [{icon}] {d.get('ts','')[:19]}  {d['symbol']}")
+            lines.append(f"│       Action:{d['action']:<8} Strat:{d.get('strategy') or '-':<20} RSI:{d.get('rsi') or 0:.1f}")
+            lines.append(f"│       Reason: {d.get('reason','')[:65]}")
+            if d.get("extra"):
+                lines.append(f"│       Extra : {str(d['extra'])[:65]}")
+        lines.append("└────────────────────────────────────────────────────────────────────")
+        lines.append("")
+
+        # 6. ERROR & COOLDOWN
+        lines.append("┌─ 6. ERROR & COOLDOWN STATUS ───────────────────────────────────────")
+        if SYMBOL_ERROR_COOLDOWN:
+            now = time.time()
+            for sym, until in SYMBOL_ERROR_COOLDOWN.items():
+                remain = max(0, int(until - now))
+                cnt = SYMBOL_ERROR_COUNT.get(sym, 0)
+                lines.append(f"│  {sym:<18} errors:{cnt}  cooldown remaining: {remain}s")
+        else:
+            lines.append("│  (هیچ نمادی در cooldown نیست)")
+        with STATE_LOCK:
+            cl = SHARED_STATE.get("consecutive_losses", {})
+        if cl:
+            lines.append("│  Consecutive Losses:")
+            for sym, info in cl.items():
+                lines.append(f"│    {sym}: {info.get('count',0)} losses")
+        lines.append("└────────────────────────────────────────────────────────────────────")
+        lines.append("")
+
+        # 7. RECOMMENDATIONS
+        lines.append("┌─ 7. AUTO RECOMMENDATIONS ──────────────────────────────────────────")
+        recs = []
+        if decisions:
+            top_reason = reasons.most_common(1)[0][0] if reasons else ""
+            if "کندل" in top_reason or "OHLCV" in top_reason or "داده" in top_reason:
+                recs.append("مشکل دریافت کندل زیاد است → فاصله اسکن را افزایش دهید یا نماد مشکل‌دار را موقتاً حذف کنید.")
+            if "اختلاف قیمت" in top_reason:
+                recs.append("اختلاف قیمت زیاد → آستانه max_price_diff را برای آن نماد بالاتر ببرید.")
+            if "روند HTF" in top_reason:
+                recs.append("فیلتر روند سخت‌گیر است → در بازار رنج، سیگنال کم می‌شود (طبیعی).")
+            if "20004" in str(decisions) or "INCONSISTENT" in str(decisions):
+                recs.append("خطای Position Mode روی بعضی نمادها → آن نماد را موقتاً از لیست خارج کنید.")
+        wr = st.get("stats", {}).get("win_rate", 0)
+        if st.get("stats", {}).get("total_trades", 0) >= 10 and wr < 30:
+            recs.append(f"Win Rate پایین ({wr}%) → پارامترهای SL/TP یا فیلتر ورود را بازبینی کنید.")
+        if not recs:
+            recs.append("وضعیت کلی پایدار به نظر می‌رسد. به جمع‌آوری داده بیشتر ادامه دهید.")
+        for r in recs:
+            lines.append(f"│  • {r}")
+        lines.append("└────────────────────────────────────────────────────────────────────")
+        lines.append("")
+        lines.append("=" * 70)
+        lines.append("End of Diagnostic Report – v14.0")
+        lines.append("=" * 70)
         return "\n".join(lines)
 
 # ============================================================================
@@ -340,22 +426,24 @@ class Indicators:
     def lowest(s, p): return s.rolling(p).min()
 
 # ============================================================================
-# 4. STRATEGY
+# 4. STRATEGY (Relaxed for more trades)
 # ============================================================================
 class StrategyEngine:
     def analyze(self, df_5m: pd.DataFrame, df_1h: pd.DataFrame) -> dict:
         df = df_5m.iloc[:-1].copy()
         htf = df_1h.iloc[:-1].copy()
-        if len(df) < 60 or len(htf) < 40:
+        if len(df) < 55 or len(htf) < 35:
             return {"action": "neutral", "reason": "داده ناکافی", "strat": "", "rsi": 0, "atr": 0, "htf": ""}
 
         hclose = htf["close"]
         e50 = hclose.ewm(span=50, adjust=False).mean().iloc[-1]
         e200 = hclose.ewm(span=min(200, len(htf)), adjust=False).mean().iloc[-1]
         hp = float(hclose.iloc[-1])
-        if hp > e50 and e50 > e200 * 0.998:
+
+        # فیلتر روند کمی شل‌تر
+        if hp > e50 * 0.997 and e50 >= e200 * 0.995:
             htf_trend = "bullish"
-        elif hp < e50 and e50 < e200 * 1.002:
+        elif hp < e50 * 1.003 and e50 <= e200 * 1.005:
             htf_trend = "bearish"
         else:
             return {"action": "neutral", "reason": "روند HTF نامشخص", "strat": "", "rsi": 0, "atr": 0, "htf": "sideways"}
@@ -371,9 +459,7 @@ class StrategyEngine:
             return {"action": "neutral", "reason": "ATR صفر", "strat": "", "rsi": 0, "atr": 0, "htf": htf_trend}
 
         atr_sma = float(Indicators.sma(atr_s, 20).iloc[-1])
-        low_m = 0.45 if RELAXED_MODE else 0.55
-        high_m = 3.2 if RELAXED_MODE else 2.8
-        if atr < atr_sma * low_m or atr > atr_sma * high_m:
+        if atr < atr_sma * 0.40 or atr > atr_sma * 3.5:
             return {"action": "neutral", "reason": "نوسان نامناسب", "strat": "", "rsi": 0, "atr": atr, "htf": htf_trend}
 
         rsi_s = Indicators.rsi(c)
@@ -382,29 +468,35 @@ class StrategyEngine:
         ema20 = float(c.ewm(span=20, adjust=False).mean().iloc[-1])
         ema50 = float(c.ewm(span=50, adjust=False).mean().iloc[-1])
         st_d, st_u, st_l = Indicators.supertrend(df)
-        vsma = float(Indicators.sma(vol, 20).iloc[-1])
+        vsma = float(Indicators.sma(vol, 20).iloc[-1]) or 1e-9
         vcur = float(vol.iloc[-1])
         h10 = float(Indicators.highest(high, 10).iloc[-1])
         l10 = float(Indicators.lowest(low, 10).iloc[-1])
 
-        if htf_trend == "bullish" and price > ema20 and price >= h10 * 0.999 and 48 < rsi < 75 and vcur > vsma * 1.15:
+        vol_ok = vcur > vsma * 1.08   # کمی شل‌تر از 1.15
+
+        # Breakout
+        if htf_trend == "bullish" and price > ema20 and price >= h10 * 0.998 and 46 < rsi < 78 and vol_ok:
             return self._build("buy", "Breakout_Momentum", price, atr, rsi, htf_trend)
-        if htf_trend == "bearish" and price < ema20 and price <= l10 * 1.001 and 25 < rsi < 52 and vcur > vsma * 1.15:
+        if htf_trend == "bearish" and price < ema20 and price <= l10 * 1.002 and 22 < rsi < 54 and vol_ok:
             return self._build("sell", "Breakout_Momentum", price, atr, rsi, htf_trend)
 
-        if htf_trend == "bullish" and price > ema20 > ema50 * 0.999 and rsi_p <= 42 and rsi > rsi_p and rsi < 62:
+        # MTF Pullback
+        if htf_trend == "bullish" and price > ema20 * 0.998 and ema20 >= ema50 * 0.997 and rsi_p <= 45 and rsi > rsi_p and rsi < 65:
             return self._build("buy", "MTF_Pullback", price, atr, rsi, htf_trend)
-        if htf_trend == "bearish" and price < ema20 < ema50 * 1.001 and rsi_p >= 58 and rsi < rsi_p and rsi > 38:
+        if htf_trend == "bearish" and price < ema20 * 1.002 and ema20 <= ema50 * 1.003 and rsi_p >= 55 and rsi < rsi_p and rsi > 35:
             return self._build("sell", "MTF_Pullback", price, atr, rsi, htf_trend)
 
-        if htf_trend == "bullish" and st_d.iloc[-1] == 1 and low.iloc[-1] <= st_l.iloc[-1] * 1.005 and c.iloc[-1] > c.iloc[-2] and 38 < rsi < 65:
+        # SuperTrend
+        if htf_trend == "bullish" and st_d.iloc[-1] == 1 and low.iloc[-1] <= st_l.iloc[-1] * 1.008 and c.iloc[-1] > c.iloc[-2] and 36 < rsi < 68:
             return self._build("buy", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
-        if htf_trend == "bearish" and st_d.iloc[-1] == -1 and high.iloc[-1] >= st_u.iloc[-1] * 0.995 and c.iloc[-1] < c.iloc[-2] and 35 < rsi < 62:
+        if htf_trend == "bearish" and st_d.iloc[-1] == -1 and high.iloc[-1] >= st_u.iloc[-1] * 0.992 and c.iloc[-1] < c.iloc[-2] and 32 < rsi < 64:
             return self._build("sell", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
 
-        if htf_trend == "bullish" and price > ema20 and vcur > vsma * 1.5 and c.iloc[-1] > c.iloc[-2] and 48 < rsi < 70:
+        # Volume Surge
+        if htf_trend == "bullish" and price > ema20 and vcur > vsma * 1.35 and c.iloc[-1] > c.iloc[-2] and 45 < rsi < 72:
             return self._build("buy", "Volume_Surge", price, atr, rsi, htf_trend)
-        if htf_trend == "bearish" and price < ema20 and vcur > vsma * 1.5 and c.iloc[-1] < c.iloc[-2] and 30 < rsi < 52:
+        if htf_trend == "bearish" and price < ema20 and vcur > vsma * 1.35 and c.iloc[-1] < c.iloc[-2] and 28 < rsi < 55:
             return self._build("sell", "Volume_Surge", price, atr, rsi, htf_trend)
 
         return {"action": "neutral", "reason": f"بدون سیگنال (RSI={rsi:.1f})", "strat": "", "rsi": rsi, "atr": atr, "htf": htf_trend}
@@ -412,24 +504,17 @@ class StrategyEngine:
     def _build(self, side, strat, price, atr, rsi, htf):
         params = STRATEGY_PARAMS.get(strat, {"sl_m": 1.3, "tp_m": 2.6, "tp1_m": 1.3})
         sl_m, tp_m, tp1_m = params["sl_m"], params["tp_m"], params["tp1_m"]
-
         if side == "buy":
             return {
                 "action": side, "strat": strat,
-                "sl": price - atr * sl_m,
-                "tp": price + atr * tp_m,
-                "tp1": price + atr * tp1_m,
-                "reason": f"سیگنال {strat}",
-                "rsi": rsi, "atr": atr, "htf": htf,
+                "sl": price - atr * sl_m, "tp": price + atr * tp_m, "tp1": price + atr * tp1_m,
+                "reason": f"سیگنال {strat}", "rsi": rsi, "atr": atr, "htf": htf,
                 "expected_rr": round(tp_m / sl_m, 2)
             }
         return {
             "action": side, "strat": strat,
-            "sl": price + atr * sl_m,
-            "tp": price - atr * tp_m,
-            "tp1": price - atr * tp1_m,
-            "reason": f"سیگنال {strat}",
-            "rsi": rsi, "atr": atr, "htf": htf,
+            "sl": price + atr * sl_m, "tp": price - atr * tp_m, "tp1": price - atr * tp1_m,
+            "reason": f"سیگنال {strat}", "rsi": rsi, "atr": atr, "htf": htf,
             "expected_rr": round(tp_m / sl_m, 2)
         }
 
@@ -458,14 +543,14 @@ class RiskManager:
         return max(qty, 0.0)
 
 # ============================================================================
-# 6. TELEGRAM + ANALYTICS
+# 6. TELEGRAM
 # ============================================================================
 class Analytics:
     def __init__(self, db: Database):
         self.db = db
 
-    async def full_report(self) -> str:
-        return await self.db.generate_txt_report()
+    async def full_report(self, prices=None) -> str:
+        return await self.db.generate_txt_report(prices)
 
 
 class TelegramController:
@@ -512,7 +597,7 @@ class TelegramController:
 
     async def poll(self):
         if not TG_TOKEN: return
-        await self.send("🚀 <b>Master Quant v13.7.1 Online</b>\nPosition Recovery + Cooldown + Better RR", self.menu())
+        await self.send("🚀 <b>Master Quant v14.0 Online</b>\nPhemex-Only Data + Diagnostic Report", self.menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -538,9 +623,10 @@ class TelegramController:
                             elif d == "cmd_dash":
                                 with STATE_LOCK: st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>Dashboard</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
-                                    f"DD: {st['current_dd']:.1f}% | Pos: {len(st['active_positions'])}\n"
-                                    f"PnL: ${st['stats']['total_pnl']:.2f} | Last: {st['last_scan']}", self.menu())
+                                    f"📊 <b>Dashboard v14</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
+                                    f"DD: {st['current_dd']:.1f}% | Pos: {len(st['active_positions'])}/{MAX_POS}\n"
+                                    f"PnL: ${st['stats']['total_pnl']:.2f} | WR: {st['stats']['win_rate']}%\n"
+                                    f"Last: {st['last_scan']}", self.menu())
                             elif d == "cmd_pos":
                                 with STATE_LOCK: pos = dict(SHARED_STATE["active_positions"])
                                 if not pos:
@@ -554,13 +640,10 @@ class TelegramController:
                                 await self.engine.smart_sync()
                                 await self.send("🔄 Sync + Recovery انجام شد", self.menu())
                             elif d == "cmd_report":
-                                report = await self.engine.analytics.full_report()
-                                if len(report) < 3800:
-                                    await self.send(f"<pre>{report}</pre>", self.menu())
-                                else:
-                                    with open("report.txt", "w", encoding="utf-8") as f:
-                                        f.write(report)
-                                    await self.send_document("report.txt", "گزارش کامل")
+                                report = await self.engine.analytics.full_report(self.engine.prices)
+                                with open("quant_report.txt", "w", encoding="utf-8") as f:
+                                    f.write(report)
+                                await self.send_document("quant_report.txt", "📄 گزارش تشخیصی کامل v14")
                             elif d == "cmd_rej":
                                 decs = await self.engine.db.get_recent_decisions(12)
                                 msg = "🚫 <b>آخرین تصمیم‌ها:</b>\n\n"
@@ -571,16 +654,16 @@ class TelegramController:
                             elif d == "cmd_realtest":
                                 asyncio.create_task(self.engine.real_test_trade())
                             elif d == "cmd_txt":
-                                report = await self.engine.db.generate_txt_report()
+                                report = await self.engine.db.generate_txt_report(self.engine.prices)
                                 with open("quant_report.txt", "w", encoding="utf-8") as f:
                                     f.write(report)
-                                await self.send_document("quant_report.txt", "📄 گزارش کامل TXT v13.7.1")
+                                await self.send_document("quant_report.txt", "📄 گزارش کامل تشخیصی TXT v14")
             except Exception as e:
                 log.error(f"TG poll: {e}")
             await asyncio.sleep(1)
 
 # ============================================================================
-# 7. ENGINE
+# 7. ENGINE (Phemex-Only OHLCV)
 # ============================================================================
 class QuantEngine:
     def __init__(self):
@@ -596,46 +679,104 @@ class QuantEngine:
         })
         self.ex.set_sandbox_mode(TESTNET)
 
-        self.ex_data = ccxt.binance({
-            "enableRateLimit": True,
-            "options": {"defaultType": "spot"}
-        })
-
+        self.base_url = "https://testnet-api.phemex.com" if TESTNET else "https://api.phemex.com"
         self.prices: Dict[str, float] = {}
         self.open_times: Dict[str, float] = {}
+        self._session: Optional[aiohttp.ClientSession] = None
+
+    async def get_session(self):
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> list:
-        b_symbol = BINANCE_SYMBOL_MAP.get(symbol)
-        if not b_symbol:
+        """دریافت کندل مستقیم از Phemex (بدون بایننس)"""
+        sym_id = PHEMEX_SYMBOL_ID.get(symbol)
+        if not sym_id:
             return []
+
+        resolution = RESOLUTION_MAP.get(timeframe)
+        if not resolution:
+            return []
+
+        # چند endpoint محتمل
+        endpoints = [
+            f"{self.base_url}/exchange/public/md/v2/kline",
+            f"{self.base_url}/md/v2/kline",
+        ]
+
+        params_list = [
+            {"symbol": sym_id, "resolution": resolution, "limit": limit},
+            {"symbol": sym_id, "resolution": resolution, "limit": limit, "to": int(time.time())},
+        ]
+
+        session = await self.get_session()
+
+        for url in endpoints:
+            for params in params_list:
+                try:
+                    async with session.get(url, params=params, timeout=12) as resp:
+                        if resp.status != 200:
+                            continue
+                        data = await resp.json()
+
+                        # ساختارهای مختلف پاسخ
+                        rows = None
+                        if isinstance(data, dict):
+                            if data.get("code") not in (None, 0, "0"):
+                                continue
+                            rows = (data.get("data") or {}).get("rows") or data.get("rows") or data.get("data")
+                        if not rows or not isinstance(rows, list) or len(rows) < 30:
+                            continue
+
+                        candles = []
+                        for row in rows:
+                            try:
+                                # فرمت‌های رایج: [ts, interval, lastClose, open, high, low, close, volume, ...]
+                                # یا [ts, open, high, low, close, volume]
+                                if len(row) >= 8:
+                                    ts = int(row[0])
+                                    o, h, l, c = float(row[3]), float(row[4]), float(row[5]), float(row[6])
+                                    v = float(row[7]) if len(row) > 7 else 0.0
+                                elif len(row) >= 6:
+                                    ts = int(row[0])
+                                    o, h, l, c = float(row[1]), float(row[2]), float(row[3]), float(row[4])
+                                    v = float(row[5])
+                                else:
+                                    continue
+                                # اگر timestamp ثانیه‌ای بود به میلی‌ثانیه تبدیل نشود (ccxt معمولا ms می‌خواهد)
+                                if ts < 1e12:
+                                    ts = ts * 1000
+                                candles.append([ts, o, h, l, c, v])
+                            except Exception:
+                                continue
+
+                        if len(candles) >= 40:
+                            candles.sort(key=lambda x: x[0])
+                            return candles[-limit:]
+                except Exception as e:
+                    log.debug(f"OHLCV try failed {symbol} {url}: {e}")
+                    continue
+
+        # Fallback: تلاش با ccxt (گاهی کار می‌کند)
         try:
-            candles = await self.ex_data.fetch_ohlcv(b_symbol, timeframe=timeframe, limit=limit)
+            candles = await self.ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
             if candles and len(candles) >= 40:
                 return candles
-            return []
         except Exception as e:
-            err = str(e)
-            if "418" in err or "banned" in err.lower() or "-1003" in err:
-                log.error("Binance temporarily banned - sleeping 180s")
-                await asyncio.sleep(180)
-            await self.db.log_decision(symbol, "neutral", "", "خطا در دریافت کندل Binance", extra=err[:150])
-            return []
+            await self.db.log_decision(symbol, "neutral", "", "خطا در دریافت کندل Phemex", extra=str(e)[:150])
+
+        return []
 
     async def start(self):
         await self.db.init()
-        log.info("در حال بارگذاری پوزیشن‌های قبلی از دیتابیس و صرافی...")
+        log.info("v14 starting – Phemex-only data mode")
 
         try:
             await self.ex.load_markets()
             log.info("Phemex markets loaded")
         except Exception as e:
-            log.error(f"Phemex load_markets: {e}")
-
-        try:
-            await self.ex_data.load_markets()
-            log.info("Binance markets loaded")
-        except Exception as e:
-            log.warning(f"Binance load_markets (ممکن است banned باشد): {e}")
+            log.error(f"load_markets: {e}")
 
         try:
             await self.ex.set_position_mode(False)
@@ -650,7 +791,6 @@ class QuantEngine:
             except Exception as e:
                 log.warning(f"Leverage {sym}: {e}")
 
-        # بارگذاری پوزیشن‌های موجود در دیتابیس
         for t in await self.db.get_open_trades():
             with STATE_LOCK:
                 SHARED_STATE["active_positions"][t["id"]] = {
@@ -715,7 +855,7 @@ class QuantEngine:
                 can = (SHARED_STATE["is_active"] and not SHARED_STATE["dd_halted"]
                        and not SHARED_STATE["daily_halted"] and len(SHARED_STATE["active_positions"]) < MAX_POS)
             if not can:
-                await asyncio.sleep(15)
+                await asyncio.sleep(12)
                 continue
 
             with STATE_LOCK:
@@ -724,44 +864,25 @@ class QuantEngine:
             for sym in SYMBOLS:
                 if sym in SYMBOL_ERROR_COOLDOWN and time.time() < SYMBOL_ERROR_COOLDOWN[sym]:
                     continue
-
                 with STATE_LOCK:
                     if any(p["symbol"] == sym for p in SHARED_STATE["active_positions"].values()):
                         continue
-
                 try:
-                    raw5 = await self.fetch_ohlcv(sym, TIMEFRAME, 100)
+                    raw5 = await self.fetch_ohlcv(sym, TIMEFRAME, 120)
                     await asyncio.sleep(SYMBOL_DELAY)
-                    raw1 = await self.fetch_ohlcv(sym, HTF_TIMEFRAME, 60)
-                    await asyncio.sleep(0.9)
+                    raw1 = await self.fetch_ohlcv(sym, HTF_TIMEFRAME, 80)
+                    await asyncio.sleep(0.6)
 
                     if not raw5 or len(raw5) < 50:
+                        await self.db.log_decision(sym, "neutral", "", "OHLCV خالی یا ناکافی")
                         continue
 
                     df5 = pd.DataFrame(raw5, columns=["ts", "open", "high", "low", "close", "volume"])
-                    df1 = pd.DataFrame(raw1, columns=["ts", "open", "high", "low", "close", "volume"]) if raw1 and len(raw1) > 20 else df5
+                    df1 = pd.DataFrame(raw1, columns=["ts", "open", "high", "low", "close", "volume"]) if raw1 and len(raw1) > 25 else df5
                     sig = self.strategy.analyze(df5, df1)
 
-                    phemex_price = self.prices.get(sym)
-                    binance_price = float(df5["close"].iloc[-1]) if len(df5) > 0 else 0
-
-                    if not phemex_price or phemex_price <= 0 or binance_price <= 0:
-                        continue
-
-                    ratio = phemex_price / binance_price
-                    if ratio > 2.0 or ratio < 0.5:
-                        await self.db.log_decision(sym, "neutral", "", f"قیمت غیرمنطقی (نسبت {ratio:.2f})", price=phemex_price)
-                        continue
-
-                    sym_cfg = SYMBOL_CONFIG.get(sym, {"max_price_diff": 1.2})
-                    max_diff = sym_cfg["max_price_diff"]
-                    avg_price = (phemex_price + binance_price) / 2
-                    diff_pct = abs(phemex_price - binance_price) / avg_price * 100
-
-                    if diff_pct > max_diff:
-                        await self.db.log_decision(sym, "neutral", "", f"اختلاف قیمت ({diff_pct:.2f}% > {max_diff}%)",
-                                                   price=phemex_price,
-                                                   extra=f"Phemex={phemex_price:.5f} | Binance={binance_price:.5f}")
+                    phemex_price = self.prices.get(sym) or float(df5["close"].iloc[-1])
+                    if phemex_price <= 0:
                         continue
 
                     await self.db.log_decision(sym, sig["action"], sig.get("strat", ""), sig.get("reason", ""),
@@ -789,16 +910,12 @@ class QuantEngine:
 
     async def execute_trade(self, sym: str, sig: dict):
         if sym in SYMBOL_ERROR_COOLDOWN and time.time() < SYMBOL_ERROR_COOLDOWN[sym]:
-            remaining = int(SYMBOL_ERROR_COOLDOWN[sym] - time.time())
-            log.warning(f"⏳ {sym} در cooldown ({remaining}s)")
             return
-
         price = self.prices.get(sym)
         with STATE_LOCK:
             bal = SHARED_STATE["balance"]
         if not price or bal < 20:
             return
-
         try:
             bal_data = await self.ex.fetch_balance()
             free = float(bal_data.get("USDT", {}).get("free", 0) or 0)
@@ -806,7 +923,6 @@ class QuantEngine:
             if qty <= 0:
                 await self.db.log_decision(sym, "rejected", sig.get("strat", ""), "حجم صفر")
                 return
-
             order = await self.ex.create_market_order(sym, sig["action"], qty)
             fill = float(order.get("average") or price)
             pid = f"pos_{uuid.uuid4().hex[:8]}"
@@ -819,31 +935,22 @@ class QuantEngine:
                 SHARED_STATE["active_positions"][pid] = pos
             self.open_times[pid] = time.time()
             await self.db.insert_trade(pos)
-
             SYMBOL_ERROR_COUNT.pop(sym, None)
             SYMBOL_ERROR_COOLDOWN.pop(sym, None)
-
             await self.tg.send(f"🎯 <b>ورود {sig['action'].upper()}</b> ({sig['strat']})\n{sym} @ {fill:.4f}\nRR≈{sig.get('expected_rr', '?')}")
-
         except Exception as e:
             err = str(e)
             SYMBOL_ERROR_COUNT[sym] = SYMBOL_ERROR_COUNT.get(sym, 0) + 1
             count = SYMBOL_ERROR_COUNT[sym]
             cooldown = min(300 * (2 ** (count - 1)), 3600)
             SYMBOL_ERROR_COOLDOWN[sym] = time.time() + cooldown
-
-            log.error(f"❌ {sym} خطا #{count} → cooldown {cooldown}s | {err[:100]}")
+            log.error(f"❌ {sym} خطا #{count} → cooldown {cooldown}s")
             await self.db.log_decision(sym, "rejected", sig.get("strat", ""), err[:120])
-
             if "20004" in err or "INCONSISTENT" in err.upper():
-                await self._fix_position_mode(sym)
-
-    async def _fix_position_mode(self, sym: str):
-        try:
-            await self.ex.set_position_mode(False)
-            log.info(f"✅ Position mode retried for {sym}")
-        except Exception as e:
-            log.warning(f"Fix position mode failed: {e}")
+                try:
+                    await self.ex.set_position_mode(False)
+                except Exception:
+                    pass
 
     async def real_test_trade(self):
         await self.tg.send("⚡ شروع تست واقعی ۳۰ ثانیه‌ای...")
@@ -868,109 +975,65 @@ class QuantEngine:
             with STATE_LOCK:
                 SHARED_STATE["active_positions"][pid] = pos
             self.open_times[pid] = time.time()
-            await self.tg.send(f"🧪 تست باز شد @ {fill:.5f}\n۳۰ ثانیه صبر...")
+            await self.tg.send(f"🧪 تست باز شد @ {fill:.5f}")
             await asyncio.sleep(30)
             await self.force_close(pid, "RealTest completed")
-            await self.tg.send("✅ تست واقعی با موفقیت بسته شد")
+            await self.tg.send("✅ تست واقعی بسته شد")
         except Exception as e:
             await self.tg.send(f"❌ خطا: {e}")
 
     async def smart_sync(self):
-        """همگام‌سازی قوی + بازیابی پوزیشن‌های ریموت"""
         try:
             remote_positions = await self.ex.fetch_positions()
             remote_map = {}
-
             for p in remote_positions:
                 contracts = float(p.get("contracts") or 0)
                 if abs(contracts) <= 0:
                     continue
-
-                raw_symbol = p.get("symbol", "")
-                matched = None
-                for s in SYMBOLS:
-                    base = s.split("/")[0]
-                    if base in raw_symbol:
-                        matched = s
-                        break
-
+                raw = p.get("symbol", "")
+                matched = next((s for s in SYMBOLS if s.split("/")[0] in raw), None)
                 if matched:
                     side = "buy" if contracts > 0 else "sell"
                     entry = float(p.get("entryPrice") or p.get("avgEntryPrice") or 0)
-                    remote_map[matched] = {
-                        "symbol": matched,
-                        "side": side,
-                        "qty": abs(contracts),
-                        "entry": entry,
-                    }
+                    remote_map[matched] = {"symbol": matched, "side": side, "qty": abs(contracts), "entry": entry}
 
-            # پوزیشن‌های محلی که روی صرافی نیستند
             with STATE_LOCK:
                 local_items = list(SHARED_STATE["active_positions"].items())
-
             for pid, pos in local_items:
                 if pos["strategy"] == "RealTest":
                     continue
                 if pos["symbol"] not in remote_map:
-                    log.warning(f"پوزیشن محلی روی صرافی نیست → بستن منطقی: {pos['symbol']}")
                     await self.db.close_trade(pid, 0.0, reason="not found on exchange")
                     with STATE_LOCK:
                         SHARED_STATE["active_positions"].pop(pid, None)
                     self.open_times.pop(pid, None)
 
-            # پوزیشن‌های ریموت که در ربات نیستند → بازیابی
             with STATE_LOCK:
-                known_symbols = {p["symbol"] for p in SHARED_STATE["active_positions"].values()}
-
+                known = {p["symbol"] for p in SHARED_STATE["active_positions"].values()}
             for sym, rpos in remote_map.items():
-                if sym in known_symbols:
+                if sym in known:
                     continue
-
-                log.warning(f"🔄 بازیابی پوزیشن ریموت: {sym} | {rpos['side']} | qty={rpos['qty']}")
+                log.warning(f"🔄 Recovered remote position: {sym}")
                 pid = f"recovered_{uuid.uuid4().hex[:8]}"
                 entry = rpos["entry"] if rpos["entry"] > 0 else self.prices.get(sym, 0)
                 if entry <= 0:
                     continue
-
-                atr_approx = entry * 0.015
+                atr_a = entry * 0.015
                 if rpos["side"] == "buy":
-                    sl = entry - atr_approx * 1.3
-                    tp = entry + atr_approx * 2.6
-                    tp1 = entry + atr_approx * 1.3
+                    sl, tp, tp1 = entry - atr_a * 1.3, entry + atr_a * 2.6, entry + atr_a * 1.3
                 else:
-                    sl = entry + atr_approx * 1.3
-                    tp = entry - atr_approx * 2.6
-                    tp1 = entry - atr_approx * 1.3
-
-                pos = {
-                    "id": pid,
-                    "symbol": sym,
-                    "side": rpos["side"],
-                    "strategy": "Recovered",
-                    "entry": entry,
-                    "qty": rpos["qty"],
-                    "sl": sl,
-                    "tp": tp,
-                    "tp1": tp1,
-                    "is_partial": 0,
-                    "highest_pnl_pct": 0.0
-                }
-
+                    sl, tp, tp1 = entry + atr_a * 1.3, entry - atr_a * 2.6, entry - atr_a * 1.3
+                pos = {"id": pid, "symbol": sym, "side": rpos["side"], "strategy": "Recovered",
+                       "entry": entry, "qty": rpos["qty"], "sl": sl, "tp": tp, "tp1": tp1,
+                       "is_partial": 0, "highest_pnl_pct": 0.0}
                 with STATE_LOCK:
                     SHARED_STATE["active_positions"][pid] = pos
                 self.open_times[pid] = time.time()
                 await self.db.insert_trade(pos)
-
-                await self.tg.send(
-                    f"🔄 <b>پوزیشن بازیابی شد</b>\n"
-                    f"{sym} | {rpos['side'].upper()}\n"
-                    f"Entry: {entry:.5f} | Qty: {rpos['qty']}"
-                )
-
-            log.info(f"Sync کامل. پوزیشن‌های فعال: {len(SHARED_STATE['active_positions'])}")
-
+                await self.tg.send(f"🔄 پوزیشن بازیابی شد\n{sym} | {rpos['side'].upper()} | Entry:{entry:.5f}")
+            log.info(f"Sync done. Active: {len(SHARED_STATE['active_positions'])}")
         except Exception as e:
-            log.error(f"smart_sync error: {e}")
+            log.error(f"smart_sync: {e}")
 
     async def force_close(self, pid: str, reason: str):
         with STATE_LOCK:
@@ -985,16 +1048,13 @@ class QuantEngine:
             raw_pnl = (price - pos["entry"]) * pos["qty"] * (1 if pos["side"] == "buy" else -1)
             fees = abs(raw_pnl) * TAKER_FEE * 2 * FEE_BUFFER
             net = raw_pnl - fees
-
             if pos["strategy"] != "RealTest":
                 await self.db.close_trade(pid, net, fees, reason, hold)
-
             with STATE_LOCK:
                 SHARED_STATE["active_positions"].pop(pid, None)
             self.open_times.pop(pid, None)
             await self.db.update_analytics()
 
-            # مدیریت ضرر متوالی
             sym = pos["symbol"]
             if net < 0:
                 with STATE_LOCK:
@@ -1003,18 +1063,13 @@ class QuantEngine:
                         cl[sym] = {"count": 0, "last_loss": 0}
                     cl[sym]["count"] += 1
                     cl[sym]["last_loss"] = time.time()
-                    count = cl[sym]["count"]
-                    if count >= CONSECUTIVE_LOSS_LIMIT:
-                        cooldown_end = time.time() + SYMBOL_COOLDOWN_HOURS * 3600
-                        SYMBOL_ERROR_COOLDOWN[sym] = cooldown_end
-                        log.warning(f"🛑 {sym}: {count} ضرر متوالی → cooldown {SYMBOL_COOLDOWN_HOURS}h")
-                        await self.tg.send(f"⚠️ <b>{sym}</b>\n{count} ضرر متوالی → cooldown {SYMBOL_COOLDOWN_HOURS} ساعته")
+                    if cl[sym]["count"] >= CONSECUTIVE_LOSS_LIMIT:
+                        SYMBOL_ERROR_COOLDOWN[sym] = time.time() + SYMBOL_COOLDOWN_HOURS * 3600
+                        await self.tg.send(f"⚠️ {sym}: {cl[sym]['count']} ضرر متوالی → cooldown {SYMBOL_COOLDOWN_HOURS}h")
             else:
                 with STATE_LOCK:
                     SHARED_STATE["consecutive_losses"].pop(sym, None)
-
             await self.tg.send(f"{'🟢' if net >= 0 else '🔴'} بسته شد ({reason}) | ${net:.2f}")
-
         except Exception as e:
             log.error(f"force_close: {e}")
 
@@ -1047,7 +1102,7 @@ class QuantEngine:
                                 pos["is_partial"] = 1
                                 pos["sl"] = pos["entry"]
                                 await self.db.update_trade(pid, pos["qty"], pos["sl"], 1, pos["highest_pnl_pct"])
-                                await self.tg.send(f"🔹 Partial TP → BE  {pos['symbol']}")
+                                await self.tg.send(f"🔹 Partial TP → BE {pos['symbol']}")
                         except Exception:
                             pass
                 sl_hit = (pos["side"] == "buy" and price <= pos["sl"]) or (pos["side"] == "sell" and price >= pos["sl"])
@@ -1072,9 +1127,8 @@ def dashboard():
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Quant v13.7.1</title>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quant v14</title>
 <style>
 body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
 h1{color:#58a6ff}
@@ -1084,7 +1138,7 @@ h1{color:#58a6ff}
 </style>
 </head>
 <body>
-<h1>🚀 Master Quant v13.7.1</h1>
+<h1>🚀 Master Quant v14.0</h1>
 <div class="grid">
 <div class="card">موجودی<div class="value" id="bal">0.00</div></div>
 <div class="card">پوزیشن<div class="value" id="pos">0</div></div>
