@@ -804,4 +804,155 @@ class QuantEngine:
             with STATE_LOCK:
                 SHARED_STATE["active_positions"][pid] = pos
             self.open_times[pid] = time.time()
-            await self.tg
+            await self.tg.send(f"🧪 تست باز شد @ {fill:.5f}\n۳۰ ثانیه صبر...")
+            await asyncio.sleep(30)
+            await self.force_close(pid, "RealTest completed")
+            await self.tg.send("✅ تست واقعی با موفقیت بسته شد")
+        except Exception as e:
+            await self.tg.send(f"❌ خطا: {e}")
+
+    async def smart_sync(self):
+        try:
+            remote = await self.ex.fetch_positions()
+            active = set()
+            for p in remote:
+                if abs(float(p.get("contracts") or 0)) > 0:
+                    raw = p.get("symbol", "")
+                    matched = next((s for s in SYMBOLS if s.split("/")[0] in raw), None)
+                    if matched:
+                        active.add(matched)
+            with STATE_LOCK:
+                to_del = [pid for pid, p in SHARED_STATE["active_positions"].items()
+                          if p["symbol"] not in active and p["strategy"] != "RealTest"]
+            for pid in to_del:
+                await self.db.close_trade(pid, 0.0, reason="remote close")
+                with STATE_LOCK:
+                    SHARED_STATE["active_positions"].pop(pid, None)
+        except Exception as e:
+            log.error(f"sync: {e}")
+
+    async def force_close(self, pid: str, reason: str):
+        with STATE_LOCK:
+            pos = SHARED_STATE["active_positions"].get(pid)
+        if not pos:
+            return
+        price = self.prices.get(pos["symbol"], pos["entry"])
+        hold = time.time() - self.open_times.get(pid, time.time())
+        try:
+            close_side = "sell" if pos["side"] == "buy" else "buy"
+            await self.ex.create_market_order(pos["symbol"], close_side, pos["qty"], params={"reduceOnly": True})
+            raw_pnl = (price - pos["entry"]) * pos["qty"] * (1 if pos["side"] == "buy" else -1)
+            fees = abs(raw_pnl) * TAKER_FEE * 2 * FEE_BUFFER
+            net = raw_pnl - fees
+            if pos["strategy"] != "RealTest":
+                await self.db.close_trade(pid, net, fees, reason, hold)
+            with STATE_LOCK:
+                SHARED_STATE["active_positions"].pop(pid, None)
+            self.open_times.pop(pid, None)
+            await self.db.update_analytics()
+            await self.tg.send(f"{'🟢' if net >= 0 else '🔴'} بسته شد ({reason}) | ${net:.2f}")
+        except Exception as e:
+            log.error(f"force_close: {e}")
+
+    async def watchdog_loop(self):
+        while True:
+            with STATE_LOCK:
+                items = list(SHARED_STATE["active_positions"].items())
+            for pid, pos in items:
+                if pos["strategy"] == "RealTest":
+                    continue
+                price = self.prices.get(pos["symbol"])
+                if not price:
+                    continue
+                pnl_pct = ((price - pos["entry"]) / pos["entry"] * 100) if pos["side"] == "buy" else ((pos["entry"] - price) / pos["entry"] * 100)
+                if pnl_pct > TRAIL_ACT and pnl_pct > pos["highest_pnl_pct"]:
+                    pos["highest_pnl_pct"] = pnl_pct
+                    new_sl = price * (1 - TRAIL_STEP / 100) if pos["side"] == "buy" else price * (1 + TRAIL_STEP / 100)
+                    if (pos["side"] == "buy" and new_sl > pos["sl"]) or (pos["side"] == "sell" and new_sl < pos["sl"]):
+                        pos["sl"] = new_sl
+                        await self.db.update_trade(pid, pos["qty"], pos["sl"], pos["is_partial"], pos["highest_pnl_pct"])
+                if PARTIAL_TP and pos["is_partial"] == 0:
+                    hit = (pos["side"] == "buy" and price >= pos["tp1"]) or (pos["side"] == "sell" and price <= pos["tp1"])
+                    if hit:
+                        try:
+                            half = float(self.ex.amount_to_precision(pos["symbol"], pos["qty"] / 2))
+                            if half > 0:
+                                close_side = "sell" if pos["side"] == "buy" else "buy"
+                                await self.ex.create_market_order(pos["symbol"], close_side, half, params={"reduceOnly": True})
+                                pos["qty"] -= half
+                                pos["is_partial"] = 1
+                                pos["sl"] = pos["entry"]
+                                await self.db.update_trade(pid, pos["qty"], pos["sl"], 1, pos["highest_pnl_pct"])
+                                await self.tg.send(f"🔹 Partial TP → BE  {pos['symbol']}")
+                        except Exception:
+                            pass
+                sl_hit = (pos["side"] == "buy" and price <= pos["sl"]) or (pos["side"] == "sell" and price >= pos["sl"])
+                tp_hit = (pos["side"] == "buy" and price >= pos["tp"]) or (pos["side"] == "sell" and price <= pos["tp"])
+                if sl_hit or tp_hit:
+                    await self.force_close(pid, "SL/Trail" if sl_hit else "TP")
+            await asyncio.sleep(2.0)
+
+# ============================================================================
+# 8. WEB DASHBOARD
+# ============================================================================
+app = Flask(__name__)
+
+@app.route("/api/status")
+def api_status():
+    with STATE_LOCK:
+        return jsonify(dict(SHARED_STATE))
+
+@app.route("/")
+def dashboard():
+    return render_template_string("""
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quant v13.6</title>
+<style>
+body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
+h1{color:#58a6ff}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:20px 0}
+.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:14px}
+.value{font-size:1.4rem;font-weight:700;color:#58a6ff}
+</style>
+</head>
+<body>
+<h1>🚀 Master Quant v13.6</h1>
+<div class="grid">
+<div class="card">موجودی<div class="value" id="bal">0.00</div></div>
+<div class="card">پوزیشن<div class="value" id="pos">0</div></div>
+<div class="card">PnL<div class="value" id="pnl">0.00</div></div>
+<div class="card">Win Rate<div class="value" id="wr">0%</div></div>
+</div>
+<p>آخرین اسکن: <span id="scan">–</span></p>
+<script>
+async function r(){try{const d=await(await fetch('/api/status')).json();
+document.getElementById('bal').textContent=(d.balance||0).toFixed(2);
+document.getElementById('pos').textContent=Object.keys(d.active_positions||{}).length;
+document.getElementById('pnl').textContent=(d.stats?.total_pnl||0).toFixed(2);
+document.getElementById('wr').textContent=(d.stats?.win_rate||0)+'%';
+document.getElementById('scan').textContent=d.last_scan||'–';}catch(e){}}
+r();setInterval(r,5000);
+</script>
+</body></html>
+""")
+
+def run_web():
+    app.run(host="0.0.0.0", port=10000, debug=False, use_reloader=False)
+
+# ============================================================================
+# 9. MAIN
+# ============================================================================
+if __name__ == "__main__":
+    Thread(target=run_web, daemon=True).start()
+    engine = QuantEngine()
+    try:
+        asyncio.run(engine.start())
+    except KeyboardInterrupt:
+        log.info("Shutdown")
+    except Exception as e:
+        log.error(f"Fatal: {e}")
+        raise
