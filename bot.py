@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v13.2 - Final Stable Version
-- Robust OHLCV (multi-symbol try + ccxt fallback)
-- No-password Web Dashboard
-- Fixed Risk Math
-- Real Test Trade
-- Modular Structure
+Master Quant Engine v13.3
+- Pure ccxt for OHLCV
+- Rich logging to DB
+- Download DB via Telegram
 """
 
 import asyncio
@@ -68,7 +66,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.FileHandler("quant_v13.log"), logging.StreamHandler()]
 )
-log = logging.getLogger("QuantV13.2")
+log = logging.getLogger("QuantV13.3")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True,
@@ -109,7 +107,8 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     ts TEXT DEFAULT CURRENT_TIMESTAMP,
                     symbol TEXT, action TEXT, strategy TEXT, reason TEXT,
-                    price REAL, rsi REAL, atr REAL, htf_trend TEXT
+                    price REAL, rsi REAL, atr REAL, htf_trend TEXT,
+                    extra TEXT
                 )""")
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS equity (
@@ -143,12 +142,12 @@ class Database:
                 (pnl, fees, reason, hold, tid))
             await db.commit()
 
-    async def log_decision(self, symbol, action, strategy, reason, price=0, rsi=0, atr=0, htf=""):
+    async def log_decision(self, symbol, action, strategy, reason, price=0, rsi=0, atr=0, htf="", extra=""):
         async with aiosqlite.connect(self.path) as db:
             await db.execute("""
-                INSERT INTO decisions (symbol,action,strategy,reason,price,rsi,atr,htf_trend)
-                VALUES (?,?,?,?,?,?,?,?)""",
-                (symbol, action, strategy, reason, price, rsi, atr, htf))
+                INSERT INTO decisions (symbol,action,strategy,reason,price,rsi,atr,htf_trend,extra)
+                VALUES (?,?,?,?,?,?,?,?,?)""",
+                (symbol, action, strategy, reason, price, rsi, atr, htf, extra[:500] if extra else ""))
             await db.commit()
 
     async def log_equity(self, balance, peak, dd):
@@ -357,7 +356,7 @@ class Analytics:
     async def full_report(self) -> str:
         decisions = await self.db.get_recent_decisions(300)
         closed = await self.db.get_closed_trades(100)
-        lines = ["🤖 <b>AI Observer v13.2 – گزارش کامل</b>\n"]
+        lines = ["🤖 <b>AI Observer v13.3 – گزارش کامل</b>\n"]
 
         if decisions:
             reasons = Counter()
@@ -370,7 +369,7 @@ class Analytics:
                     sig += 1
             lines.append(f"📊 تصمیم‌ها: کل {len(decisions)} | سیگنال {sig} | رد {neu}")
             lines.append("\n🚫 بیشترین دلایل رد:")
-            for r, c in reasons.most_common(6):
+            for r, c in reasons.most_common(8):
                 lines.append(f"  • {c}× {r}")
         else:
             lines.append("هنوز تصمیمی ثبت نشده.")
@@ -378,21 +377,11 @@ class Analytics:
         if closed:
             pnls = [t["pnl"] for t in closed]
             wins = sum(1 for p in pnls if p > 0)
-            early = sum(1 for t in closed if (t.get("hold_seconds") or 9999) < 180)
-            by_strat = defaultdict(list)
-            for t in closed:
-                by_strat[t["strategy"]].append(t["pnl"])
-            lines.append(f"\n📈 معاملات بسته: {len(closed)} | برد: {wins} ({wins/len(closed)*100:.0f}%)")
-            if early:
-                lines.append(f"  ⚠️ خروج زودهنگام (<۳دقیقه): {early}")
-            lines.append("\n🎯 عملکرد استراتژی:")
-            for s, vals in by_strat.items():
-                wr = sum(1 for v in vals if v > 0) / len(vals) * 100
-                lines.append(f"  • {s}: {len(vals)} معامله | WR={wr:.0f}% | Σ=${sum(vals):.2f}")
+            lines.append(f"\n📈 معاملات بسته: {len(closed)} | برد: {wins}")
         else:
             lines.append("\nهنوز معامله بسته‌شده‌ای وجود ندارد.")
 
-        lines.append("\n💡 داده در دیتابیس bot_v13.db ذخیره می‌شود.")
+        lines.append("\n💡 برای دانلود فایل دیتابیس از دکمه Download DB استفاده کنید.")
         return "\n".join(lines)
 
 # ============================================================================
@@ -411,7 +400,8 @@ class TelegramController:
             [{"text": "📊 Dashboard", "callback_data": "cmd_dash"}, {"text": "💼 Positions", "callback_data": "cmd_pos"}],
             [{"text": "🔄 Sync", "callback_data": "cmd_sync"}, {"text": btn, "callback_data": act}],
             [{"text": "🤖 Full Report", "callback_data": "cmd_report"}, {"text": "🚫 Rejections", "callback_data": "cmd_rej"}],
-            [{"text": "⚡ REAL TEST TRADE (30s)", "callback_data": "cmd_realtest"}],
+            [{"text": "⚡ REAL TEST TRADE", "callback_data": "cmd_realtest"}],
+            [{"text": "📁 Download DB", "callback_data": "cmd_db"}],
         ]}
 
     async def send(self, text: str, markup=None):
@@ -428,10 +418,25 @@ class TelegramController:
         except Exception as e:
             log.error(f"TG send: {e}")
 
+    async def send_document(self, file_path: str, caption: str = ""):
+        if not TG_TOKEN or not os.path.exists(file_path):
+            await self.send("❌ فایل دیتابیس یافت نشد")
+            return
+        try:
+            form = aiohttp.FormData()
+            form.add_field("chat_id", TG_CHAT)
+            form.add_field("caption", caption)
+            form.add_field("document", open(file_path, "rb"), filename=os.path.basename(file_path))
+            async with aiohttp.ClientSession() as s:
+                await s.post(f"{self.base}/sendDocument", data=form, timeout=60)
+        except Exception as e:
+            log.error(f"TG document: {e}")
+            await self.send(f"❌ خطا در ارسال فایل: {e}")
+
     async def poll(self):
         if not TG_TOKEN:
             return
-        await self.send(f"🚀 <b>Master Quant v13.2 Online</b>\nRobust OHLCV + No-Password Dashboard", self.menu())
+        await self.send(f"🚀 <b>Master Quant v13.3 Online</b>\nPure ccxt + Downloadable DB", self.menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -462,7 +467,7 @@ class TelegramController:
                                 with STATE_LOCK:
                                     st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>Dashboard v13.2</b>\n"
+                                    f"📊 <b>Dashboard v13.3</b>\n"
                                     f"Balance: <b>${st['balance']:.2f}</b>\n"
                                     f"DD: {st['current_dd']:.1f}% | Daily: ${st['daily_pnl']:.2f}\n"
                                     f"Pos: {len(st['active_positions'])}/{MAX_POS}\n"
@@ -484,20 +489,24 @@ class TelegramController:
                             elif d == "cmd_report":
                                 await self.send(await self.engine.analytics.full_report(), self.menu())
                             elif d == "cmd_rej":
-                                decs = await self.engine.db.get_recent_decisions(12)
+                                decs = await self.engine.db.get_recent_decisions(15)
                                 msg = "🚫 <b>آخرین تصمیم‌ها:</b>\n\n"
                                 for x in decs:
                                     icon = "✅" if x["action"] != "neutral" else "⛔"
-                                    msg += f"{icon} <b>{x['symbol']}</b>\n{x['reason'][:85]}\n\n"
+                                    extra = f"\n<code>{x.get('extra','')[:80]}</code>" if x.get("extra") else ""
+                                    msg += f"{icon} <b>{x['symbol']}</b>\n{x['reason'][:70]}{extra}\n\n"
                                 await self.send(msg or "داده‌ای نیست", self.menu())
                             elif d == "cmd_realtest":
                                 asyncio.create_task(self.engine.real_test_trade())
+                            elif d == "cmd_db":
+                                await self.send("📁 در حال ارسال فایل دیتابیس...")
+                                await self.send_document("bot_v13.db", "فایل دیتابیس ربات – برای تحلیل دقیق")
             except Exception as e:
                 log.error(f"TG poll: {e}")
             await asyncio.sleep(1)
 
 # ============================================================================
-# 8. ENGINE
+# 8. ENGINE (Pure ccxt)
 # ============================================================================
 class QuantEngine:
     def __init__(self):
@@ -513,97 +522,23 @@ class QuantEngine:
         self.ex.set_sandbox_mode(TESTNET)
         self.prices: Dict[str, float] = {}
         self.open_times: Dict[str, float] = {}
-        self.base_url = "https://testnet-api.phemex.com" if TESTNET else "https://api.phemex.com"
 
-    async def fetch_ohlcv_direct(self, symbol: str, timeframe: str, limit: int = 100) -> list:
-        """نسخه نهایی قوی با چندین فرمت نماد + fallback"""
-        res_map = {
-            "1m": 60, "5m": 300, "15m": 900, "30m": 1800,
-            "1h": 3600, "4h": 14400, "1d": 86400
-        }
-        resolution = res_map.get(timeframe, 300)
-
-        candidates = []
+    async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> list:
+        """استفاده خالص از ccxt + لاگ کامل خطا"""
         try:
-            market = self.ex.market(symbol)
-            if market:
-                if market.get("id"):
-                    candidates.append(market["id"])
-                if market.get("symbol"):
-                    candidates.append(market["symbol"].replace("/", "").replace(":USDT", ""))
-        except Exception:
-            pass
-
-        base = symbol.split("/")[0]
-        candidates.extend([
-            f"{base}USDT",
-            f"{base}USD",
-            f"u{base}USD",
-            f"c{base}USD",
-            symbol.replace("/", "").replace(":USDT", ""),
-        ])
-        candidates = list(dict.fromkeys([c for c in candidates if c]))
-
-        async with aiohttp.ClientSession() as session:
-            for sym_id in candidates:
-                try:
-                    url = f"{self.base_url}/exchange/public/md/v2/kline"
-                    params = {"symbol": sym_id, "resolution": resolution, "limit": limit}
-                    async with session.get(url, params=params, timeout=10) as resp:
-                        if resp.status != 200:
-                            continue
-                        data = await resp.json(content_type=None)
-
-                    rows = []
-                    if isinstance(data, dict):
-                        data_section = data.get("data")
-                        if isinstance(data_section, dict):
-                            rows = data_section.get("rows") or []
-                        elif isinstance(data_section, list):
-                            rows = data_section
-                        else:
-                            rows = data.get("rows") or []
-
-                    if not rows:
-                        continue
-
-                    ohlcv = []
-                    for row in rows:
-                        try:
-                            if isinstance(row, (list, tuple)) and len(row) >= 7:
-                                ts = int(row[0])
-                                if ts < 1e12:
-                                    ts *= 1000
-                                ohlcv.append([
-                                    ts,
-                                    float(row[3]),
-                                    float(row[4]),
-                                    float(row[5]),
-                                    float(row[6]),
-                                    float(row[7]) if len(row) > 7 else 0.0
-                                ])
-                        except Exception:
-                            continue
-
-                    if len(ohlcv) >= 30:
-                        ohlcv.sort(key=lambda x: x[0])
-                        log.info(f"OHLCV OK {symbol} via {sym_id} → {len(ohlcv)} candles")
-                        return ohlcv[-limit:]
-                except Exception:
-                    continue
-
-        # Fallback به ccxt
-        try:
-            log.warning(f"Direct OHLCV failed for {symbol}, trying ccxt fallback...")
             candles = await self.ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
             if candles and len(candles) >= 30:
-                log.info(f"OHLCV fallback OK {symbol} → {len(candles)} candles")
                 return candles
+            else:
+                await self.db.log_decision(symbol, "neutral", "", "OHLCV خالی یا ناکافی",
+                                           extra=f"len={len(candles) if candles else 0}")
+                return []
         except Exception as e:
-            log.warning(f"ccxt fallback failed {symbol}: {e}")
-
-        log.warning(f"All OHLCV methods failed for {symbol}")
-        return []
+            err_msg = f"{type(e).__name__}: {str(e)[:200]}"
+            log.warning(f"fetch_ohlcv {symbol}: {err_msg}")
+            await self.db.log_decision(symbol, "neutral", "", "خطا در دریافت OHLCV",
+                                       extra=err_msg)
+            return []
 
     async def start(self):
         await self.db.init()
@@ -695,12 +630,11 @@ class QuantEngine:
                     if any(p["symbol"] == sym for p in SHARED_STATE["active_positions"].values()):
                         continue
                 try:
-                    raw5 = await self.fetch_ohlcv_direct(sym, TIMEFRAME, 120)
-                    await asyncio.sleep(0.25)
-                    raw1 = await self.fetch_ohlcv_direct(sym, HTF_TIMEFRAME, 80)
+                    raw5 = await self.fetch_ohlcv(sym, TIMEFRAME, 120)
+                    await asyncio.sleep(0.3)
+                    raw1 = await self.fetch_ohlcv(sym, HTF_TIMEFRAME, 80)
                     if not raw5 or len(raw5) < 50:
-                        await self.db.log_decision(sym, "neutral", "", "OHLCV خالی")
-                        continue
+                        continue  # قبلاً در fetch_ohlcv لاگ شده
                     df5 = pd.DataFrame(raw5, columns=["ts", "open", "high", "low", "close", "volume"])
                     df1 = pd.DataFrame(raw1, columns=["ts", "open", "high", "low", "close", "volume"]) if raw1 and len(raw1) > 20 else df5
                     sig = self.strategy.analyze(df5, df1)
@@ -710,6 +644,7 @@ class QuantEngine:
                         await self.execute_trade(sym, sig)
                 except Exception as e:
                     log.error(f"scan {sym}: {e}")
+                    await self.db.log_decision(sym, "neutral", "", f"خطای اسکن: {str(e)[:100]}")
                 await asyncio.sleep(0.4)
             await asyncio.sleep(18)
 
@@ -886,56 +821,38 @@ def dashboard():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Master Quant v13.2</title>
+<title>Master Quant v13.3</title>
 <style>
   :root { --bg:#0d1117; --card:#161b22; --border:#30363d; --text:#c9d1d9; --accent:#58a6ff; --green:#3fb950; }
-  * { box-sizing:border-box; margin:0; padding:0; }
-  body { font-family: 'Segoe UI', system-ui, sans-serif; background:var(--bg); color:var(--text); padding:20px; }
-  h1 { color:var(--accent); margin-bottom:8px; font-size:1.6rem; }
-  .subtitle { color:#8b949e; margin-bottom:24px; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px,1fr)); gap:14px; margin-bottom:24px; }
-  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px; }
-  .card h3 { font-size:0.8rem; color:#8b949e; margin-bottom:6px; }
-  .value { font-size:1.45rem; font-weight:700; color:var(--accent); }
-  .badge { background:var(--green); color:#fff; padding:2px 8px; border-radius:20px; font-size:0.75rem; }
-  .footer { margin-top:30px; font-size:0.8rem; color:#8b949e; text-align:center; }
+  body { font-family: system-ui; background:var(--bg); color:var(--text); padding:20px; }
+  h1 { color:var(--accent); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin:20px 0; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px; }
+  .value { font-size:1.4rem; font-weight:700; color:var(--accent); }
 </style>
 </head>
 <body>
-  <h1>🚀 Master Quant Engine v13.2</h1>
-  <p class="subtitle">Final Stable • Robust OHLCV • No Password</p>
-
+  <h1>🚀 Master Quant v13.3</h1>
   <div class="grid">
-    <div class="card"><h3>وضعیت</h3><div class="value"><span class="badge">ONLINE</span></div></div>
-    <div class="card"><h3>موجودی</h3><div class="value" id="balance">0.00</div></div>
-    <div class="card"><h3>پوزیشن‌ها</h3><div class="value" id="pos">0</div></div>
-    <div class="card"><h3>Total PnL</h3><div class="value" id="pnl">0.00</div></div>
-    <div class="card"><h3>Win Rate</h3><div class="value" id="wr">0%</div></div>
-    <div class="card"><h3>Drawdown</h3><div class="value" id="dd">0.0%</div></div>
+    <div class="card">موجودی<div class="value" id="balance">0.00</div></div>
+    <div class="card">پوزیشن‌ها<div class="value" id="pos">0</div></div>
+    <div class="card">PnL<div class="value" id="pnl">0.00</div></div>
+    <div class="card">Win Rate<div class="value" id="wr">0%</div></div>
   </div>
-
-  <div class="card">
-    <h3>آخرین اسکن</h3>
-    <p id="lastscan">–</p>
-  </div>
-
-  <div class="footer">Master Quant v13.2 – Dashboard بدون پسورد</div>
-
+  <p>آخرین اسکن: <span id="lastscan">–</span></p>
 <script>
 async function refresh() {
   try {
     const r = await fetch('/api/status');
     const d = await r.json();
-    document.getElementById('balance').textContent = (d.balance || 0).toFixed(2);
-    document.getElementById('pos').textContent = Object.keys(d.active_positions || {}).length;
-    document.getElementById('pnl').textContent = (d.stats?.total_pnl || 0).toFixed(2);
-    document.getElementById('wr').textContent = (d.stats?.win_rate || 0) + '%';
-    document.getElementById('dd').textContent = (d.current_dd || 0).toFixed(1) + '%';
-    document.getElementById('lastscan').textContent = d.last_scan || '–';
-  } catch(e) {}
+    document.getElementById('balance').textContent = (d.balance||0).toFixed(2);
+    document.getElementById('pos').textContent = Object.keys(d.active_positions||{}).length;
+    document.getElementById('pnl').textContent = (d.stats?.total_pnl||0).toFixed(2);
+    document.getElementById('wr').textContent = (d.stats?.win_rate||0)+'%';
+    document.getElementById('lastscan').textContent = d.last_scan||'–';
+  } catch(e){}
 }
-refresh();
-setInterval(refresh, 4000);
+refresh(); setInterval(refresh, 4000);
 </script>
 </body>
 </html>
