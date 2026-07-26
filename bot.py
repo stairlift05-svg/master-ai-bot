@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v13.1
-- Fixed OHLCV (correct Phemex endpoint + parsing)
-- Web Dashboard بدون پسورد
-- Modular + Fixed Risk Math + Real Test Trade
+Master Quant Engine v13.2 - Final Stable Version
+- Robust OHLCV (multi-symbol try + ccxt fallback)
+- No-password Web Dashboard
+- Fixed Risk Math
+- Real Test Trade
+- Modular Structure
 """
 
 import asyncio
@@ -66,7 +68,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.FileHandler("quant_v13.log"), logging.StreamHandler()]
 )
-log = logging.getLogger("QuantV13.1")
+log = logging.getLogger("QuantV13.2")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True,
@@ -355,7 +357,7 @@ class Analytics:
     async def full_report(self) -> str:
         decisions = await self.db.get_recent_decisions(300)
         closed = await self.db.get_closed_trades(100)
-        lines = ["🤖 <b>AI Observer v13.1 – گزارش کامل</b>\n"]
+        lines = ["🤖 <b>AI Observer v13.2 – گزارش کامل</b>\n"]
 
         if decisions:
             reasons = Counter()
@@ -390,7 +392,7 @@ class Analytics:
         else:
             lines.append("\nهنوز معامله بسته‌شده‌ای وجود ندارد.")
 
-        lines.append("\n💡 داده برای تحلیل در دیتابیس bot_v13.db ذخیره می‌شود.")
+        lines.append("\n💡 داده در دیتابیس bot_v13.db ذخیره می‌شود.")
         return "\n".join(lines)
 
 # ============================================================================
@@ -429,7 +431,7 @@ class TelegramController:
     async def poll(self):
         if not TG_TOKEN:
             return
-        await self.send(f"🚀 <b>Master Quant v13.1 Online</b>\nFixed OHLCV + No-Password Dashboard", self.menu())
+        await self.send(f"🚀 <b>Master Quant v13.2 Online</b>\nRobust OHLCV + No-Password Dashboard", self.menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -460,7 +462,7 @@ class TelegramController:
                                 with STATE_LOCK:
                                     st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>Dashboard v13.1</b>\n"
+                                    f"📊 <b>Dashboard v13.2</b>\n"
                                     f"Balance: <b>${st['balance']:.2f}</b>\n"
                                     f"DD: {st['current_dd']:.1f}% | Daily: ${st['daily_pnl']:.2f}\n"
                                     f"Pos: {len(st['active_positions'])}/{MAX_POS}\n"
@@ -495,7 +497,7 @@ class TelegramController:
             await asyncio.sleep(1)
 
 # ============================================================================
-# 8. ENGINE (Fixed OHLCV)
+# 8. ENGINE
 # ============================================================================
 class QuantEngine:
     def __init__(self):
@@ -514,45 +516,94 @@ class QuantEngine:
         self.base_url = "https://testnet-api.phemex.com" if TESTNET else "https://api.phemex.com"
 
     async def fetch_ohlcv_direct(self, symbol: str, timeframe: str, limit: int = 100) -> list:
-        """نسخه نهایی و اصلاح‌شده"""
+        """نسخه نهایی قوی با چندین فرمت نماد + fallback"""
+        res_map = {
+            "1m": 60, "5m": 300, "15m": 900, "30m": 1800,
+            "1h": 3600, "4h": 14400, "1d": 86400
+        }
+        resolution = res_map.get(timeframe, 300)
+
+        candidates = []
         try:
             market = self.ex.market(symbol)
-            sym_id = market["id"]
+            if market:
+                if market.get("id"):
+                    candidates.append(market["id"])
+                if market.get("symbol"):
+                    candidates.append(market["symbol"].replace("/", "").replace(":USDT", ""))
+        except Exception:
+            pass
 
-            res_map = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
-            resolution = res_map.get(timeframe, 300)
+        base = symbol.split("/")[0]
+        candidates.extend([
+            f"{base}USDT",
+            f"{base}USD",
+            f"u{base}USD",
+            f"c{base}USD",
+            symbol.replace("/", "").replace(":USDT", ""),
+        ])
+        candidates = list(dict.fromkeys([c for c in candidates if c]))
 
-            url = f"{self.base_url}/exchange/public/md/v2/kline"
-            params = {"symbol": sym_id, "resolution": resolution, "limit": limit}
+        async with aiohttp.ClientSession() as session:
+            for sym_id in candidates:
+                try:
+                    url = f"{self.base_url}/exchange/public/md/v2/kline"
+                    params = {"symbol": sym_id, "resolution": resolution, "limit": limit}
+                    async with session.get(url, params=params, timeout=10) as resp:
+                        if resp.status != 200:
+                            continue
+                        data = await resp.json(content_type=None)
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=12) as resp:
-                    data = await resp.json()
+                    rows = []
+                    if isinstance(data, dict):
+                        data_section = data.get("data")
+                        if isinstance(data_section, dict):
+                            rows = data_section.get("rows") or []
+                        elif isinstance(data_section, list):
+                            rows = data_section
+                        else:
+                            rows = data.get("rows") or []
 
-            rows = []
-            if isinstance(data, dict) and data.get("code") == 0:
-                rows = data.get("data", {}).get("rows") or []
-            elif isinstance(data, dict):
-                rows = data.get("data", {}).get("rows") or data.get("rows") or []
+                    if not rows:
+                        continue
 
-            ohlcv = []
-            for row in rows:
-                if isinstance(row, (list, tuple)) and len(row) >= 7:
-                    ts = int(row[0])
-                    if ts < 1e12:
-                        ts *= 1000
-                    o = float(row[3])
-                    h = float(row[4])
-                    l = float(row[5])
-                    c = float(row[6])
-                    v = float(row[7]) if len(row) > 7 else 0.0
-                    ohlcv.append([ts, o, h, l, c, v])
+                    ohlcv = []
+                    for row in rows:
+                        try:
+                            if isinstance(row, (list, tuple)) and len(row) >= 7:
+                                ts = int(row[0])
+                                if ts < 1e12:
+                                    ts *= 1000
+                                ohlcv.append([
+                                    ts,
+                                    float(row[3]),
+                                    float(row[4]),
+                                    float(row[5]),
+                                    float(row[6]),
+                                    float(row[7]) if len(row) > 7 else 0.0
+                                ])
+                        except Exception:
+                            continue
 
-            ohlcv.sort(key=lambda x: x[0])
-            return ohlcv[-limit:] if ohlcv else []
+                    if len(ohlcv) >= 30:
+                        ohlcv.sort(key=lambda x: x[0])
+                        log.info(f"OHLCV OK {symbol} via {sym_id} → {len(ohlcv)} candles")
+                        return ohlcv[-limit:]
+                except Exception:
+                    continue
+
+        # Fallback به ccxt
+        try:
+            log.warning(f"Direct OHLCV failed for {symbol}, trying ccxt fallback...")
+            candles = await self.ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+            if candles and len(candles) >= 30:
+                log.info(f"OHLCV fallback OK {symbol} → {len(candles)} candles")
+                return candles
         except Exception as e:
-            log.warning(f"OHLCV {symbol}: {e}")
-            return []
+            log.warning(f"ccxt fallback failed {symbol}: {e}")
+
+        log.warning(f"All OHLCV methods failed for {symbol}")
+        return []
 
     async def start(self):
         await self.db.init()
@@ -835,24 +886,24 @@ def dashboard():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Master Quant v13.1</title>
+<title>Master Quant v13.2</title>
 <style>
-  :root { --bg:#0d1117; --card:#161b22; --border:#30363d; --text:#c9d1d9; --accent:#58a6ff; --green:#3fb950; --red:#f85149; }
+  :root { --bg:#0d1117; --card:#161b22; --border:#30363d; --text:#c9d1d9; --accent:#58a6ff; --green:#3fb950; }
   * { box-sizing:border-box; margin:0; padding:0; }
-  body { font-family: 'Segoe UI', system-ui, sans-serif; background:var(--bg); color:var(--text); padding:20px; line-height:1.5; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background:var(--bg); color:var(--text); padding:20px; }
   h1 { color:var(--accent); margin-bottom:8px; font-size:1.6rem; }
-  .subtitle { color:#8b949e; margin-bottom:24px; font-size:0.95rem; }
+  .subtitle { color:#8b949e; margin-bottom:24px; }
   .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px,1fr)); gap:14px; margin-bottom:24px; }
   .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px; }
-  .card h3 { font-size:0.8rem; color:#8b949e; margin-bottom:6px; text-transform:uppercase; }
+  .card h3 { font-size:0.8rem; color:#8b949e; margin-bottom:6px; }
   .value { font-size:1.45rem; font-weight:700; color:var(--accent); }
-  .badge { display:inline-block; background:var(--green); color:#fff; padding:2px 8px; border-radius:20px; font-size:0.75rem; }
+  .badge { background:var(--green); color:#fff; padding:2px 8px; border-radius:20px; font-size:0.75rem; }
   .footer { margin-top:30px; font-size:0.8rem; color:#8b949e; text-align:center; }
 </style>
 </head>
 <body>
-  <h1>🚀 Master Quant Engine v13.1</h1>
-  <p class="subtitle">Fixed OHLCV • No Password Dashboard • Real Test Trade</p>
+  <h1>🚀 Master Quant Engine v13.2</h1>
+  <p class="subtitle">Final Stable • Robust OHLCV • No Password</p>
 
   <div class="grid">
     <div class="card"><h3>وضعیت</h3><div class="value"><span class="badge">ONLINE</span></div></div>
@@ -864,14 +915,11 @@ def dashboard():
   </div>
 
   <div class="card">
-    <h3 style="margin-bottom:10px;">آخرین اسکن</h3>
+    <h3>آخرین اسکن</h3>
     <p id="lastscan">–</p>
-    <p style="margin-top:10px; font-size:0.85rem; color:#8b949e;">
-      برای گزارش کامل و استخراج داده از تلگرام استفاده کنید.
-    </p>
   </div>
 
-  <div class="footer">Master Quant v13.1 • Dashboard بدون پسورد</div>
+  <div class="footer">Master Quant v13.2 – Dashboard بدون پسورد</div>
 
 <script>
 async function refresh() {
