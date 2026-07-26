@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v13.3
-- Pure ccxt for OHLCV
-- Rich logging to DB
-- Download DB via Telegram
+Master Quant Engine v13.4 (Hybrid Final)
+- OHLCV از Binance (پایدار)
+- معامله و قیمت واقعی از Phemex
+- فیلتر اختلاف قیمت
+- لاگ کامل + دانلود دیتابیس
 """
 
 import asyncio
@@ -43,6 +44,16 @@ SYMBOLS = [
     "DOT/USDT:USDT",
 ]
 
+# نقشه نماد برای Binance
+BINANCE_SYMBOL_MAP = {
+    "ETH/USDT:USDT": "ETH/USDT",
+    "SOL/USDT:USDT": "SOL/USDT",
+    "BNB/USDT:USDT": "BNB/USDT",
+    "XRP/USDT:USDT": "XRP/USDT",
+    "ADA/USDT:USDT": "ADA/USDT",
+    "DOT/USDT:USDT": "DOT/USDT",
+}
+
 TIMEFRAME        = "5m"
 HTF_TIMEFRAME    = "1h"
 RISK_PCT         = 0.5
@@ -58,6 +69,7 @@ TRAIL_ACT        = 1.8
 TRAIL_STEP       = 0.6
 PARTIAL_TP       = True
 RELAXED_MODE     = True
+MAX_PRICE_DIFF   = 0.35          # حداکثر اختلاف قیمت مجاز بین دو صرافی (درصد)
 TEST_SYMBOL      = "ADA/USDT:USDT"
 TEST_USD         = 12.0
 
@@ -66,7 +78,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.FileHandler("quant_v13.log"), logging.StreamHandler()]
 )
-log = logging.getLogger("QuantV13.3")
+log = logging.getLogger("QuantV13.4")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True,
@@ -107,8 +119,7 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     ts TEXT DEFAULT CURRENT_TIMESTAMP,
                     symbol TEXT, action TEXT, strategy TEXT, reason TEXT,
-                    price REAL, rsi REAL, atr REAL, htf_trend TEXT,
-                    extra TEXT
+                    price REAL, rsi REAL, atr REAL, htf_trend TEXT, extra TEXT
                 )""")
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS equity (
@@ -147,7 +158,7 @@ class Database:
             await db.execute("""
                 INSERT INTO decisions (symbol,action,strategy,reason,price,rsi,atr,htf_trend,extra)
                 VALUES (?,?,?,?,?,?,?,?,?)""",
-                (symbol, action, strategy, reason, price, rsi, atr, htf, extra[:500] if extra else ""))
+                (symbol, action, strategy, reason, price, rsi, atr, htf, str(extra)[:400]))
             await db.commit()
 
     async def log_equity(self, balance, peak, dd):
@@ -275,7 +286,7 @@ class StrategyEngine:
         low_m = 0.45 if RELAXED_MODE else 0.55
         high_m = 3.2 if RELAXED_MODE else 2.8
         if atr < atr_sma * low_m or atr > atr_sma * high_m:
-            return {"action": "neutral", "reason": f"نوسان نامناسب ATR={atr:.5f}", "strat": "", "rsi": 0, "atr": atr, "htf": htf_trend}
+            return {"action": "neutral", "reason": f"نوسان نامناسب", "strat": "", "rsi": 0, "atr": atr, "htf": htf_trend}
 
         rsi_s = Indicators.rsi(c)
         rsi = float(rsi_s.iloc[-1])
@@ -288,14 +299,14 @@ class StrategyEngine:
         h10 = float(Indicators.highest(high, 10).iloc[-1])
         l10 = float(Indicators.lowest(low, 10).iloc[-1])
 
-        if htf_trend == "bullish" and price > ema20 and price >= h10 * 0.999 and 48 < rsi < 75 and vcur > vsma * (1.15 if RELAXED_MODE else 1.3):
+        if htf_trend == "bullish" and price > ema20 and price >= h10 * 0.999 and 48 < rsi < 75 and vcur > vsma * 1.15:
             return self._build("buy", "Breakout_Momentum", price, atr, rsi, htf_trend)
-        if htf_trend == "bearish" and price < ema20 and price <= l10 * 1.001 and 25 < rsi < 52 and vcur > vsma * (1.15 if RELAXED_MODE else 1.3):
+        if htf_trend == "bearish" and price < ema20 and price <= l10 * 1.001 and 25 < rsi < 52 and vcur > vsma * 1.15:
             return self._build("sell", "Breakout_Momentum", price, atr, rsi, htf_trend)
 
-        if htf_trend == "bullish" and price > ema20 > ema50 * 0.999 and rsi_p <= (42 if RELAXED_MODE else 40) and rsi > rsi_p and rsi < 62:
+        if htf_trend == "bullish" and price > ema20 > ema50 * 0.999 and rsi_p <= 42 and rsi > rsi_p and rsi < 62:
             return self._build("buy", "MTF_Pullback", price, atr, rsi, htf_trend)
-        if htf_trend == "bearish" and price < ema20 < ema50 * 1.001 and rsi_p >= (58 if RELAXED_MODE else 60) and rsi < rsi_p and rsi > 38:
+        if htf_trend == "bearish" and price < ema20 < ema50 * 1.001 and rsi_p >= 58 and rsi < rsi_p and rsi > 38:
             return self._build("sell", "MTF_Pullback", price, atr, rsi, htf_trend)
 
         if htf_trend == "bullish" and st_d.iloc[-1] == 1 and low.iloc[-1] <= st_l.iloc[-1] * 1.005 and c.iloc[-1] > c.iloc[-2] and 38 < rsi < 65:
@@ -303,9 +314,9 @@ class StrategyEngine:
         if htf_trend == "bearish" and st_d.iloc[-1] == -1 and high.iloc[-1] >= st_u.iloc[-1] * 0.995 and c.iloc[-1] < c.iloc[-2] and 35 < rsi < 62:
             return self._build("sell", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
 
-        if htf_trend == "bullish" and price > ema20 and vcur > vsma * (1.5 if RELAXED_MODE else 1.8) and c.iloc[-1] > c.iloc[-2] and 48 < rsi < 70:
+        if htf_trend == "bullish" and price > ema20 and vcur > vsma * 1.5 and c.iloc[-1] > c.iloc[-2] and 48 < rsi < 70:
             return self._build("buy", "Volume_Surge", price, atr, rsi, htf_trend)
-        if htf_trend == "bearish" and price < ema20 and vcur > vsma * (1.5 if RELAXED_MODE else 1.8) and c.iloc[-1] < c.iloc[-2] and 30 < rsi < 52:
+        if htf_trend == "bearish" and price < ema20 and vcur > vsma * 1.5 and c.iloc[-1] < c.iloc[-2] and 30 < rsi < 52:
             return self._build("sell", "Volume_Surge", price, atr, rsi, htf_trend)
 
         return {"action": "neutral", "reason": f"بدون سیگنال (RSI={rsi:.1f})", "strat": "", "rsi": rsi, "atr": atr, "htf": htf_trend}
@@ -347,7 +358,7 @@ class RiskManager:
         return max(qty, 0.0)
 
 # ============================================================================
-# 6. ANALYTICS
+# 6. ANALYTICS + TELEGRAM + ENGINE
 # ============================================================================
 class Analytics:
     def __init__(self, db: Database):
@@ -355,38 +366,28 @@ class Analytics:
 
     async def full_report(self) -> str:
         decisions = await self.db.get_recent_decisions(300)
-        closed = await self.db.get_closed_trades(100)
-        lines = ["🤖 <b>AI Observer v13.3 – گزارش کامل</b>\n"]
-
+        closed = await self.db.get_closed_trades(50)
+        lines = ["🤖 <b>AI Observer v13.4 Hybrid</b>\n"]
         if decisions:
             reasons = Counter()
             neu = sig = 0
             for d in decisions:
                 if d["action"] == "neutral":
                     neu += 1
-                    reasons[(d["reason"] or "?")[:65]] += 1
+                    reasons[(d["reason"] or "?")[:60]] += 1
                 else:
                     sig += 1
-            lines.append(f"📊 تصمیم‌ها: کل {len(decisions)} | سیگنال {sig} | رد {neu}")
-            lines.append("\n🚫 بیشترین دلایل رد:")
-            for r, c in reasons.most_common(8):
+            lines.append(f"📊 تصمیم‌ها: {len(decisions)} | سیگنال {sig} | رد {neu}")
+            lines.append("\n🚫 دلایل رد:")
+            for r, c in reasons.most_common(6):
                 lines.append(f"  • {c}× {r}")
-        else:
-            lines.append("هنوز تصمیمی ثبت نشده.")
-
         if closed:
-            pnls = [t["pnl"] for t in closed]
-            wins = sum(1 for p in pnls if p > 0)
+            wins = sum(1 for t in closed if t["pnl"] > 0)
             lines.append(f"\n📈 معاملات بسته: {len(closed)} | برد: {wins}")
-        else:
-            lines.append("\nهنوز معامله بسته‌شده‌ای وجود ندارد.")
-
-        lines.append("\n💡 برای دانلود فایل دیتابیس از دکمه Download DB استفاده کنید.")
+        lines.append("\n💡 از دکمه Download DB برای دریافت فایل استفاده کنید.")
         return "\n".join(lines)
 
-# ============================================================================
-# 7. TELEGRAM
-# ============================================================================
+
 class TelegramController:
     def __init__(self, engine):
         self.engine = engine
@@ -399,44 +400,39 @@ class TelegramController:
         return {"inline_keyboard": [
             [{"text": "📊 Dashboard", "callback_data": "cmd_dash"}, {"text": "💼 Positions", "callback_data": "cmd_pos"}],
             [{"text": "🔄 Sync", "callback_data": "cmd_sync"}, {"text": btn, "callback_data": act}],
-            [{"text": "🤖 Full Report", "callback_data": "cmd_report"}, {"text": "🚫 Rejections", "callback_data": "cmd_rej"}],
-            [{"text": "⚡ REAL TEST TRADE", "callback_data": "cmd_realtest"}],
+            [{"text": "🤖 Report", "callback_data": "cmd_report"}, {"text": "🚫 Rejections", "callback_data": "cmd_rej"}],
+            [{"text": "⚡ REAL TEST", "callback_data": "cmd_realtest"}],
             [{"text": "📁 Download DB", "callback_data": "cmd_db"}],
         ]}
 
     async def send(self, text: str, markup=None):
-        if not TG_TOKEN:
-            return
-        if len(text) > 4000:
-            text = text[:3900] + "\n...(truncated)"
+        if not TG_TOKEN: return
+        if len(text) > 4000: text = text[:3900] + "\n..."
         payload = {"chat_id": TG_CHAT, "text": text, "parse_mode": "HTML"}
-        if markup:
-            payload["reply_markup"] = markup
+        if markup: payload["reply_markup"] = markup
         try:
             async with aiohttp.ClientSession() as s:
                 await s.post(f"{self.base}/sendMessage", json=payload, timeout=12)
         except Exception as e:
-            log.error(f"TG send: {e}")
+            log.error(f"TG: {e}")
 
-    async def send_document(self, file_path: str, caption: str = ""):
-        if not TG_TOKEN or not os.path.exists(file_path):
-            await self.send("❌ فایل دیتابیس یافت نشد")
+    async def send_document(self, path: str, caption=""):
+        if not os.path.exists(path):
+            await self.send("❌ فایل یافت نشد")
             return
         try:
             form = aiohttp.FormData()
             form.add_field("chat_id", TG_CHAT)
             form.add_field("caption", caption)
-            form.add_field("document", open(file_path, "rb"), filename=os.path.basename(file_path))
+            form.add_field("document", open(path, "rb"), filename=os.path.basename(path))
             async with aiohttp.ClientSession() as s:
                 await s.post(f"{self.base}/sendDocument", data=form, timeout=60)
         except Exception as e:
-            log.error(f"TG document: {e}")
             await self.send(f"❌ خطا در ارسال فایل: {e}")
 
     async def poll(self):
-        if not TG_TOKEN:
-            return
-        await self.send(f"🚀 <b>Master Quant v13.3 Online</b>\nPure ccxt + Downloadable DB", self.menu())
+        if not TG_TOKEN: return
+        await self.send("🚀 <b>Master Quant v13.4 Hybrid Online</b>\nBinance Data + Phemex Trading", self.menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -444,70 +440,57 @@ class TelegramController:
                         data = await r.json()
                         for u in data.get("result", []):
                             self.offset = u["update_id"]
-                            if "callback_query" not in u:
-                                continue
+                            if "callback_query" not in u: continue
                             cb = u["callback_query"]
                             d = cb["data"]
                             try:
                                 async with aiohttp.ClientSession() as ss:
-                                    await ss.post(f"{self.base}/answerCallbackQuery",
-                                                  json={"callback_query_id": cb["id"], "text": "OK"}, timeout=4)
-                            except Exception:
-                                pass
+                                    await ss.post(f"{self.base}/answerCallbackQuery", json={"callback_query_id": cb["id"], "text": "OK"}, timeout=4)
+                            except: pass
 
                             if d == "cmd_start":
-                                with STATE_LOCK:
-                                    SHARED_STATE["is_active"] = True
-                                await self.send("▶️ Bot Started", self.menu())
+                                with STATE_LOCK: SHARED_STATE["is_active"] = True
+                                await self.send("▶️ Started", self.menu())
                             elif d == "cmd_pause":
-                                with STATE_LOCK:
-                                    SHARED_STATE["is_active"] = False
-                                await self.send("⏸️ Bot Paused", self.menu())
+                                with STATE_LOCK: SHARED_STATE["is_active"] = False
+                                await self.send("⏸️ Paused", self.menu())
                             elif d == "cmd_dash":
-                                with STATE_LOCK:
-                                    st = dict(SHARED_STATE)
+                                with STATE_LOCK: st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>Dashboard v13.3</b>\n"
-                                    f"Balance: <b>${st['balance']:.2f}</b>\n"
-                                    f"DD: {st['current_dd']:.1f}% | Daily: ${st['daily_pnl']:.2f}\n"
-                                    f"Pos: {len(st['active_positions'])}/{MAX_POS}\n"
-                                    f"PnL: ${st['stats']['total_pnl']:.2f} | WR: {st['stats']['win_rate']}%\n"
-                                    f"Last scan: {st['last_scan']}", self.menu())
+                                    f"📊 <b>Dashboard</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
+                                    f"DD: {st['current_dd']:.1f}% | Pos: {len(st['active_positions'])}\n"
+                                    f"PnL: ${st['stats']['total_pnl']:.2f} | Last: {st['last_scan']}", self.menu())
                             elif d == "cmd_pos":
-                                with STATE_LOCK:
-                                    pos = dict(SHARED_STATE["active_positions"])
+                                with STATE_LOCK: pos = dict(SHARED_STATE["active_positions"])
                                 if not pos:
-                                    await self.send("💤 هیچ پوزیشن فعالی نیست", self.menu())
+                                    await self.send("💤 هیچ پوزیشنی نیست", self.menu())
                                 else:
-                                    for pid, p in pos.items():
+                                    for p in pos.values():
                                         pr = self.engine.prices.get(p["symbol"], p["entry"])
-                                        pnl = (pr - p["entry"]) * p["qty"] * (1 if p["side"] == "buy" else -1)
-                                        await self.send(f"{'🟢' if pnl >= 0 else '🔴'} <b>{p['symbol']}</b> {p['side']}\nEntry: {p['entry']:.4f} | PnL: ${pnl:.2f}")
+                                        pnl = (pr - p["entry"]) * p["qty"] * (1 if p["side"]=="buy" else -1)
+                                        await self.send(f"{'🟢' if pnl>=0 else '🔴'} {p['symbol']} | ${pnl:.2f}")
                             elif d == "cmd_sync":
                                 await self.engine.smart_sync()
-                                await self.send("🔄 Sync انجام شد", self.menu())
+                                await self.send("🔄 Sync OK", self.menu())
                             elif d == "cmd_report":
                                 await self.send(await self.engine.analytics.full_report(), self.menu())
                             elif d == "cmd_rej":
-                                decs = await self.engine.db.get_recent_decisions(15)
+                                decs = await self.engine.db.get_recent_decisions(12)
                                 msg = "🚫 <b>آخرین تصمیم‌ها:</b>\n\n"
                                 for x in decs:
                                     icon = "✅" if x["action"] != "neutral" else "⛔"
-                                    extra = f"\n<code>{x.get('extra','')[:80]}</code>" if x.get("extra") else ""
-                                    msg += f"{icon} <b>{x['symbol']}</b>\n{x['reason'][:70]}{extra}\n\n"
-                                await self.send(msg or "داده‌ای نیست", self.menu())
+                                    msg += f"{icon} <b>{x['symbol']}</b>\n{x['reason'][:70]}\n\n"
+                                await self.send(msg, self.menu())
                             elif d == "cmd_realtest":
                                 asyncio.create_task(self.engine.real_test_trade())
                             elif d == "cmd_db":
-                                await self.send("📁 در حال ارسال فایل دیتابیس...")
-                                await self.send_document("bot_v13.db", "فایل دیتابیس ربات – برای تحلیل دقیق")
+                                await self.send("📁 ارسال فایل دیتابیس...")
+                                await self.send_document("bot_v13.db", "دیتابیس ربات v13.4")
             except Exception as e:
                 log.error(f"TG poll: {e}")
             await asyncio.sleep(1)
 
-# ============================================================================
-# 8. ENGINE (Pure ccxt)
-# ============================================================================
+
 class QuantEngine:
     def __init__(self):
         self.db = Database()
@@ -515,44 +498,49 @@ class QuantEngine:
         self.risk = RiskManager()
         self.analytics = Analytics(self.db)
         self.tg = TelegramController(self)
+
+        # Phemex برای معامله
         self.ex = ccxt.phemex({
             "apiKey": API_KEY, "secret": API_SECRET,
             "enableRateLimit": True, "options": {"defaultType": "swap"}
         })
         self.ex.set_sandbox_mode(TESTNET)
+
+        # Binance فقط برای کندل (عمومی)
+        self.ex_data = ccxt.binance({"enableRateLimit": True, "options": {"defaultType": "spot"}})
+
         self.prices: Dict[str, float] = {}
         self.open_times: Dict[str, float] = {}
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> list:
-        """استفاده خالص از ccxt + لاگ کامل خطا"""
+        """کندل از Binance"""
+        b_symbol = BINANCE_SYMBOL_MAP.get(symbol)
+        if not b_symbol:
+            return []
         try:
-            candles = await self.ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-            if candles and len(candles) >= 30:
+            candles = await self.ex_data.fetch_ohlcv(b_symbol, timeframe=timeframe, limit=limit)
+            if candles and len(candles) >= 40:
                 return candles
-            else:
-                await self.db.log_decision(symbol, "neutral", "", "OHLCV خالی یا ناکافی",
-                                           extra=f"len={len(candles) if candles else 0}")
-                return []
+            return []
         except Exception as e:
-            err_msg = f"{type(e).__name__}: {str(e)[:200]}"
-            log.warning(f"fetch_ohlcv {symbol}: {err_msg}")
-            await self.db.log_decision(symbol, "neutral", "", "خطا در دریافت OHLCV",
-                                       extra=err_msg)
+            log.warning(f"Binance OHLCV {symbol}: {e}")
+            await self.db.log_decision(symbol, "neutral", "", "خطا در دریافت کندل Binance", extra=str(e)[:150])
             return []
 
     async def start(self):
         await self.db.init()
         try:
             await self.ex.load_markets()
-            log.info("Markets loaded")
+            await self.ex_data.load_markets()
+            log.info("Markets loaded (Phemex + Binance)")
             for sym in SYMBOLS:
                 try:
                     await self.ex.set_leverage(LEVERAGE, sym)
-                    log.info(f"Leverage {LEVERAGE}x → {sym}")
+                    log.info(f"Leverage OK → {sym}")
                 except Exception as e:
                     log.warning(f"Leverage {sym}: {e}")
         except Exception as e:
-            log.error(f"Init: {e}")
+            log.error(f"Init error: {e}")
 
         for t in await self.db.get_open_trades():
             with STATE_LOCK:
@@ -564,16 +552,7 @@ class QuantEngine:
                 self.open_times[t["id"]] = time.time()
 
         await self.smart_sync()
-        try:
-            bal = await self.ex.fetch_balance()
-            usdt = float(bal.get("USDT", {}).get("total", 0) or 0)
-            with STATE_LOCK:
-                SHARED_STATE["balance"] = usdt
-                SHARED_STATE["peak_balance"] = max(SHARED_STATE["peak_balance"], usdt)
-                if SHARED_STATE["day_start_balance"] <= 0:
-                    SHARED_STATE["day_start_balance"] = usdt
-        except Exception:
-            pass
+        await self.update_balance()
 
         await asyncio.gather(
             self.price_loop(),
@@ -582,38 +561,44 @@ class QuantEngine:
             self.tg.poll()
         )
 
+    async def update_balance(self):
+        try:
+            bal = await self.ex.fetch_balance()
+            usdt = float(bal.get("USDT", {}).get("total", 0) or 0)
+            with STATE_LOCK:
+                SHARED_STATE["balance"] = usdt
+                if usdt > SHARED_STATE["peak_balance"]:
+                    SHARED_STATE["peak_balance"] = usdt
+                if SHARED_STATE["day_start_balance"] <= 0:
+                    SHARED_STATE["day_start_balance"] = usdt
+            log.info(f"Balance updated: ${usdt:.2f}")
+        except Exception as e:
+            log.error(f"Balance error: {e}")
+
     async def price_loop(self):
         while True:
             try:
+                # قیمت واقعی از Phemex
                 tickers = await self.ex.fetch_tickers(SYMBOLS)
                 for s, d in tickers.items():
                     if d.get("last"):
                         self.prices[s] = float(d["last"])
-                bal = await self.ex.fetch_balance()
-                cur = float(bal.get("USDT", {}).get("total", 0) or 0)
+                await self.update_balance()
                 with STATE_LOCK:
-                    SHARED_STATE["balance"] = cur
-                    if cur > SHARED_STATE["peak_balance"]:
-                        SHARED_STATE["peak_balance"] = cur
+                    cur = SHARED_STATE["balance"]
                     peak = SHARED_STATE["peak_balance"]
                     if peak > 0:
                         dd = (peak - cur) / peak * 100
                         SHARED_STATE["current_dd"] = dd
-                        if dd >= MAX_DD:
-                            SHARED_STATE["dd_halted"] = True
-                        elif dd < MAX_DD * 0.7:
-                            SHARED_STATE["dd_halted"] = False
+                        SHARED_STATE["dd_halted"] = dd >= MAX_DD
                     day_start = SHARED_STATE["day_start_balance"]
                     if day_start > 0:
                         SHARED_STATE["daily_pnl"] = cur - day_start
-                        if (cur - day_start) / day_start * 100 <= -MAX_DAILY_LOSS:
-                            SHARED_STATE["daily_halted"] = True
-                        else:
-                            SHARED_STATE["daily_halted"] = False
+                        SHARED_STATE["daily_halted"] = ((cur - day_start) / day_start * 100) <= -MAX_DAILY_LOSS
                 await self.db.log_equity(cur, peak, SHARED_STATE["current_dd"])
             except Exception as e:
                 log.error(f"price_loop: {e}")
-            await asyncio.sleep(3)
+            await asyncio.sleep(4)
 
     async def scan_loop(self):
         while True:
@@ -625,27 +610,52 @@ class QuantEngine:
                 continue
             with STATE_LOCK:
                 SHARED_STATE["last_scan"] = time.strftime("%H:%M:%S")
+
             for sym in SYMBOLS:
                 with STATE_LOCK:
                     if any(p["symbol"] == sym for p in SHARED_STATE["active_positions"].values()):
                         continue
                 try:
                     raw5 = await self.fetch_ohlcv(sym, TIMEFRAME, 120)
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(0.2)
                     raw1 = await self.fetch_ohlcv(sym, HTF_TIMEFRAME, 80)
                     if not raw5 or len(raw5) < 50:
-                        continue  # قبلاً در fetch_ohlcv لاگ شده
-                    df5 = pd.DataFrame(raw5, columns=["ts", "open", "high", "low", "close", "volume"])
-                    df1 = pd.DataFrame(raw1, columns=["ts", "open", "high", "low", "close", "volume"]) if raw1 and len(raw1) > 20 else df5
+                        continue
+
+                    df5 = pd.DataFrame(raw5, columns=["ts","open","high","low","close","volume"])
+                    df1 = pd.DataFrame(raw1, columns=["ts","open","high","low","close","volume"]) if raw1 and len(raw1)>20 else df5
                     sig = self.strategy.analyze(df5, df1)
-                    await self.db.log_decision(sym, sig["action"], sig.get("strat", ""), sig.get("reason", ""),
-                                               self.prices.get(sym, 0), sig.get("rsi", 0), sig.get("atr", 0), sig.get("htf", ""))
-                    if sig["action"] != "neutral":
+
+                    # چک اختلاف قیمت
+                    phemex_price = self.prices.get(sym)
+                    binance_price = float(df5["close"].iloc[-1])
+                    if phemex_price and binance_price > 0:
+                        diff_pct = abs(phemex_price - binance_price) / binance_price * 100
+                        if diff_pct > MAX_PRICE_DIFF:
+                            await self.db.log_decision(sym, "neutral", "", f"اختلاف قیمت بالا ({diff_pct:.2f}%)",
+                                                       price=phemex_price, extra=f"Binance={binance_price:.4f}")
+                            continue
+
+                    await self.db.log_decision(sym, sig["action"], sig.get("strat",""), sig.get("reason",""),
+                                               phemex_price or 0, sig.get("rsi",0), sig.get("atr",0), sig.get("htf",""))
+
+                    if sig["action"] != "neutral" and phemex_price:
+                        # SL/TP را بر اساس قیمت واقعی Phemex تنظیم کن
+                        atr = sig.get("atr", 0)
+                        if atr > 0:
+                            if sig["action"] == "buy":
+                                sig["sl"] = phemex_price - atr * 1.5
+                                sig["tp"] = phemex_price + atr * 2.8
+                                sig["tp1"] = phemex_price + atr * 1.4
+                            else:
+                                sig["sl"] = phemex_price + atr * 1.5
+                                sig["tp"] = phemex_price - atr * 2.8
+                                sig["tp1"] = phemex_price - atr * 1.4
                         await self.execute_trade(sym, sig)
+
                 except Exception as e:
                     log.error(f"scan {sym}: {e}")
-                    await self.db.log_decision(sym, "neutral", "", f"خطای اسکن: {str(e)[:100]}")
-                await asyncio.sleep(0.4)
+                await asyncio.sleep(0.35)
             await asyncio.sleep(18)
 
     async def execute_trade(self, sym: str, sig: dict):
@@ -659,7 +669,7 @@ class QuantEngine:
             free = float(bal_data.get("USDT", {}).get("free", 0) or 0)
             qty = self.risk.calculate_qty(bal, price, sig["sl"], free, sym, self.ex)
             if qty <= 0:
-                await self.db.log_decision(sym, "rejected", sig.get("strat", ""), "حجم صفر")
+                await self.db.log_decision(sym, "rejected", sig.get("strat",""), "حجم صفر")
                 return
             order = await self.ex.create_market_order(sym, sig["action"], qty)
             fill = float(order.get("average") or price)
@@ -673,67 +683,53 @@ class QuantEngine:
                 SHARED_STATE["active_positions"][pid] = pos
             self.open_times[pid] = time.time()
             await self.db.insert_trade(pos)
-            await self.tg.send(f"🎯 <b>ورود {sig['action'].upper()}</b> ({sig['strat']})\n{sym} @ {fill:.4f}\nQty: {qty:.4f}")
-            try:
-                sl_side = "sell" if sig["action"] == "buy" else "buy"
-                await self.ex.create_order(sym, "stop", sl_side, qty, None,
-                                           params={"stopPrice": sig["sl"], "reduceOnly": True})
-            except Exception as e:
-                log.warning(f"Exchange SL failed: {e}")
+            await self.tg.send(f"🎯 <b>ورود {sig['action'].upper()}</b> ({sig['strat']})\n{sym} @ {fill:.4f}")
         except Exception as e:
             log.error(f"execute: {e}")
-            await self.db.log_decision(sym, "rejected", sig.get("strat", ""), str(e)[:90])
+            await self.db.log_decision(sym, "rejected", sig.get("strat",""), str(e)[:100])
 
     async def real_test_trade(self):
-        await self.tg.send("⚡ <b>شروع تست واقعی ۳۰ ثانیه‌ای روی ADA...</b>")
+        await self.tg.send("⚡ شروع تست واقعی ۳۰ ثانیه‌ای...")
         try:
-            bal = await self.ex.fetch_balance()
-            free = float(bal.get("USDT", {}).get("free", 0) or 0)
+            await self.update_balance()
+            with STATE_LOCK:
+                free = SHARED_STATE["balance"]
             if free < 20:
-                await self.tg.send("❌ موجودی آزاد کافی نیست")
+                await self.tg.send("❌ موجودی کافی نیست")
                 return
             price = self.prices.get(TEST_SYMBOL)
             if not price:
-                await self.tg.send("❌ قیمت ADA در دسترس نیست")
+                await self.tg.send("❌ قیمت در دسترس نیست")
                 return
-            qty = float(self.ex.amount_to_precision(TEST_SYMBOL, min(TEST_USD, free * 0.08) / price))
-            if qty * price < 5:
-                await self.tg.send("❌ حجم تست خیلی کوچک است")
-                return
+            qty = float(self.ex.amount_to_precision(TEST_SYMBOL, min(TEST_USD, free*0.08)/price))
             order = await self.ex.create_market_order(TEST_SYMBOL, "buy", qty)
             fill = float(order.get("average") or price)
             pid = f"test_{uuid.uuid4().hex[:6]}"
-            pos = {
-                "id": pid, "symbol": TEST_SYMBOL, "side": "buy", "strategy": "RealTest",
-                "entry": fill, "qty": qty, "sl": fill * 0.97, "tp": fill * 1.03, "tp1": fill * 1.015,
-                "is_partial": 0, "highest_pnl_pct": 0.0
-            }
+            pos = {"id": pid, "symbol": TEST_SYMBOL, "side": "buy", "strategy": "RealTest",
+                   "entry": fill, "qty": qty, "sl": fill*0.97, "tp": fill*1.03, "tp1": fill*1.015,
+                   "is_partial": 0, "highest_pnl_pct": 0.0}
             with STATE_LOCK:
                 SHARED_STATE["active_positions"][pid] = pos
             self.open_times[pid] = time.time()
-            await self.tg.send(f"🧪 پوزیشن تست باز شد\n{TEST_SYMBOL} @ {fill:.5f}\nQty: {qty:.2f}\n۳۰ ثانیه صبر...")
+            await self.tg.send(f"🧪 تست باز شد @ {fill:.5f}\n۳۰ ثانیه صبر...")
             await asyncio.sleep(30)
-            await self.force_close(pid, "RealTest 30s completed")
-            await self.tg.send("✅ <b>تست واقعی با موفقیت انجام و بسته شد</b>")
+            await self.force_close(pid, "RealTest completed")
+            await self.tg.send("✅ تست واقعی با موفقیت بسته شد")
         except Exception as e:
-            await self.tg.send(f"❌ خطا در تست واقعی: {e}")
-            log.error(f"real_test: {e}")
+            await self.tg.send(f"❌ خطا: {e}")
 
     async def smart_sync(self):
         try:
             remote = await self.ex.fetch_positions()
             active = set()
             for p in remote:
-                size = abs(float(p.get("contracts") or 0))
-                if size <= 0:
-                    continue
-                raw = p.get("symbol", "")
-                matched = next((s for s in SYMBOLS if s.split("/")[0] in raw), None)
-                if matched:
-                    active.add(matched)
+                if abs(float(p.get("contracts") or 0)) > 0:
+                    raw = p.get("symbol", "")
+                    matched = next((s for s in SYMBOLS if s.split("/")[0] in raw), None)
+                    if matched: active.add(matched)
             with STATE_LOCK:
                 to_del = [pid for pid, p in SHARED_STATE["active_positions"].items()
-                          if p["symbol"] not in active and p["strategy"] not in ("RealTest", "LiveTest")]
+                          if p["symbol"] not in active and p["strategy"] != "RealTest"]
             for pid in to_del:
                 await self.db.close_trade(pid, 0.0, reason="remote close")
                 with STATE_LOCK:
@@ -744,24 +740,22 @@ class QuantEngine:
     async def force_close(self, pid: str, reason: str):
         with STATE_LOCK:
             pos = SHARED_STATE["active_positions"].get(pid)
-        if not pos:
-            return
+        if not pos: return
         price = self.prices.get(pos["symbol"], pos["entry"])
         hold = time.time() - self.open_times.get(pid, time.time())
         try:
             close_side = "sell" if pos["side"] == "buy" else "buy"
             await self.ex.create_market_order(pos["symbol"], close_side, pos["qty"], params={"reduceOnly": True})
-            raw_pnl = (price - pos["entry"]) * pos["qty"] * (1 if pos["side"] == "buy" else -1)
-            fees = abs(raw_pnl) * TAKER_FEE * 2 * FEE_BUFFER if raw_pnl != 0 else pos["qty"] * price * TAKER_FEE * 2
+            raw_pnl = (price - pos["entry"]) * pos["qty"] * (1 if pos["side"]=="buy" else -1)
+            fees = abs(raw_pnl) * TAKER_FEE * 2 * FEE_BUFFER
             net = raw_pnl - fees
-            if pos["strategy"] not in ("RealTest", "LiveTest"):
+            if pos["strategy"] != "RealTest":
                 await self.db.close_trade(pid, net, fees, reason, hold)
             with STATE_LOCK:
                 SHARED_STATE["active_positions"].pop(pid, None)
             self.open_times.pop(pid, None)
             await self.db.update_analytics()
-            icon = "🟢" if net >= 0 else "🔴"
-            await self.tg.send(f"{icon} <b>بسته شد</b> ({reason})\n{pos['symbol']} | Net ${net:.2f}")
+            await self.tg.send(f"{'🟢' if net>=0 else '🔴'} بسته شد ({reason}) | ${net:.2f}")
         except Exception as e:
             log.error(f"force_close: {e}")
 
@@ -770,41 +764,38 @@ class QuantEngine:
             with STATE_LOCK:
                 items = list(SHARED_STATE["active_positions"].items())
             for pid, pos in items:
-                if pos["strategy"] in ("RealTest", "LiveTest"):
-                    continue
+                if pos["strategy"] == "RealTest": continue
                 price = self.prices.get(pos["symbol"])
-                if not price:
-                    continue
-                pnl_pct = ((price - pos["entry"]) / pos["entry"] * 100) if pos["side"] == "buy" else ((pos["entry"] - price) / pos["entry"] * 100)
+                if not price: continue
+                pnl_pct = ((price - pos["entry"]) / pos["entry"] * 100) if pos["side"]=="buy" else ((pos["entry"] - price)/pos["entry"]*100)
                 if pnl_pct > TRAIL_ACT and pnl_pct > pos["highest_pnl_pct"]:
                     pos["highest_pnl_pct"] = pnl_pct
-                    new_sl = price * (1 - TRAIL_STEP / 100) if pos["side"] == "buy" else price * (1 + TRAIL_STEP / 100)
-                    if (pos["side"] == "buy" and new_sl > pos["sl"]) or (pos["side"] == "sell" and new_sl < pos["sl"]):
+                    new_sl = price*(1-TRAIL_STEP/100) if pos["side"]=="buy" else price*(1+TRAIL_STEP/100)
+                    if (pos["side"]=="buy" and new_sl > pos["sl"]) or (pos["side"]=="sell" and new_sl < pos["sl"]):
                         pos["sl"] = new_sl
                         await self.db.update_trade(pid, pos["qty"], pos["sl"], pos["is_partial"], pos["highest_pnl_pct"])
-                if PARTIAL_TP and pos["is_partial"] == 0:
-                    hit = (pos["side"] == "buy" and price >= pos["tp1"]) or (pos["side"] == "sell" and price <= pos["tp1"])
+                if PARTIAL_TP and pos["is_partial"]==0:
+                    hit = (pos["side"]=="buy" and price >= pos["tp1"]) or (pos["side"]=="sell" and price <= pos["tp1"])
                     if hit:
                         try:
-                            half = float(self.ex.amount_to_precision(pos["symbol"], pos["qty"] / 2))
+                            half = float(self.ex.amount_to_precision(pos["symbol"], pos["qty"]/2))
                             if half > 0:
-                                close_side = "sell" if pos["side"] == "buy" else "buy"
-                                await self.ex.create_market_order(pos["symbol"], close_side, half, params={"reduceOnly": True})
+                                close_side = "sell" if pos["side"]=="buy" else "buy"
+                                await self.ex.create_market_order(pos["symbol"], close_side, half, params={"reduceOnly":True})
                                 pos["qty"] -= half
                                 pos["is_partial"] = 1
                                 pos["sl"] = pos["entry"]
                                 await self.db.update_trade(pid, pos["qty"], pos["sl"], 1, pos["highest_pnl_pct"])
-                                await self.tg.send(f"🔹 Partial TP → Break-even  {pos['symbol']}")
-                        except Exception:
-                            pass
-                sl_hit = (pos["side"] == "buy" and price <= pos["sl"]) or (pos["side"] == "sell" and price >= pos["sl"])
-                tp_hit = (pos["side"] == "buy" and price >= pos["tp"]) or (pos["side"] == "sell" and price <= pos["tp"])
+                                await self.tg.send(f"🔹 Partial TP → BE  {pos['symbol']}")
+                        except: pass
+                sl_hit = (pos["side"]=="buy" and price <= pos["sl"]) or (pos["side"]=="sell" and price >= pos["sl"])
+                tp_hit = (pos["side"]=="buy" and price >= pos["tp"]) or (pos["side"]=="sell" and price <= pos["tp"])
                 if sl_hit or tp_hit:
                     await self.force_close(pid, "SL/Trail" if sl_hit else "TP")
             await asyncio.sleep(1.5)
 
 # ============================================================================
-# 9. WEB DASHBOARD (بدون پسورد)
+# 9. WEB DASHBOARD
 # ============================================================================
 app = Flask(__name__)
 
@@ -815,49 +806,40 @@ def api_status():
 
 @app.route("/")
 def dashboard():
-    html = """
+    return render_template_string("""
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Master Quant v13.3</title>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quant v13.4 Hybrid</title>
 <style>
-  :root { --bg:#0d1117; --card:#161b22; --border:#30363d; --text:#c9d1d9; --accent:#58a6ff; --green:#3fb950; }
-  body { font-family: system-ui; background:var(--bg); color:var(--text); padding:20px; }
-  h1 { color:var(--accent); }
-  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin:20px 0; }
-  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px; }
-  .value { font-size:1.4rem; font-weight:700; color:var(--accent); }
+body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
+h1{color:#58a6ff}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:20px 0}
+.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:14px}
+.value{font-size:1.4rem;font-weight:700;color:#58a6ff}
 </style>
 </head>
 <body>
-  <h1>🚀 Master Quant v13.3</h1>
-  <div class="grid">
-    <div class="card">موجودی<div class="value" id="balance">0.00</div></div>
-    <div class="card">پوزیشن‌ها<div class="value" id="pos">0</div></div>
-    <div class="card">PnL<div class="value" id="pnl">0.00</div></div>
-    <div class="card">Win Rate<div class="value" id="wr">0%</div></div>
-  </div>
-  <p>آخرین اسکن: <span id="lastscan">–</span></p>
+<h1>🚀 Master Quant v13.4 Hybrid</h1>
+<div class="grid">
+<div class="card">موجودی<div class="value" id="bal">0.00</div></div>
+<div class="card">پوزیشن<div class="value" id="pos">0</div></div>
+<div class="card">PnL<div class="value" id="pnl">0.00</div></div>
+<div class="card">Win Rate<div class="value" id="wr">0%</div></div>
+</div>
+<p>آخرین اسکن: <span id="scan">–</span></p>
 <script>
-async function refresh() {
-  try {
-    const r = await fetch('/api/status');
-    const d = await r.json();
-    document.getElementById('balance').textContent = (d.balance||0).toFixed(2);
-    document.getElementById('pos').textContent = Object.keys(d.active_positions||{}).length;
-    document.getElementById('pnl').textContent = (d.stats?.total_pnl||0).toFixed(2);
-    document.getElementById('wr').textContent = (d.stats?.win_rate||0)+'%';
-    document.getElementById('lastscan').textContent = d.last_scan||'–';
-  } catch(e){}
-}
-refresh(); setInterval(refresh, 4000);
+async function r(){try{const d=await(await fetch('/api/status')).json();
+document.getElementById('bal').textContent=(d.balance||0).toFixed(2);
+document.getElementById('pos').textContent=Object.keys(d.active_positions||{}).length;
+document.getElementById('pnl').textContent=(d.stats?.total_pnl||0).toFixed(2);
+document.getElementById('wr').textContent=(d.stats?.win_rate||0)+'%';
+document.getElementById('scan').textContent=d.last_scan||'–';}catch(e){}}
+r();setInterval(r,4000);
 </script>
-</body>
-</html>
-"""
-    return render_template_string(html)
+</body></html>
+""")
 
 def run_web():
     app.run(host="0.0.0.0", port=10000, debug=False, use_reloader=False)
