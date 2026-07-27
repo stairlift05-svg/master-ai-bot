@@ -6,4 +6,3 @@ Flask-HTTPAuth==4.8.0
 python-dotenv==1.2.2
 aiohttp==3.14.1
 aiosqlite==0.20.0
-requests==2.34.2
