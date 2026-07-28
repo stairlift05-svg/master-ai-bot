@@ -40,25 +40,22 @@ TG_CHAT    = os.getenv("TELEGRAM_CHAT_ID", "")
 
 SYMBOLS = [
     "ETH/USDT:USDT",
-    "BNB/USDT:USDT",
     "XRP/USDT:USDT",
     "DOT/USDT:USDT",
-    "AVAX/USDT:USDT",
-    "DOGE/USDT:USDT",
     "SOL/USDT:USDT",
-    "LINK/USDT:USDT",
-    "ADA/USDT:USDT",
+    "DOGE/USDT:USDT",
+    "BNB/USDT:USDT",
 ]
 
 STRATEGY_PARAMS = {
     "EMA_QQE_KST": {"sl_m": 1.40, "tp_m": 3.0, "tp1_m": 1.65},
 }
 
-TIMEFRAME = "15m"          # برای کیفیت بالاتر سیگنال‌های EMA/QQE/KST
+TIMEFRAME = "5m"           # Phemex این تایم‌فریم را بدون خطا قبول می‌کند
 HTF_TIMEFRAME = "1h"
 RISK_PCT = 0.45
 LEVERAGE = 5
-MAX_POS = 7
+MAX_POS = 6
 MAX_DD = 8.0
 MAX_DAILY_LOSS = 4.0
 MIN_ORDER_USD = 16.0
@@ -624,7 +621,7 @@ class TelegramController:
             while True:
                 await asyncio.sleep(60)
             return
-        await self.send("🚀 <b>Master Quant v15.5</b>\nEMA 9/21 + QQE + KST | ۹ نماد", self.menu())
+        await self.send("🚀 <b>Master Quant v15.5</b>\nEMA 9/21 + QQE + KST | ۶ نماد | 5m", self.menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -725,7 +722,7 @@ class QuantEngine:
 
     async def start(self):
         await self.db.init()
-        log.info("v15.5 Phemex-Only starting (EMA+QQE+KST | 9 symbols)...")
+        log.info("v15.5 Phemex-Only starting (EMA+QQE+KST | 6 symbols)...")
 
         try:
             await self.ex.load_markets()
@@ -733,8 +730,9 @@ class QuantEngine:
         except Exception as e:
             log.error(f"load_markets: {e}")
 
+        # Phemex requires a symbol argument for set_position_mode
         try:
-            await self.ex.set_position_mode(False)
+            await self.ex.set_position_mode(False, SYMBOLS[0])
             log.info("Position mode → One-Way")
         except Exception as e:
             log.warning(f"Position mode: {e}")
@@ -919,7 +917,7 @@ class QuantEngine:
             await self.db.log_decision(sym, "rejected", sig.get("strat", ""), err[:120])
             if "20004" in err or "INCONSISTENT" in err.upper():
                 try:
-                    await self.ex.set_position_mode(False)
+                    await self.ex.set_position_mode(False, sym)
                 except Exception:
                     pass
 
@@ -1183,7 +1181,7 @@ if __name__ == "__main__":
             traceback.print_exc()
 
     try:
-        print("=== Master Quant v15.5 starting (EMA+QQE+KST | 9 symbols) ===", flush=True)
+        print("=== Master Quant v15.5 starting (EMA+QQE+KST | 6 symbols | 5m) ===", flush=True)
         Thread(target=run_web, daemon=True).start()
         time.sleep(1)
         engine = QuantEngine()
