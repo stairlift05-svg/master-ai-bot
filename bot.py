@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v15.2 – Phemex-Only (Improved)
-- فیکس دیتای کندل (RSI=100 و ATR صفر)
+Master Quant Engine v15.3 – Phemex-Only (ccxt Candles)
+- دریافت کندل فقط از طریق ccxt (پایدارتر)
 - کنترل بهتر Partial TP و BE
-- کول‌داون بعد از بستن معامله برای جلوگیری از اسپم
+- کول‌داون بعد از بستن معامله
 - ۱۰ جفت‌ارز بدون بیت‌کوین
 """
 
@@ -56,11 +56,6 @@ STRATEGY_PARAMS = {
     "Volume_Surge":        {"sl_m": 1.30, "tp_m": 2.6, "tp1_m": 1.35},
 }
 
-RESOLUTION = {
-    "1m": 60, "5m": 300, "15m": 900, "30m": 1800,
-    "1h": 3600, "4h": 14400, "1d": 86400,
-}
-
 TIMEFRAME = "5m"
 HTF_TIMEFRAME = "1h"
 RISK_PCT = 0.40
@@ -75,23 +70,23 @@ FEE_BUFFER = 1.25
 TRAIL_ACT = 2.8
 TRAIL_STEP = 0.8
 PARTIAL_TP = True
-MIN_HOLD_FOR_PARTIAL = 420          # حداقل ۷ دقیقه قبل از Partial
-MIN_HOLD_FOR_TRAIL = 600            # حداقل ۱۰ دقیقه قبل از تریل
-MIN_PROFIT_FOR_BE = 0.35            # حداقل ۰.۳۵٪ سود قبل از انتقال به BE
+MIN_HOLD_FOR_PARTIAL = 420
+MIN_HOLD_FOR_TRAIL = 600
+MIN_PROFIT_FOR_BE = 0.35
 TEST_SYMBOL = "ADA/USDT:USDT"
 TEST_USD = 12.0
 CONSECUTIVE_LOSS_LIMIT = 2
 SYMBOL_COOLDOWN_HOURS = 3
-POST_CLOSE_COOLDOWN = 900           # ۱۵ دقیقه کول‌داون بعد از بستن معامله
+POST_CLOSE_COOLDOWN = 900
 SCAN_INTERVAL = 45
-SYMBOL_DELAY = 1.1
+SYMBOL_DELAY = 1.0
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("QuantV15.2")
+log = logging.getLogger("QuantV15.3")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True,
@@ -229,7 +224,7 @@ class Database:
 
         lines = [
             "=" * 70,
-            "       MASTER QUANT ENGINE v15.2 – Phemex-Only REPORT",
+            "       MASTER QUANT ENGINE v15.3 – Phemex-Only (ccxt) REPORT",
             f"       Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
             "=" * 70,
             "",
@@ -368,7 +363,6 @@ class StrategyEngine:
         if len(df) < 55 or len(htf) < 35:
             return {"action": "neutral", "reason": "داده ناکافی", "strat": "", "rsi": 0, "atr": 0, "htf": ""}
 
-        # اعتبارسنجی کیفیت داده
         if df["close"].iloc[-1] <= 0 or df["high"].iloc[-1] <= 0:
             return {"action": "neutral", "reason": "داده قیمت نامعتبر", "strat": "", "rsi": 0, "atr": 0, "htf": ""}
 
@@ -399,7 +393,6 @@ class StrategyEngine:
         rsi = float(rsi_s.iloc[-1])
         rsi_p = float(rsi_s.iloc[-2])
 
-        # رد کردن RSI غیرمنطقی
         if rsi >= 99.5 or rsi <= 0.5 or pd.isna(rsi):
             return {"action": "neutral", "reason": f"RSI نامعتبر ({rsi:.1f})", "strat": "", "rsi": rsi, "atr": atr, "htf": htf_trend}
 
@@ -412,7 +405,6 @@ class StrategyEngine:
         l10 = float(Indicators.lowest(low, 10).iloc[-1])
         vol_ok = vcur > vsma * 1.08
 
-        # شرایط ورود کمی سخت‌تر برای کیفیت بهتر
         if htf_trend == "bullish" and price > ema20 and price >= h10 * 0.997 and 38 < rsi < 78 and vol_ok:
             return self._build("buy", "Breakout_Momentum", price, atr, rsi, htf_trend)
         if htf_trend == "bearish" and price < ema20 and price <= l10 * 1.003 and 22 < rsi < 58 and vol_ok:
@@ -521,7 +513,7 @@ class TelegramController:
             while True:
                 await asyncio.sleep(60)
             return
-        await self.send("🚀 <b>Master Quant v15.2 Phemex-Only Online</b>\nفیکس دیتا + کنترل بهتر ریسک", self.menu())
+        await self.send("🚀 <b>Master Quant v15.3 Phemex-Only (ccxt)</b>\nکندل از طریق ccxt", self.menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -552,7 +544,7 @@ class TelegramController:
                                 with STATE_LOCK:
                                     st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>Dashboard v15.2</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
+                                    f"📊 <b>Dashboard v15.3</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
                                     f"DD: {st['current_dd']:.1f}% | Pos: {len(st['active_positions'])}/{MAX_POS}\n"
                                     f"PnL: ${st['stats']['total_pnl']:.2f} | WR: {st['stats']['win_rate']}%\n"
                                     f"Last: {st['last_scan']}", self.menu())
@@ -573,7 +565,7 @@ class TelegramController:
                                 report = await self.engine.db.generate_txt_report(self.engine.prices)
                                 with open("report.txt", "w", encoding="utf-8") as f:
                                     f.write(report)
-                                await self.send_document("report.txt", "📄 Report v15.2")
+                                await self.send_document("report.txt", "📄 Report v15.3")
                             elif d == "cmd_rej":
                                 decs = await self.engine.db.get_recent_decisions(12)
                                 msg = "🚫 <b>Last decisions</b>\n\n"
@@ -603,121 +595,28 @@ class QuantEngine:
         })
         self.ex.set_sandbox_mode(TESTNET)
 
-        self.base_url = "https://testnet-api.phemex.com" if TESTNET else "https://api.phemex.com"
         self.prices: Dict[str, float] = {}
         self.open_times: Dict[str, float] = {}
-        self._session: Optional[aiohttp.ClientSession] = None
-        self._kline_symbol_cache: Dict[str, str] = {}
-
-    async def get_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
-
-    def _symbol_candidates(self, symbol: str) -> List[str]:
-        if symbol in self._kline_symbol_cache:
-            return [self._kline_symbol_cache[symbol]]
-        market = self.ex.markets.get(symbol) or {}
-        mid = market.get("id") or ""
-        base = symbol.split("/")[0]
-        candidates = []
-        if mid:
-            candidates.append(mid)
-        candidates += [f"{base}USDT", f".{base}USDT", f"{base}USD", f"{base}USDT".lower()]
-        seen = set()
-        out = []
-        for c in candidates:
-            if c and c not in seen:
-                seen.add(c)
-                out.append(c)
-        return out
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> list:
-        resolution = RESOLUTION.get(timeframe)
-        if not resolution:
+        """دریافت کندل از طریق ccxt (پایدار و بدون مشکل مقیاس)"""
+        try:
+            candles = await self.ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+            if not candles or len(candles) < 40:
+                return []
+            # اعتبارسنجی ساده
+            last_close = candles[-1][4]
+            if last_close <= 0 or last_close > 1e7:
+                return []
+            return candles
+        except Exception as e:
+            log.warning(f"fetch_ohlcv {symbol} {timeframe}: {e}")
+            await self.db.log_decision(symbol, "neutral", "", f"خطا در دریافت کندل: {str(e)[:80]}")
             return []
-
-        limit = 100 if limit > 50 else max(50, min(limit, 100))
-        if limit not in (50, 100, 500):
-            limit = 100
-
-        session = await self.get_session()
-        endpoints = [
-            f"{self.base_url}/exchange/public/md/v2/kline",
-            f"{self.base_url}/exchange/public/md/v2/kline/last",
-        ]
-        candidates = self._symbol_candidates(symbol)
-
-        for sym_id in candidates:
-            for url in endpoints:
-                try:
-                    params = {"symbol": sym_id, "resolution": resolution, "limit": limit}
-                    async with session.get(url, params=params, timeout=12) as resp:
-                        if resp.status != 200:
-                            continue
-                        data = await resp.json()
-                        if not isinstance(data, dict):
-                            continue
-                        if data.get("code") not in (0, "0", None):
-                            continue
-                        rows = (data.get("data") or {}).get("rows") or data.get("rows")
-                        if not rows or not isinstance(rows, list) or len(rows) < 40:
-                            continue
-
-                        candles = []
-                        for row in rows:
-                            try:
-                                if len(row) < 8:
-                                    continue
-                                ts = int(row[0])
-                                o = float(row[3])
-                                h = float(row[4])
-                                l = float(row[5])
-                                c = float(row[6])
-                                v = float(row[7]) if len(row) > 7 else 0.0
-
-                                # تشخیص و اصلاح مقیاس قیمت Phemex
-                                if o > 1e8:
-                                    scale = 1e-8
-                                elif o > 1e6:
-                                    scale = 1e-4
-                                elif o > 1e5:
-                                    scale = 1e-3
-                                else:
-                                    scale = 1.0
-
-                                o, h, l, c = o * scale, h * scale, l * scale, c * scale
-
-                                if ts < 1e12:
-                                    ts *= 1000
-                                if c <= 0 or h <= 0 or l <= 0 or h < l:
-                                    continue
-                                # فیلتر قیمت‌های غیرمنطقی
-                                if c > 1e6 or c < 1e-8:
-                                    continue
-                                candles.append([ts, o, h, l, c, v])
-                            except Exception:
-                                continue
-
-                        if len(candles) >= 45:
-                            candles.sort(key=lambda x: x[0])
-                            # اعتبارسنجی نهایی
-                            closes = [x[4] for x in candles[-20:]]
-                            if max(closes) / (min(closes) + 1e-12) > 50:  # نوسان غیرعادی
-                                continue
-                            self._kline_symbol_cache[symbol] = sym_id
-                            log.info(f"OHLCV OK {symbol} ← {sym_id} ({len(candles)} bars)")
-                            return candles[-limit:]
-                except Exception as e:
-                    log.debug(f"OHLCV {sym_id}: {e}")
-                    continue
-
-        await self.db.log_decision(symbol, "neutral", "", "OHLCV خالی یا نامعتبر از Phemex")
-        return []
 
     async def start(self):
         await self.db.init()
-        log.info("v15.2 Phemex-Only starting...")
+        log.info("v15.3 Phemex-Only (ccxt candles) starting...")
 
         try:
             await self.ex.load_markets()
@@ -862,7 +761,7 @@ class QuantEngine:
                         await self.execute_trade(sym, sig)
                 except Exception as e:
                     log.error(f"scan {sym}: {e}")
-                await asyncio.sleep(0.35)
+                await asyncio.sleep(0.3)
 
             await asyncio.sleep(SCAN_INTERVAL)
 
@@ -1034,7 +933,6 @@ class QuantEngine:
             self.open_times.pop(pid, None)
             await self.db.update_analytics()
 
-            # کول‌داون بعد از بستن معامله
             SYMBOL_POST_CLOSE_COOLDOWN[pos["symbol"]] = time.time() + POST_CLOSE_COOLDOWN
 
             sym = pos["symbol"]
@@ -1077,7 +975,6 @@ class QuantEngine:
                     else (pos["entry"] - price) / pos["entry"] * 100
                 )
 
-                # تریلینگ فقط بعد از زمان کافی و سود مناسب
                 if can_trail and pnl_pct > TRAIL_ACT and pnl_pct > pos["highest_pnl_pct"]:
                     pos["highest_pnl_pct"] = pnl_pct
                     new_sl = price * (1 - TRAIL_STEP / 100) if pos["side"] == "buy" else price * (1 + TRAIL_STEP / 100)
@@ -1085,7 +982,6 @@ class QuantEngine:
                         pos["sl"] = new_sl
                         await self.db.update_trade(pid, pos["qty"], pos["sl"], pos["is_partial"], pos["highest_pnl_pct"])
 
-                # Partial TP فقط بعد از زمان کافی و سود واقعی
                 if PARTIAL_TP and pos["is_partial"] == 0 and can_partial:
                     hit_tp1 = (
                         (pos["side"] == "buy" and price >= pos["tp1"])
@@ -1100,7 +996,6 @@ class QuantEngine:
                                     pos["symbol"], close_side, half, params={"reduceOnly": True})
                                 pos["qty"] -= half
                                 pos["is_partial"] = 1
-                                # فقط اگر سود کافی باشد به BE منتقل کن
                                 if pnl_pct >= MIN_PROFIT_FOR_BE:
                                     pos["sl"] = pos["entry"]
                                 await self.db.update_trade(pid, pos["qty"], pos["sl"], 1, pos["highest_pnl_pct"])
@@ -1135,7 +1030,7 @@ def dashboard():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Quant v15.2</title>
+<title>Quant v15.3</title>
 <style>
 body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
 h1{color:#58a6ff}
@@ -1145,7 +1040,7 @@ h1{color:#58a6ff}
 </style>
 </head>
 <body>
-<h1>🚀 Master Quant v15.2 Phemex-Only</h1>
+<h1>🚀 Master Quant v15.3 (ccxt)</h1>
 <div class="grid">
 <div class="card">موجودی<div class="value" id="bal">0.00</div></div>
 <div class="card">پوزیشن<div class="value" id="pos">0</div></div>
@@ -1180,7 +1075,7 @@ if __name__ == "__main__":
             traceback.print_exc()
 
     try:
-        print("=== Master Quant v15.2 Phemex-Only starting ===", flush=True)
+        print("=== Master Quant v15.3 Phemex-Only (ccxt) starting ===", flush=True)
         Thread(target=run_web, daemon=True).start()
         time.sleep(1)
         engine = QuantEngine()
