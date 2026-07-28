@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v15.1 – Phemex-Only (Clean)
-- کندل فقط از Phemex
-- معامله فقط از Phemex
+Master Quant Engine v15.2 – Phemex-Only (Improved)
+- فیکس دیتای کندل (RSI=100 و ATR صفر)
+- کنترل بهتر Partial TP و BE
+- کول‌داون بعد از بستن معامله برای جلوگیری از اسپم
 - ۱۰ جفت‌ارز بدون بیت‌کوین
-- شرایط RSI کمی شل‌تر شده
 """
 
 import asyncio
@@ -50,10 +50,10 @@ SYMBOLS = [
 ]
 
 STRATEGY_PARAMS = {
-    "Breakout_Momentum":   {"sl_m": 1.25, "tp_m": 3.6, "tp1_m": 1.9},
-    "MTF_Pullback":        {"sl_m": 1.40, "tp_m": 3.0, "tp1_m": 1.5},
-    "SuperTrend_Pullback": {"sl_m": 1.30, "tp_m": 2.8, "tp1_m": 1.4},
-    "Volume_Surge":        {"sl_m": 1.25, "tp_m": 2.5, "tp1_m": 1.3},
+    "Breakout_Momentum":   {"sl_m": 1.30, "tp_m": 3.4, "tp1_m": 1.8},
+    "MTF_Pullback":        {"sl_m": 1.40, "tp_m": 2.9, "tp1_m": 1.5},
+    "SuperTrend_Pullback": {"sl_m": 1.35, "tp_m": 2.7, "tp1_m": 1.4},
+    "Volume_Surge":        {"sl_m": 1.30, "tp_m": 2.6, "tp1_m": 1.35},
 }
 
 RESOLUTION = {
@@ -63,32 +63,35 @@ RESOLUTION = {
 
 TIMEFRAME = "5m"
 HTF_TIMEFRAME = "1h"
-RISK_PCT = 0.45
+RISK_PCT = 0.40
 LEVERAGE = 5
-MAX_POS = 10
+MAX_POS = 8
 MAX_DD = 8.0
 MAX_DAILY_LOSS = 4.0
 MIN_ORDER_USD = 16.0
-MAX_EXPOSURE_PCT = 35.0
+MAX_EXPOSURE_PCT = 32.0
 TAKER_FEE = 0.0006
-FEE_BUFFER = 1.2
-TRAIL_ACT = 2.4
-TRAIL_STEP = 0.7
+FEE_BUFFER = 1.25
+TRAIL_ACT = 2.8
+TRAIL_STEP = 0.8
 PARTIAL_TP = True
-MIN_HOLD_FOR_TRAIL = 480
+MIN_HOLD_FOR_PARTIAL = 420          # حداقل ۷ دقیقه قبل از Partial
+MIN_HOLD_FOR_TRAIL = 600            # حداقل ۱۰ دقیقه قبل از تریل
+MIN_PROFIT_FOR_BE = 0.35            # حداقل ۰.۳۵٪ سود قبل از انتقال به BE
 TEST_SYMBOL = "ADA/USDT:USDT"
 TEST_USD = 12.0
 CONSECUTIVE_LOSS_LIMIT = 2
-SYMBOL_COOLDOWN_HOURS = 4
-SCAN_INTERVAL = 40
-SYMBOL_DELAY = 1.0
+SYMBOL_COOLDOWN_HOURS = 3
+POST_CLOSE_COOLDOWN = 900           # ۱۵ دقیقه کول‌داون بعد از بستن معامله
+SCAN_INTERVAL = 45
+SYMBOL_DELAY = 1.1
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("QuantV15.1")
+log = logging.getLogger("QuantV15.2")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True,
@@ -107,6 +110,7 @@ SHARED_STATE: Dict[str, Any] = {
 STATE_LOCK = Lock()
 SYMBOL_ERROR_COOLDOWN: Dict[str, float] = {}
 SYMBOL_ERROR_COUNT: Dict[str, int] = {}
+SYMBOL_POST_CLOSE_COOLDOWN: Dict[str, float] = {}
 
 # ===================== DATABASE =====================
 class Database:
@@ -225,7 +229,7 @@ class Database:
 
         lines = [
             "=" * 70,
-            "       MASTER QUANT ENGINE v15.1 – Phemex-Only REPORT",
+            "       MASTER QUANT ENGINE v15.2 – Phemex-Only REPORT",
             f"       Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
             "=" * 70,
             "",
@@ -364,6 +368,10 @@ class StrategyEngine:
         if len(df) < 55 or len(htf) < 35:
             return {"action": "neutral", "reason": "داده ناکافی", "strat": "", "rsi": 0, "atr": 0, "htf": ""}
 
+        # اعتبارسنجی کیفیت داده
+        if df["close"].iloc[-1] <= 0 or df["high"].iloc[-1] <= 0:
+            return {"action": "neutral", "reason": "داده قیمت نامعتبر", "strat": "", "rsi": 0, "atr": 0, "htf": ""}
+
         hclose = htf["close"]
         e50 = hclose.ewm(span=50, adjust=False).mean().iloc[-1]
         e200 = hclose.ewm(span=min(200, len(htf)), adjust=False).mean().iloc[-1]
@@ -380,16 +388,21 @@ class StrategyEngine:
         price = float(c.iloc[-1])
         atr_s = Indicators.atr(df, 14)
         atr = float(atr_s.iloc[-1])
-        if atr <= 0:
-            return {"action": "neutral", "reason": "ATR صفر", "strat": "", "rsi": 0, "atr": 0, "htf": htf_trend}
+        if atr <= 0 or pd.isna(atr):
+            return {"action": "neutral", "reason": "ATR صفر یا نامعتبر", "strat": "", "rsi": 0, "atr": 0, "htf": htf_trend}
 
         atr_sma = float(Indicators.sma(atr_s, 20).iloc[-1])
-        if atr < atr_sma * 0.30 or atr > atr_sma * 4.0:
+        if atr < atr_sma * 0.25 or atr > atr_sma * 4.5:
             return {"action": "neutral", "reason": "نوسان نامناسب", "strat": "", "rsi": 0, "atr": atr, "htf": htf_trend}
 
         rsi_s = Indicators.rsi(c)
         rsi = float(rsi_s.iloc[-1])
         rsi_p = float(rsi_s.iloc[-2])
+
+        # رد کردن RSI غیرمنطقی
+        if rsi >= 99.5 or rsi <= 0.5 or pd.isna(rsi):
+            return {"action": "neutral", "reason": f"RSI نامعتبر ({rsi:.1f})", "strat": "", "rsi": rsi, "atr": atr, "htf": htf_trend}
+
         ema20 = float(c.ewm(span=20, adjust=False).mean().iloc[-1])
         ema50 = float(c.ewm(span=50, adjust=False).mean().iloc[-1])
         st_d, st_u, st_l = Indicators.supertrend(df)
@@ -397,27 +410,27 @@ class StrategyEngine:
         vcur = float(vol.iloc[-1])
         h10 = float(Indicators.highest(high, 10).iloc[-1])
         l10 = float(Indicators.lowest(low, 10).iloc[-1])
-        vol_ok = vcur > vsma * 1.02
+        vol_ok = vcur > vsma * 1.08
 
-        # شرایط کمی شل‌تر شده برای بازار فعلی
-        if htf_trend == "bullish" and price > ema20 and price >= h10 * 0.996 and 35 < rsi < 82 and vol_ok:
+        # شرایط ورود کمی سخت‌تر برای کیفیت بهتر
+        if htf_trend == "bullish" and price > ema20 and price >= h10 * 0.997 and 38 < rsi < 78 and vol_ok:
             return self._build("buy", "Breakout_Momentum", price, atr, rsi, htf_trend)
-        if htf_trend == "bearish" and price < ema20 and price <= l10 * 1.004 and 18 < rsi < 62 and vol_ok:
+        if htf_trend == "bearish" and price < ema20 and price <= l10 * 1.003 and 22 < rsi < 58 and vol_ok:
             return self._build("sell", "Breakout_Momentum", price, atr, rsi, htf_trend)
 
-        if htf_trend == "bullish" and price > ema20 * 0.995 and ema20 >= ema50 * 0.990 and rsi_p <= 52 and rsi > rsi_p and rsi < 72:
+        if htf_trend == "bullish" and price > ema20 * 0.996 and ema20 >= ema50 * 0.992 and rsi_p <= 48 and rsi > rsi_p and rsi < 68:
             return self._build("buy", "MTF_Pullback", price, atr, rsi, htf_trend)
-        if htf_trend == "bearish" and price < ema20 * 1.005 and ema20 <= ema50 * 1.010 and rsi_p >= 48 and rsi < rsi_p and rsi > 28:
+        if htf_trend == "bearish" and price < ema20 * 1.004 and ema20 <= ema50 * 1.008 and rsi_p >= 52 and rsi < rsi_p and rsi > 32:
             return self._build("sell", "MTF_Pullback", price, atr, rsi, htf_trend)
 
-        if htf_trend == "bullish" and st_d.iloc[-1] == 1 and low.iloc[-1] <= st_l.iloc[-1] * 1.012 and c.iloc[-1] > c.iloc[-2] and 30 < rsi < 74:
+        if htf_trend == "bullish" and st_d.iloc[-1] == 1 and low.iloc[-1] <= st_l.iloc[-1] * 1.010 and c.iloc[-1] > c.iloc[-2] and 34 < rsi < 70:
             return self._build("buy", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
-        if htf_trend == "bearish" and st_d.iloc[-1] == -1 and high.iloc[-1] >= st_u.iloc[-1] * 0.988 and c.iloc[-1] < c.iloc[-2] and 26 < rsi < 70:
+        if htf_trend == "bearish" and st_d.iloc[-1] == -1 and high.iloc[-1] >= st_u.iloc[-1] * 0.990 and c.iloc[-1] < c.iloc[-2] and 30 < rsi < 66:
             return self._build("sell", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
 
-        if htf_trend == "bullish" and price > ema20 and vcur > vsma * 1.15 and c.iloc[-1] > c.iloc[-2] and 35 < rsi < 78:
+        if htf_trend == "bullish" and price > ema20 and vcur > vsma * 1.25 and c.iloc[-1] > c.iloc[-2] and 40 < rsi < 75:
             return self._build("buy", "Volume_Surge", price, atr, rsi, htf_trend)
-        if htf_trend == "bearish" and price < ema20 and vcur > vsma * 1.15 and c.iloc[-1] < c.iloc[-2] and 22 < rsi < 65:
+        if htf_trend == "bearish" and price < ema20 and vcur > vsma * 1.25 and c.iloc[-1] < c.iloc[-2] and 25 < rsi < 60:
             return self._build("sell", "Volume_Surge", price, atr, rsi, htf_trend)
 
         return {"action": "neutral", "reason": f"بدون سیگنال (RSI={rsi:.1f})", "strat": "", "rsi": rsi, "atr": atr, "htf": htf_trend}
@@ -448,7 +461,7 @@ class RiskManager:
         if dist <= 0:
             return 0.0
         qty = (balance * (RISK_PCT / 100.0)) / dist
-        qty = min(qty, (free_usdt * 0.18 * LEVERAGE) / price, (balance * MAX_EXPOSURE_PCT / 100.0) / price)
+        qty = min(qty, (free_usdt * 0.16 * LEVERAGE) / price, (balance * MAX_EXPOSURE_PCT / 100.0) / price)
         try:
             qty = float(exchange.amount_to_precision(symbol, qty))
             if qty * price < MIN_ORDER_USD:
@@ -508,7 +521,7 @@ class TelegramController:
             while True:
                 await asyncio.sleep(60)
             return
-        await self.send("🚀 <b>Master Quant v15.1 Phemex-Only Online</b>\n۱۰ جفت‌ارز فعال", self.menu())
+        await self.send("🚀 <b>Master Quant v15.2 Phemex-Only Online</b>\nفیکس دیتا + کنترل بهتر ریسک", self.menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -539,7 +552,7 @@ class TelegramController:
                                 with STATE_LOCK:
                                     st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>Dashboard v15.1</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
+                                    f"📊 <b>Dashboard v15.2</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
                                     f"DD: {st['current_dd']:.1f}% | Pos: {len(st['active_positions'])}/{MAX_POS}\n"
                                     f"PnL: ${st['stats']['total_pnl']:.2f} | WR: {st['stats']['win_rate']}%\n"
                                     f"Last: {st['last_scan']}", self.menu())
@@ -560,7 +573,7 @@ class TelegramController:
                                 report = await self.engine.db.generate_txt_report(self.engine.prices)
                                 with open("report.txt", "w", encoding="utf-8") as f:
                                     f.write(report)
-                                await self.send_document("report.txt", "📄 Report v15.1")
+                                await self.send_document("report.txt", "📄 Report v15.2")
                             elif d == "cmd_rej":
                                 decs = await self.engine.db.get_recent_decisions(12)
                                 msg = "🚫 <b>Last decisions</b>\n\n"
@@ -610,7 +623,7 @@ class QuantEngine:
         candidates = []
         if mid:
             candidates.append(mid)
-        candidates += [f"{base}USDT", f".{base}USDT", f"{base}USD"]
+        candidates += [f"{base}USDT", f".{base}USDT", f"{base}USD", f"{base}USDT".lower()]
         seen = set()
         out = []
         for c in candidates:
@@ -624,13 +637,8 @@ class QuantEngine:
         if not resolution:
             return []
 
-        for allowed in (100, 50, 500, 10, 5, 1000):
-            if allowed >= min(limit, 100) or allowed == 100:
-                limit = allowed if limit > 50 else max(50, min(limit, 100))
-                if limit not in (5, 10, 50, 100, 500, 1000):
-                    limit = 100
-                break
-        if limit not in (5, 10, 50, 100, 500, 1000):
+        limit = 100 if limit > 50 else max(50, min(limit, 100))
+        if limit not in (50, 100, 500):
             limit = 100
 
         session = await self.get_session()
@@ -644,7 +652,7 @@ class QuantEngine:
             for url in endpoints:
                 try:
                     params = {"symbol": sym_id, "resolution": resolution, "limit": limit}
-                    async with session.get(url, params=params, timeout=15) as resp:
+                    async with session.get(url, params=params, timeout=12) as resp:
                         if resp.status != 200:
                             continue
                         data = await resp.json()
@@ -653,7 +661,7 @@ class QuantEngine:
                         if data.get("code") not in (0, "0", None):
                             continue
                         rows = (data.get("data") or {}).get("rows") or data.get("rows")
-                        if not rows or not isinstance(rows, list) or len(rows) < 30:
+                        if not rows or not isinstance(rows, list) or len(rows) < 40:
                             continue
 
                         candles = []
@@ -662,21 +670,41 @@ class QuantEngine:
                                 if len(row) < 8:
                                     continue
                                 ts = int(row[0])
-                                o, h, l, c = float(row[3]), float(row[4]), float(row[5]), float(row[6])
+                                o = float(row[3])
+                                h = float(row[4])
+                                l = float(row[5])
+                                c = float(row[6])
                                 v = float(row[7]) if len(row) > 7 else 0.0
-                                if o > 1e7:
+
+                                # تشخیص و اصلاح مقیاس قیمت Phemex
+                                if o > 1e8:
+                                    scale = 1e-8
+                                elif o > 1e6:
                                     scale = 1e-4
-                                    o, h, l, c = o * scale, h * scale, l * scale, c * scale
+                                elif o > 1e5:
+                                    scale = 1e-3
+                                else:
+                                    scale = 1.0
+
+                                o, h, l, c = o * scale, h * scale, l * scale, c * scale
+
                                 if ts < 1e12:
                                     ts *= 1000
-                                if c <= 0 or h <= 0:
+                                if c <= 0 or h <= 0 or l <= 0 or h < l:
+                                    continue
+                                # فیلتر قیمت‌های غیرمنطقی
+                                if c > 1e6 or c < 1e-8:
                                     continue
                                 candles.append([ts, o, h, l, c, v])
                             except Exception:
                                 continue
 
-                        if len(candles) >= 40:
+                        if len(candles) >= 45:
                             candles.sort(key=lambda x: x[0])
+                            # اعتبارسنجی نهایی
+                            closes = [x[4] for x in candles[-20:]]
+                            if max(closes) / (min(closes) + 1e-12) > 50:  # نوسان غیرعادی
+                                continue
                             self._kline_symbol_cache[symbol] = sym_id
                             log.info(f"OHLCV OK {symbol} ← {sym_id} ({len(candles)} bars)")
                             return candles[-limit:]
@@ -684,12 +712,12 @@ class QuantEngine:
                     log.debug(f"OHLCV {sym_id}: {e}")
                     continue
 
-        await self.db.log_decision(symbol, "neutral", "", "OHLCV خالی از Phemex")
+        await self.db.log_decision(symbol, "neutral", "", "OHLCV خالی یا نامعتبر از Phemex")
         return []
 
     async def start(self):
         await self.db.init()
-        log.info("v15.1 Phemex-Only starting...")
+        log.info("v15.2 Phemex-Only starting...")
 
         try:
             await self.ex.load_markets()
@@ -792,6 +820,8 @@ class QuantEngine:
                     continue
                 if sym in SYMBOL_ERROR_COOLDOWN and time.time() < SYMBOL_ERROR_COOLDOWN[sym]:
                     continue
+                if sym in SYMBOL_POST_CLOSE_COOLDOWN and time.time() < SYMBOL_POST_CLOSE_COOLDOWN[sym]:
+                    continue
                 try:
                     raw5, raw1 = await asyncio.gather(
                         self.fetch_ohlcv(sym, TIMEFRAME, 100),
@@ -832,12 +862,14 @@ class QuantEngine:
                         await self.execute_trade(sym, sig)
                 except Exception as e:
                     log.error(f"scan {sym}: {e}")
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.35)
 
             await asyncio.sleep(SCAN_INTERVAL)
 
     async def execute_trade(self, sym: str, sig: dict):
         if sym in SYMBOL_ERROR_COOLDOWN and time.time() < SYMBOL_ERROR_COOLDOWN[sym]:
+            return
+        if sym in SYMBOL_POST_CLOSE_COOLDOWN and time.time() < SYMBOL_POST_CLOSE_COOLDOWN[sym]:
             return
         price = self.prices.get(sym)
         with STATE_LOCK:
@@ -1002,6 +1034,9 @@ class QuantEngine:
             self.open_times.pop(pid, None)
             await self.db.update_analytics()
 
+            # کول‌داون بعد از بستن معامله
+            SYMBOL_POST_CLOSE_COOLDOWN[pos["symbol"]] = time.time() + POST_CLOSE_COOLDOWN
+
             sym = pos["symbol"]
             if net < 0:
                 with STATE_LOCK:
@@ -1033,13 +1068,16 @@ class QuantEngine:
                     continue
 
                 hold = now - self.open_times.get(pid, now)
+                can_partial = hold >= MIN_HOLD_FOR_PARTIAL
                 can_trail = hold >= MIN_HOLD_FOR_TRAIL
+
                 pnl_pct = (
                     (price - pos["entry"]) / pos["entry"] * 100
                     if pos["side"] == "buy"
                     else (pos["entry"] - price) / pos["entry"] * 100
                 )
 
+                # تریلینگ فقط بعد از زمان کافی و سود مناسب
                 if can_trail and pnl_pct > TRAIL_ACT and pnl_pct > pos["highest_pnl_pct"]:
                     pos["highest_pnl_pct"] = pnl_pct
                     new_sl = price * (1 - TRAIL_STEP / 100) if pos["side"] == "buy" else price * (1 + TRAIL_STEP / 100)
@@ -1047,12 +1085,13 @@ class QuantEngine:
                         pos["sl"] = new_sl
                         await self.db.update_trade(pid, pos["qty"], pos["sl"], pos["is_partial"], pos["highest_pnl_pct"])
 
-                if PARTIAL_TP and pos["is_partial"] == 0:
+                # Partial TP فقط بعد از زمان کافی و سود واقعی
+                if PARTIAL_TP and pos["is_partial"] == 0 and can_partial:
                     hit_tp1 = (
                         (pos["side"] == "buy" and price >= pos["tp1"])
                         or (pos["side"] == "sell" and price <= pos["tp1"])
                     )
-                    if hit_tp1:
+                    if hit_tp1 and pnl_pct >= MIN_PROFIT_FOR_BE:
                         try:
                             half = float(self.ex.amount_to_precision(pos["symbol"], pos["qty"] / 2))
                             if half > 0:
@@ -1061,9 +1100,11 @@ class QuantEngine:
                                     pos["symbol"], close_side, half, params={"reduceOnly": True})
                                 pos["qty"] -= half
                                 pos["is_partial"] = 1
-                                pos["sl"] = pos["entry"]
+                                # فقط اگر سود کافی باشد به BE منتقل کن
+                                if pnl_pct >= MIN_PROFIT_FOR_BE:
+                                    pos["sl"] = pos["entry"]
                                 await self.db.update_trade(pid, pos["qty"], pos["sl"], 1, pos["highest_pnl_pct"])
-                                await self.tg.send(f"🔹 Partial TP → BE {pos['symbol']}")
+                                await self.tg.send(f"🔹 Partial TP → {'BE' if pnl_pct >= MIN_PROFIT_FOR_BE else 'kept SL'} {pos['symbol']}")
                         except Exception as e:
                             log.error(f"partial tp: {e}")
 
@@ -1094,7 +1135,7 @@ def dashboard():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Quant v15.1</title>
+<title>Quant v15.2</title>
 <style>
 body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
 h1{color:#58a6ff}
@@ -1104,7 +1145,7 @@ h1{color:#58a6ff}
 </style>
 </head>
 <body>
-<h1>🚀 Master Quant v15.1 Phemex-Only</h1>
+<h1>🚀 Master Quant v15.2 Phemex-Only</h1>
 <div class="grid">
 <div class="card">موجودی<div class="value" id="bal">0.00</div></div>
 <div class="card">پوزیشن<div class="value" id="pos">0</div></div>
@@ -1139,7 +1180,7 @@ if __name__ == "__main__":
             traceback.print_exc()
 
     try:
-        print("=== Master Quant v15.1 Phemex-Only starting ===", flush=True)
+        print("=== Master Quant v15.2 Phemex-Only starting ===", flush=True)
         Thread(target=run_web, daemon=True).start()
         time.sleep(1)
         engine = QuantEngine()
