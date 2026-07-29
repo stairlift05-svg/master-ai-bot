@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v15.5 – Phemex-Only (ccxt + Improved)
-- استراتژی جایگزین‌شده: EMA 9/21 + QQE + KST (Momentum Continuity)
-- فقط استراتژی جدید (قدیمی‌ها حذف شدند)
-- نمادها و تایم‌فریم‌ها قابل گسترش
-- کنترل بهتر Partial TP و BE
-- فیلتر قدرت روند HTF حفظ شده
-- کول‌داون قوی‌تر
+Master Quant Engine v15.5 – Phemex-Only (ccxt)
+- فیلتر قدرت روند سخت‌تر
+- شرایط ورود سخت‌تر
+- استاپ‌لاس کمی بازتر
+- کول‌داون ۳۰ دقیقه‌ای
+- ۶ نماد سالم
 """
 
 import asyncio
@@ -40,41 +39,44 @@ TG_CHAT    = os.getenv("TELEGRAM_CHAT_ID", "")
 
 SYMBOLS = [
     "ETH/USDT:USDT",
+    "BNB/USDT:USDT",
     "XRP/USDT:USDT",
     "DOT/USDT:USDT",
-    "SOL/USDT:USDT",
+    "AVAX/USDT:USDT",
     "DOGE/USDT:USDT",
-    "BNB/USDT:USDT",
 ]
 
 STRATEGY_PARAMS = {
-    "EMA_QQE_KST": {"sl_m": 1.40, "tp_m": 3.0, "tp1_m": 1.65},
+    "Breakout_Momentum":   {"sl_m": 1.50, "tp_m": 3.6, "tp1_m": 1.9},
+    "MTF_Pullback":        {"sl_m": 1.55, "tp_m": 3.1, "tp1_m": 1.65},
+    "SuperTrend_Pullback": {"sl_m": 1.50, "tp_m": 2.9, "tp1_m": 1.55},
+    "Volume_Surge":        {"sl_m": 1.45, "tp_m": 2.8, "tp1_m": 1.45},
 }
 
-TIMEFRAME = "5m"           # Phemex این تایم‌فریم را بدون خطا قبول می‌کند
+TIMEFRAME = "5m"
 HTF_TIMEFRAME = "1h"
 RISK_PCT = 0.45
 LEVERAGE = 5
-MAX_POS = 6
+MAX_POS = 5
 MAX_DD = 8.0
 MAX_DAILY_LOSS = 4.0
 MIN_ORDER_USD = 16.0
-MAX_EXPOSURE_PCT = 30.0
+MAX_EXPOSURE_PCT = 28.0
 TAKER_FEE = 0.0006
 FEE_BUFFER = 1.3
-TRAIL_ACT = 3.0
-TRAIL_STEP = 0.9
+TRAIL_ACT = 3.2
+TRAIL_STEP = 1.0
 PARTIAL_TP = True
-MIN_HOLD_FOR_PARTIAL = 600          # ۱۰ دقیقه
-MIN_HOLD_FOR_TRAIL = 900            # ۱۵ دقیقه
-MIN_PROFIT_FOR_BE = 0.55            # حداقل ۰.۵۵٪ سود قبل از BE
+MIN_HOLD_FOR_PARTIAL = 720          # ۱۲ دقیقه
+MIN_HOLD_FOR_TRAIL = 1080           # ۱۸ دقیقه
+MIN_PROFIT_FOR_BE = 0.70            # حداقل ۰.۷۰٪ سود قبل از BE
 TEST_SYMBOL = "DOGE/USDT:USDT"
 TEST_USD = 12.0
 CONSECUTIVE_LOSS_LIMIT = 2
-SYMBOL_COOLDOWN_HOURS = 4
-POST_CLOSE_COOLDOWN = 1200          # ۲۰ دقیقه
-SCAN_INTERVAL = 50
-SYMBOL_DELAY = 1.2
+SYMBOL_COOLDOWN_HOURS = 5
+POST_CLOSE_COOLDOWN = 1800          # ۳۰ دقیقه
+SCAN_INTERVAL = 55
+SYMBOL_DELAY = 1.3
 
 logging.basicConfig(
     level=logging.INFO,
@@ -219,7 +221,7 @@ class Database:
 
         lines = [
             "=" * 70,
-            "       MASTER QUANT ENGINE v15.5 – EMA+QQE+KST REPORT",
+            "       MASTER QUANT ENGINE v15.5 – Phemex-Only REPORT",
             f"       Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
             "=" * 70,
             "",
@@ -319,8 +321,24 @@ class Indicators:
         return tr.ewm(com=n - 1, adjust=False).mean()
 
     @staticmethod
-    def ema(series: pd.Series, period: int) -> pd.Series:
-        return series.ewm(span=period, adjust=False).mean()
+    def supertrend(df: pd.DataFrame, period=10, mult=3.0):
+        atr = Indicators.atr(df, period)
+        hl2 = (df["high"] + df["low"]) / 2
+        upper = hl2 + mult * atr
+        lower = hl2 - mult * atr
+        direction = pd.Series(1, index=df.index)
+        for i in range(1, len(df)):
+            if df["close"].iloc[i] > upper.iloc[i - 1]:
+                direction.iloc[i] = 1
+            elif df["close"].iloc[i] < lower.iloc[i - 1]:
+                direction.iloc[i] = -1
+            else:
+                direction.iloc[i] = direction.iloc[i - 1]
+                if direction.iloc[i] == 1 and lower.iloc[i] < lower.iloc[i - 1]:
+                    lower.iloc[i] = lower.iloc[i - 1]
+                if direction.iloc[i] == -1 and upper.iloc[i] > upper.iloc[i - 1]:
+                    upper.iloc[i] = upper.iloc[i - 1]
+        return direction, upper, lower
 
     @staticmethod
     def sma(s, p):
@@ -334,103 +352,26 @@ class Indicators:
     def lowest(s, p):
         return s.rolling(p).min()
 
-    @staticmethod
-    def qqe(close: pd.Series, rsi_period=14, sf=5, qqe_factor=4.238, threshold=10):
-        """
-        Quantitative Qualitative Estimation (Glaz / JustUncleL style)
-        Returns: rsi_ma, fast_atr_rsi_tl, qqe_long, qqe_short, above_thresh, below_thresh
-        """
-        wilders = rsi_period * 2 - 1
-        rsi = Indicators.rsi(close, rsi_period)
-        rsi_ma = rsi.ewm(span=sf, adjust=False).mean()
-
-        atr_rsi = (rsi_ma - rsi_ma.shift(1)).abs()
-        ma_atr_rsi = atr_rsi.ewm(com=wilders - 1, adjust=False).mean()
-        dar = ma_atr_rsi.ewm(com=wilders - 1, adjust=False).mean() * qqe_factor
-
-        # Trailing bands
-        longband = pd.Series(0.0, index=close.index)
-        shortband = pd.Series(0.0, index=close.index)
-        trend = pd.Series(1, index=close.index)
-
-        for i in range(1, len(close)):
-            new_short = rsi_ma.iloc[i] + dar.iloc[i]
-            new_long = rsi_ma.iloc[i] - dar.iloc[i]
-
-            if rsi_ma.iloc[i - 1] > longband.iloc[i - 1] and rsi_ma.iloc[i] > longband.iloc[i - 1]:
-                longband.iloc[i] = max(longband.iloc[i - 1], new_long)
-            else:
-                longband.iloc[i] = new_long
-
-            if rsi_ma.iloc[i - 1] < shortband.iloc[i - 1] and rsi_ma.iloc[i] < shortband.iloc[i - 1]:
-                shortband.iloc[i] = min(shortband.iloc[i - 1], new_short)
-            else:
-                shortband.iloc[i] = new_short
-
-            # trend direction
-            if rsi_ma.iloc[i] > shortband.iloc[i - 1]:
-                trend.iloc[i] = 1
-            elif longband.iloc[i - 1] > rsi_ma.iloc[i]:
-                trend.iloc[i] = -1
-            else:
-                trend.iloc[i] = trend.iloc[i - 1]
-
-        fast_tl = pd.Series(
-            [longband.iloc[i] if trend.iloc[i] == 1 else shortband.iloc[i] for i in range(len(close))],
-            index=close.index
-        )
-
-        qqe_long = (rsi_ma > fast_tl) & (rsi_ma.shift(1) <= fast_tl.shift(1))
-        qqe_short = (rsi_ma < fast_tl) & (rsi_ma.shift(1) >= fast_tl.shift(1))
-        above_thresh = rsi_ma > (50 + threshold)
-        below_thresh = rsi_ma < (50 - threshold)
-
-        return rsi_ma, fast_tl, qqe_long, qqe_short, above_thresh, below_thresh
-
-    @staticmethod
-    def kst(close: pd.Series,
-            roc1=10, roc2=15, roc3=20, roc4=30,
-            sma1=10, sma2=10, sma3=10, sma4=15, sig=9):
-        """Know Sure Thing oscillator"""
-        def smaroc(roclen, smalen):
-            return Indicators.sma(close.pct_change(roclen) * 100, smalen)
-
-        kst_line = (
-            smaroc(roc1, sma1) +
-            2 * smaroc(roc2, sma2) +
-            3 * smaroc(roc3, sma3) +
-            4 * smaroc(roc4, sma4)
-        )
-        signal = Indicators.sma(kst_line, sig)
-        return kst_line, signal
-
 # ===================== STRATEGY =====================
 class StrategyEngine:
-    """
-    استراتژی حرفه‌ای ترکیبی: EMA 9/21 + QQE + KST
-    نام: EMA_QQE_KST (Momentum Continuity)
-    """
-
-    def analyze(self, df_ltf: pd.DataFrame, df_1h: pd.DataFrame) -> dict:
-        # آخرین کندل ناتمام را حذف می‌کنیم
-        df = df_ltf.iloc[:-1].copy()
+    def analyze(self, df_5m: pd.DataFrame, df_1h: pd.DataFrame) -> dict:
+        df = df_5m.iloc[:-1].copy()
         htf = df_1h.iloc[:-1].copy()
-
-        if len(df) < 80 or len(htf) < 40:
+        if len(df) < 55 or len(htf) < 35:
             return {"action": "neutral", "reason": "داده ناکافی", "strat": "", "rsi": 0, "atr": 0, "htf": ""}
 
         if df["close"].iloc[-1] <= 0 or df["high"].iloc[-1] <= 0:
             return {"action": "neutral", "reason": "داده قیمت نامعتبر", "strat": "", "rsi": 0, "atr": 0, "htf": ""}
 
-        # ---------- فیلتر روند HTF (۱ ساعته) ----------
         hclose = htf["close"]
         e50 = hclose.ewm(span=50, adjust=False).mean().iloc[-1]
         e200 = hclose.ewm(span=min(200, len(htf)), adjust=False).mean().iloc[-1]
         hp = float(hclose.iloc[-1])
 
+        # فیلتر قدرت روند سخت‌تر
         trend_strength = abs(e50 - e200) / (e200 + 1e-9) * 100
-        if trend_strength < 0.12:
-            return {"action": "neutral", "reason": "روند ضعیف HTF", "strat": "", "rsi": 0, "atr": 0, "htf": "weak"}
+        if trend_strength < 0.40:
+            return {"action": "neutral", "reason": "روند ضعیف", "strat": "", "rsi": 0, "atr": 0, "htf": "weak"}
 
         if hp > e50 * 0.993 and e50 >= e200 * 0.990:
             htf_trend = "bullish"
@@ -439,115 +380,69 @@ class StrategyEngine:
         else:
             return {"action": "neutral", "reason": "روند HTF نامشخص", "strat": "", "rsi": 0, "atr": 0, "htf": "sideways"}
 
-        # ---------- محاسبه اندیکاتورها روی تایم‌فریم اصلی ----------
-        c = df["close"]
+        c, high, low, vol = df["close"], df["high"], df["low"], df["volume"]
         price = float(c.iloc[-1])
-
         atr_s = Indicators.atr(df, 14)
         atr = float(atr_s.iloc[-1])
         if atr <= 0 or pd.isna(atr):
             return {"action": "neutral", "reason": "ATR صفر یا نامعتبر", "strat": "", "rsi": 0, "atr": 0, "htf": htf_trend}
 
         atr_sma = float(Indicators.sma(atr_s, 20).iloc[-1])
-        if atr < atr_sma * 0.25 or atr > atr_sma * 4.5:
+        if atr < atr_sma * 0.30 or atr > atr_sma * 3.8:
             return {"action": "neutral", "reason": "نوسان نامناسب", "strat": "", "rsi": 0, "atr": atr, "htf": htf_trend}
 
-        # EMA 9 / 21
-        ema9 = Indicators.ema(c, 9)
-        ema21 = Indicators.ema(c, 21)
-        ema9_val = float(ema9.iloc[-1])
-        ema21_val = float(ema21.iloc[-1])
-        ema9_prev = float(ema9.iloc[-2])
-        ema21_prev = float(ema21.iloc[-2])
+        rsi_s = Indicators.rsi(c)
+        rsi = float(rsi_s.iloc[-1])
+        rsi_p = float(rsi_s.iloc[-2])
 
-        bullish_ema = ema9_val > ema21_val and price > ema9_val and price > ema21_val
-        bearish_ema = ema9_val < ema21_val and price < ema9_val and price < ema21_val
-        cross_up = (ema9_prev <= ema21_prev) and (ema9_val > ema21_val)
-        cross_down = (ema9_prev >= ema21_prev) and (ema9_val < ema21_val)
+        if rsi >= 98.5 or rsi <= 1.5 or pd.isna(rsi):
+            return {"action": "neutral", "reason": f"RSI نامعتبر ({rsi:.1f})", "strat": "", "rsi": rsi, "atr": atr, "htf": htf_trend}
 
-        # QQE
-        rsi_ma, fast_tl, qqe_long, qqe_short, above_th, below_th = Indicators.qqe(c)
-        rsi_ma_val = float(rsi_ma.iloc[-1])
-        fast_tl_val = float(fast_tl.iloc[-1])
-        qqe_bull = rsi_ma_val > fast_tl_val
-        qqe_bear = rsi_ma_val < fast_tl_val
-        qqe_strong_bull = qqe_bull and bool(above_th.iloc[-1])
-        qqe_strong_bear = qqe_bear and bool(below_th.iloc[-1])
+        ema20 = float(c.ewm(span=20, adjust=False).mean().iloc[-1])
+        ema50 = float(c.ewm(span=50, adjust=False).mean().iloc[-1])
+        st_d, st_u, st_l = Indicators.supertrend(df)
+        vsma = float(Indicators.sma(vol, 20).iloc[-1]) or 1e-9
+        vcur = float(vol.iloc[-1])
+        h10 = float(Indicators.highest(high, 10).iloc[-1])
+        l10 = float(Indicators.lowest(low, 10).iloc[-1])
+        vol_ok = vcur > vsma * 1.20
 
-        # KST
-        kst_line, kst_sig = Indicators.kst(c)
-        kst_val = float(kst_line.iloc[-1])
-        kst_sig_val = float(kst_sig.iloc[-1])
-        kst_prev = float(kst_line.iloc[-2])
-        kst_sig_prev = float(kst_sig.iloc[-2])
+        # شرایط ورود سخت‌تر + فاصله بیشتر از EMA
+        if htf_trend == "bullish" and price > ema20 * 1.001 and price >= h10 * 0.9985 and 44 < rsi < 70 and vol_ok:
+            return self._build("buy", "Breakout_Momentum", price, atr, rsi, htf_trend)
+        if htf_trend == "bearish" and price < ema20 * 0.999 and price <= l10 * 1.0015 and 30 < rsi < 52 and vol_ok:
+            return self._build("sell", "Breakout_Momentum", price, atr, rsi, htf_trend)
 
-        kst_bull = kst_val > kst_sig_val and kst_val > 0
-        kst_bear = kst_val < kst_sig_val and kst_val < 0
-        kst_cross_up = (kst_prev <= kst_sig_prev) and (kst_val > kst_sig_val)
-        kst_cross_down = (kst_prev >= kst_sig_prev) and (kst_val < kst_sig_val)
+        if htf_trend == "bullish" and price > ema20 * 0.998 and ema20 >= ema50 * 0.995 and rsi_p <= 42 and rsi > rsi_p and rsi < 62:
+            return self._build("buy", "MTF_Pullback", price, atr, rsi, htf_trend)
+        if htf_trend == "bearish" and price < ema20 * 1.002 and ema20 <= ema50 * 1.005 and rsi_p >= 58 and rsi < rsi_p and rsi > 38:
+            return self._build("sell", "MTF_Pullback", price, atr, rsi, htf_trend)
 
-        rsi = float(Indicators.rsi(c).iloc[-1])
+        if htf_trend == "bullish" and st_d.iloc[-1] == 1 and low.iloc[-1] <= st_l.iloc[-1] * 1.006 and c.iloc[-1] > c.iloc[-2] and 40 < rsi < 66:
+            return self._build("buy", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
+        if htf_trend == "bearish" and st_d.iloc[-1] == -1 and high.iloc[-1] >= st_u.iloc[-1] * 0.994 and c.iloc[-1] < c.iloc[-2] and 34 < rsi < 60:
+            return self._build("sell", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
 
-        # ---------- قوانین ورود Long ----------
-        # شرط اصلی: روند HTF صعودی + EMA صعودی + تأیید QQE + تأیید KST
-        long_ok = (
-            htf_trend == "bullish"
-            and (bullish_ema or cross_up)
-            and (qqe_bull or qqe_strong_bull)
-            and (kst_bull or kst_cross_up)
-            and 35 < rsi < 75          # جلوگیری از اشباع شدید
-        )
+        if htf_trend == "bullish" and price > ema20 * 1.001 and vcur > vsma * 1.40 and c.iloc[-1] > c.iloc[-2] and 46 < rsi < 68:
+            return self._build("buy", "Volume_Surge", price, atr, rsi, htf_trend)
+        if htf_trend == "bearish" and price < ema20 * 0.999 and vcur > vsma * 1.40 and c.iloc[-1] < c.iloc[-2] and 32 < rsi < 54:
+            return self._build("sell", "Volume_Surge", price, atr, rsi, htf_trend)
 
-        # ---------- قوانین ورود Short ----------
-        short_ok = (
-            htf_trend == "bearish"
-            and (bearish_ema or cross_down)
-            and (qqe_bear or qqe_strong_bear)
-            and (kst_bear or kst_cross_down)
-            and 25 < rsi < 65
-        )
+        return {"action": "neutral", "reason": f"بدون سیگنال (RSI={rsi:.1f})", "strat": "", "rsi": rsi, "atr": atr, "htf": htf_trend}
 
-        if long_ok:
-            reason = f"EMA_QQE_KST Long | EMA9>{ema21_val:.4f} QQE={rsi_ma_val:.1f} KST={kst_val:.2f}"
-            return self._build("buy", "EMA_QQE_KST", price, atr, rsi, htf_trend, reason)
-
-        if short_ok:
-            reason = f"EMA_QQE_KST Short | EMA9<{ema21_val:.4f} QQE={rsi_ma_val:.1f} KST={kst_val:.2f}"
-            return self._build("sell", "EMA_QQE_KST", price, atr, rsi, htf_trend, reason)
-
-        # دلایل رد سیگنال برای لاگ بهتر
-        reasons = []
-        if htf_trend != "bullish" and htf_trend != "bearish":
-            reasons.append("HTF")
-        if not (bullish_ema or cross_up or bearish_ema or cross_down):
-            reasons.append("EMA")
-        if not (qqe_bull or qqe_bear):
-            reasons.append("QQE")
-        if not (kst_bull or kst_bear or kst_cross_up or kst_cross_down):
-            reasons.append("KST")
-        reason_str = "بدون سیگنال (" + "+".join(reasons) + f" RSI={rsi:.1f})" if reasons else f"بدون سیگنال (RSI={rsi:.1f})"
-
-        return {"action": "neutral", "reason": reason_str, "strat": "", "rsi": rsi, "atr": atr, "htf": htf_trend}
-
-    def _build(self, side, strat, price, atr, rsi, htf, reason=None):
-        p = STRATEGY_PARAMS.get(strat, {"sl_m": 1.40, "tp_m": 3.0, "tp1_m": 1.65})
+    def _build(self, side, strat, price, atr, rsi, htf):
+        p = STRATEGY_PARAMS.get(strat, {"sl_m": 1.50, "tp_m": 3.0, "tp1_m": 1.6})
         if side == "buy":
             return {
                 "action": side, "strat": strat,
-                "sl": price - atr * p["sl_m"],
-                "tp": price + atr * p["tp_m"],
-                "tp1": price + atr * p["tp1_m"],
-                "reason": reason or f"سیگنال {strat}",
-                "rsi": rsi, "atr": atr, "htf": htf,
+                "sl": price - atr * p["sl_m"], "tp": price + atr * p["tp_m"], "tp1": price + atr * p["tp1_m"],
+                "reason": f"سیگنال {strat}", "rsi": rsi, "atr": atr, "htf": htf,
                 "expected_rr": round(p["tp_m"] / p["sl_m"], 2),
             }
         return {
             "action": side, "strat": strat,
-            "sl": price + atr * p["sl_m"],
-            "tp": price - atr * p["tp_m"],
-            "tp1": price - atr * p["tp1_m"],
-            "reason": reason or f"سیگنال {strat}",
-            "rsi": rsi, "atr": atr, "htf": htf,
+            "sl": price + atr * p["sl_m"], "tp": price - atr * p["tp_m"], "tp1": price - atr * p["tp1_m"],
+            "reason": f"سیگنال {strat}", "rsi": rsi, "atr": atr, "htf": htf,
             "expected_rr": round(p["tp_m"] / p["sl_m"], 2),
         }
 
@@ -561,7 +456,7 @@ class RiskManager:
         if dist <= 0:
             return 0.0
         qty = (balance * (RISK_PCT / 100.0)) / dist
-        qty = min(qty, (free_usdt * 0.15 * LEVERAGE) / price, (balance * MAX_EXPOSURE_PCT / 100.0) / price)
+        qty = min(qty, (free_usdt * 0.14 * LEVERAGE) / price, (balance * MAX_EXPOSURE_PCT / 100.0) / price)
         try:
             qty = float(exchange.amount_to_precision(symbol, qty))
             if qty * price < MIN_ORDER_USD:
@@ -621,7 +516,7 @@ class TelegramController:
             while True:
                 await asyncio.sleep(60)
             return
-        await self.send("🚀 <b>Master Quant v15.5</b>\nEMA 9/21 + QQE + KST | ۶ نماد | 5m", self.menu())
+        await self.send("🚀 <b>Master Quant v15.5</b>\nفیلتر روند سخت‌تر + استاپ بازتر", self.menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -722,7 +617,7 @@ class QuantEngine:
 
     async def start(self):
         await self.db.init()
-        log.info("v15.5 Phemex-Only starting (EMA+QQE+KST | 6 symbols)...")
+        log.info("v15.5 Phemex-Only starting...")
 
         try:
             await self.ex.load_markets()
@@ -730,9 +625,8 @@ class QuantEngine:
         except Exception as e:
             log.error(f"load_markets: {e}")
 
-        # Phemex requires a symbol argument for set_position_mode
         try:
-            await self.ex.set_position_mode(False, SYMBOLS[0])
+            await self.ex.set_position_mode(False)
             log.info("Position mode → One-Way")
         except Exception as e:
             log.warning(f"Position mode: {e}")
@@ -830,8 +724,8 @@ class QuantEngine:
                     continue
                 try:
                     raw5, raw1 = await asyncio.gather(
-                        self.fetch_ohlcv(sym, TIMEFRAME, 150),
-                        self.fetch_ohlcv(sym, HTF_TIMEFRAME, 120),
+                        self.fetch_ohlcv(sym, TIMEFRAME, 100),
+                        self.fetch_ohlcv(sym, HTF_TIMEFRAME, 100),
                     )
                     await asyncio.sleep(SYMBOL_DELAY)
 
@@ -856,7 +750,7 @@ class QuantEngine:
                     if sig["action"] != "neutral":
                         atr = sig.get("atr", 0)
                         if atr > 0:
-                            p = STRATEGY_PARAMS.get(sig.get("strat", ""), {"sl_m": 1.40, "tp_m": 3.0, "tp1_m": 1.65})
+                            p = STRATEGY_PARAMS.get(sig.get("strat", ""), {"sl_m": 1.50, "tp_m": 3.0, "tp1_m": 1.6})
                             if sig["action"] == "buy":
                                 sig["sl"] = price - atr * p["sl_m"]
                                 sig["tp"] = price + atr * p["tp_m"]
@@ -917,7 +811,7 @@ class QuantEngine:
             await self.db.log_decision(sym, "rejected", sig.get("strat", ""), err[:120])
             if "20004" in err or "INCONSISTENT" in err.upper():
                 try:
-                    await self.ex.set_position_mode(False, sym)
+                    await self.ex.set_position_mode(False)
                 except Exception:
                     pass
 
@@ -1003,9 +897,9 @@ class QuantEngine:
                     continue
                 atr = await self._estimate_atr(sym, entry)
                 if rpos["side"] == "buy":
-                    sl, tp, tp1 = entry - atr * 1.4, entry + atr * 2.9, entry + atr * 1.5
+                    sl, tp, tp1 = entry - atr * 1.5, entry + atr * 3.0, entry + atr * 1.6
                 else:
-                    sl, tp, tp1 = entry + atr * 1.4, entry - atr * 2.9, entry - atr * 1.5
+                    sl, tp, tp1 = entry + atr * 1.5, entry - atr * 3.0, entry - atr * 1.6
                 pos = {
                     "id": pid, "symbol": sym, "side": rpos["side"], "strategy": "Recovered",
                     "entry": entry, "qty": rpos["qty"], "sl": sl, "tp": tp, "tp1": tp1,
@@ -1146,7 +1040,7 @@ h1{color:#58a6ff}
 </style>
 </head>
 <body>
-<h1>🚀 Master Quant v15.5 – EMA+QQE+KST</h1>
+<h1>🚀 Master Quant v15.5</h1>
 <div class="grid">
 <div class="card">موجودی<div class="value" id="bal">0.00</div></div>
 <div class="card">پوزیشن<div class="value" id="pos">0</div></div>
@@ -1181,7 +1075,7 @@ if __name__ == "__main__":
             traceback.print_exc()
 
     try:
-        print("=== Master Quant v15.5 starting (EMA+QQE+KST | 6 symbols | 5m) ===", flush=True)
+        print("=== Master Quant v15.5 starting ===", flush=True)
         Thread(target=run_web, daemon=True).start()
         time.sleep(1)
         engine = QuantEngine()
