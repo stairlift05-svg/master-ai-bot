@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v16.0 – Phemex-Only (Fundamental Fix)
-- فقط ۲ استراتژی قوی
-- فیلتر قدرت روند بسیار سخت
-- شرایط ورود با کیفیت بالا
-- کول‌داون ۴۵ دقیقه‌ای
+Master Quant Engine v16.1 – Phemex-Only (Balanced)
+- تعادل بین کیفیت و تعداد معاملات
+- ۳ استراتژی فعال
+- فیلتر قدرت روند ۰.۴۵٪
+- کول‌داون ۳۰ دقیقه‌ای
 - ۶ نماد سالم
 """
 
@@ -47,41 +47,42 @@ SYMBOLS = [
 ]
 
 STRATEGY_PARAMS = {
-    "Breakout_Momentum":   {"sl_m": 1.60, "tp_m": 3.8, "tp1_m": 2.0},
-    "SuperTrend_Pullback": {"sl_m": 1.55, "tp_m": 3.2, "tp1_m": 1.7},
+    "Breakout_Momentum":   {"sl_m": 1.50, "tp_m": 3.6, "tp1_m": 1.9},
+    "SuperTrend_Pullback": {"sl_m": 1.45, "tp_m": 3.1, "tp1_m": 1.65},
+    "Volume_Surge":        {"sl_m": 1.40, "tp_m": 2.9, "tp1_m": 1.50},
 }
 
 TIMEFRAME = "5m"
 HTF_TIMEFRAME = "1h"
-RISK_PCT = 0.40
+RISK_PCT = 0.42
 LEVERAGE = 5
-MAX_POS = 4
-MAX_DD = 7.0
-MAX_DAILY_LOSS = 3.5
-MIN_ORDER_USD = 18.0
-MAX_EXPOSURE_PCT = 25.0
+MAX_POS = 5
+MAX_DD = 7.5
+MAX_DAILY_LOSS = 3.8
+MIN_ORDER_USD = 17.0
+MAX_EXPOSURE_PCT = 28.0
 TAKER_FEE = 0.0006
-FEE_BUFFER = 1.35
-TRAIL_ACT = 3.5
-TRAIL_STEP = 1.1
+FEE_BUFFER = 1.30
+TRAIL_ACT = 3.2
+TRAIL_STEP = 1.0
 PARTIAL_TP = True
-MIN_HOLD_FOR_PARTIAL = 900          # ۱۵ دقیقه
-MIN_HOLD_FOR_TRAIL = 1200           # ۲۰ دقیقه
-MIN_PROFIT_FOR_BE = 0.90            # حداقل ۰.۹۰٪ سود قبل از BE
+MIN_HOLD_FOR_PARTIAL = 720          # ۱۲ دقیقه
+MIN_HOLD_FOR_TRAIL = 1080           # ۱۸ دقیقه
+MIN_PROFIT_FOR_BE = 0.75            # حداقل ۰.۷۵٪ سود قبل از BE
 TEST_SYMBOL = "DOGE/USDT:USDT"
 TEST_USD = 12.0
 CONSECUTIVE_LOSS_LIMIT = 2
-SYMBOL_COOLDOWN_HOURS = 6
-POST_CLOSE_COOLDOWN = 2700          # ۴۵ دقیقه
-SCAN_INTERVAL = 60
-SYMBOL_DELAY = 1.5
+SYMBOL_COOLDOWN_HOURS = 5
+POST_CLOSE_COOLDOWN = 1800          # ۳۰ دقیقه
+SCAN_INTERVAL = 50
+SYMBOL_DELAY = 1.3
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("QuantV16.0")
+log = logging.getLogger("QuantV16.1")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True,
@@ -219,7 +220,7 @@ class Database:
 
         lines = [
             "=" * 70,
-            "       MASTER QUANT ENGINE v16.0 – Phemex-Only REPORT",
+            "       MASTER QUANT ENGINE v16.1 – Phemex-Only (Balanced) REPORT",
             f"       Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
             "=" * 70,
             "",
@@ -355,7 +356,7 @@ class StrategyEngine:
     def analyze(self, df_5m: pd.DataFrame, df_1h: pd.DataFrame) -> dict:
         df = df_5m.iloc[:-1].copy()
         htf = df_1h.iloc[:-1].copy()
-        if len(df) < 60 or len(htf) < 40:
+        if len(df) < 55 or len(htf) < 35:
             return {"action": "neutral", "reason": "داده ناکافی", "strat": "", "rsi": 0, "atr": 0, "htf": ""}
 
         if df["close"].iloc[-1] <= 0 or df["high"].iloc[-1] <= 0:
@@ -366,14 +367,14 @@ class StrategyEngine:
         e200 = hclose.ewm(span=min(200, len(htf)), adjust=False).mean().iloc[-1]
         hp = float(hclose.iloc[-1])
 
-        # فیلتر قدرت روند بسیار سخت (۰.۸۰٪)
+        # فیلتر قدرت روند متعادل (۰.۴۵٪)
         trend_strength = abs(e50 - e200) / (e200 + 1e-9) * 100
-        if trend_strength < 0.80:
+        if trend_strength < 0.45:
             return {"action": "neutral", "reason": "روند ضعیف", "strat": "", "rsi": 0, "atr": 0, "htf": "weak"}
 
-        if hp > e50 * 0.995 and e50 > e200 * 1.002:
+        if hp > e50 * 0.994 and e50 >= e200 * 0.992:
             htf_trend = "bullish"
-        elif hp < e50 * 1.005 and e50 < e200 * 0.998:
+        elif hp < e50 * 1.006 and e50 <= e200 * 1.008:
             htf_trend = "bearish"
         else:
             return {"action": "neutral", "reason": "روند HTF نامشخص", "strat": "", "rsi": 0, "atr": 0, "htf": "sideways"}
@@ -386,14 +387,14 @@ class StrategyEngine:
             return {"action": "neutral", "reason": "ATR صفر یا نامعتبر", "strat": "", "rsi": 0, "atr": 0, "htf": htf_trend}
 
         atr_sma = float(Indicators.sma(atr_s, 20).iloc[-1])
-        if atr < atr_sma * 0.35 or atr > atr_sma * 3.5:
+        if atr < atr_sma * 0.32 or atr > atr_sma * 3.8:
             return {"action": "neutral", "reason": "نوسان نامناسب", "strat": "", "rsi": 0, "atr": atr, "htf": htf_trend}
 
         rsi_s = Indicators.rsi(c)
         rsi = float(rsi_s.iloc[-1])
         rsi_p = float(rsi_s.iloc[-2])
 
-        if rsi >= 97 or rsi <= 3 or pd.isna(rsi):
+        if rsi >= 98 or rsi <= 2 or pd.isna(rsi):
             return {"action": "neutral", "reason": f"RSI نامعتبر ({rsi:.1f})", "strat": "", "rsi": rsi, "atr": atr, "htf": htf_trend}
 
         ema20 = float(c.ewm(span=20, adjust=False).mean().iloc[-1])
@@ -403,23 +404,30 @@ class StrategyEngine:
         vcur = float(vol.iloc[-1])
         h12 = float(Indicators.highest(high, 12).iloc[-1])
         l12 = float(Indicators.lowest(low, 12).iloc[-1])
-        vol_ok = vcur > vsma * 1.35
+        vol_ok = vcur > vsma * 1.25
 
-        # فقط دو استراتژی قوی با شرایط سخت
-        if htf_trend == "bullish" and price > ema20 * 1.002 and price >= h12 * 0.999 and 46 < rsi < 68 and vol_ok and ema20 > ema50:
+        # استراتژی ۱: Breakout
+        if htf_trend == "bullish" and price > ema20 * 1.001 and price >= h12 * 0.998 and 44 < rsi < 70 and vol_ok:
             return self._build("buy", "Breakout_Momentum", price, atr, rsi, htf_trend)
-        if htf_trend == "bearish" and price < ema20 * 0.998 and price <= l12 * 1.001 and 32 < rsi < 54 and vol_ok and ema20 < ema50:
+        if htf_trend == "bearish" and price < ema20 * 0.999 and price <= l12 * 1.002 and 30 < rsi < 56 and vol_ok:
             return self._build("sell", "Breakout_Momentum", price, atr, rsi, htf_trend)
 
-        if htf_trend == "bullish" and st_d.iloc[-1] == 1 and low.iloc[-1] <= st_l.iloc[-1] * 1.005 and c.iloc[-1] > c.iloc[-2] and 42 < rsi < 65 and price > ema20:
+        # استراتژی ۲: SuperTrend Pullback
+        if htf_trend == "bullish" and st_d.iloc[-1] == 1 and low.iloc[-1] <= st_l.iloc[-1] * 1.007 and c.iloc[-1] > c.iloc[-2] and 40 < rsi < 67 and price > ema20:
             return self._build("buy", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
-        if htf_trend == "bearish" and st_d.iloc[-1] == -1 and high.iloc[-1] >= st_u.iloc[-1] * 0.995 and c.iloc[-1] < c.iloc[-2] and 35 < rsi < 58 and price < ema20:
+        if htf_trend == "bearish" and st_d.iloc[-1] == -1 and high.iloc[-1] >= st_u.iloc[-1] * 0.993 and c.iloc[-1] < c.iloc[-2] and 33 < rsi < 60 and price < ema20:
             return self._build("sell", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
+
+        # استراتژی ۳: Volume Surge (سخت‌تر از قبل)
+        if htf_trend == "bullish" and price > ema20 and vcur > vsma * 1.45 and c.iloc[-1] > c.iloc[-2] and 45 < rsi < 68:
+            return self._build("buy", "Volume_Surge", price, atr, rsi, htf_trend)
+        if htf_trend == "bearish" and price < ema20 and vcur > vsma * 1.45 and c.iloc[-1] < c.iloc[-2] and 32 < rsi < 55:
+            return self._build("sell", "Volume_Surge", price, atr, rsi, htf_trend)
 
         return {"action": "neutral", "reason": f"بدون سیگنال (RSI={rsi:.1f})", "strat": "", "rsi": rsi, "atr": atr, "htf": htf_trend}
 
     def _build(self, side, strat, price, atr, rsi, htf):
-        p = STRATEGY_PARAMS.get(strat, {"sl_m": 1.55, "tp_m": 3.2, "tp1_m": 1.7})
+        p = STRATEGY_PARAMS.get(strat, {"sl_m": 1.45, "tp_m": 3.0, "tp1_m": 1.6})
         if side == "buy":
             return {
                 "action": side, "strat": strat,
@@ -444,7 +452,7 @@ class RiskManager:
         if dist <= 0:
             return 0.0
         qty = (balance * (RISK_PCT / 100.0)) / dist
-        qty = min(qty, (free_usdt * 0.13 * LEVERAGE) / price, (balance * MAX_EXPOSURE_PCT / 100.0) / price)
+        qty = min(qty, (free_usdt * 0.14 * LEVERAGE) / price, (balance * MAX_EXPOSURE_PCT / 100.0) / price)
         try:
             qty = float(exchange.amount_to_precision(symbol, qty))
             if qty * price < MIN_ORDER_USD:
@@ -504,7 +512,7 @@ class TelegramController:
             while True:
                 await asyncio.sleep(60)
             return
-        await self.send("🚀 <b>Master Quant v16.0</b>\nتغییر بنیادین استراتژی – فقط ۲ استراتژی قوی", self.menu())
+        await self.send("🚀 <b>Master Quant v16.1 (Balanced)</b>\nتعادل کیفیت و تعداد معاملات", self.menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -535,7 +543,7 @@ class TelegramController:
                                 with STATE_LOCK:
                                     st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>Dashboard v16.0</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
+                                    f"📊 <b>Dashboard v16.1</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
                                     f"DD: {st['current_dd']:.1f}% | Pos: {len(st['active_positions'])}/{MAX_POS}\n"
                                     f"PnL: ${st['stats']['total_pnl']:.2f} | WR: {st['stats']['win_rate']}%\n"
                                     f"Last: {st['last_scan']}", self.menu())
@@ -556,7 +564,7 @@ class TelegramController:
                                 report = await self.engine.db.generate_txt_report(self.engine.prices)
                                 with open("report.txt", "w", encoding="utf-8") as f:
                                     f.write(report)
-                                await self.send_document("report.txt", "📄 Report v16.0")
+                                await self.send_document("report.txt", "📄 Report v16.1")
                             elif d == "cmd_rej":
                                 decs = await self.engine.db.get_recent_decisions(12)
                                 msg = "🚫 <b>Last decisions</b>\n\n"
@@ -605,7 +613,7 @@ class QuantEngine:
 
     async def start(self):
         await self.db.init()
-        log.info("v16.0 Phemex-Only starting (Fundamental Fix)...")
+        log.info("v16.1 Phemex-Only (Balanced) starting...")
 
         try:
             await self.ex.load_markets()
@@ -683,7 +691,7 @@ class QuantEngine:
                 await self.db.log_equity(cur, peak, SHARED_STATE.get("current_dd", 0))
             except Exception as e:
                 log.error(f"price_loop: {e}")
-            await asyncio.sleep(9)
+            await asyncio.sleep(8)
 
     async def scan_loop(self):
         while True:
@@ -697,7 +705,7 @@ class QuantEngine:
                 open_syms = {p["symbol"] for p in SHARED_STATE["active_positions"].values()}
 
             if not can:
-                await asyncio.sleep(15)
+                await asyncio.sleep(12)
                 continue
 
             with STATE_LOCK:
@@ -717,7 +725,7 @@ class QuantEngine:
                     )
                     await asyncio.sleep(SYMBOL_DELAY)
 
-                    if not raw5 or len(raw5) < 55:
+                    if not raw5 or len(raw5) < 50:
                         continue
 
                     df5 = pd.DataFrame(raw5, columns=["ts", "open", "high", "low", "close", "volume"])
@@ -738,7 +746,7 @@ class QuantEngine:
                     if sig["action"] != "neutral":
                         atr = sig.get("atr", 0)
                         if atr > 0:
-                            p = STRATEGY_PARAMS.get(sig.get("strat", ""), {"sl_m": 1.55, "tp_m": 3.2, "tp1_m": 1.7})
+                            p = STRATEGY_PARAMS.get(sig.get("strat", ""), {"sl_m": 1.45, "tp_m": 3.0, "tp1_m": 1.6})
                             if sig["action"] == "buy":
                                 sig["sl"] = price - atr * p["sl_m"]
                                 sig["tp"] = price + atr * p["tp_m"]
@@ -750,7 +758,7 @@ class QuantEngine:
                         await self.execute_trade(sym, sig)
                 except Exception as e:
                     log.error(f"scan {sym}: {e}")
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.4)
 
             await asyncio.sleep(SCAN_INTERVAL)
 
@@ -762,7 +770,7 @@ class QuantEngine:
         price = self.prices.get(sym)
         with STATE_LOCK:
             bal = SHARED_STATE["balance"]
-        if not price or bal < 25:
+        if not price or bal < 22:
             return
         try:
             bal_data = await self.ex.fetch_balance()
@@ -793,7 +801,7 @@ class QuantEngine:
             err = str(e)
             SYMBOL_ERROR_COUNT[sym] = SYMBOL_ERROR_COUNT.get(sym, 0) + 1
             count = SYMBOL_ERROR_COUNT[sym]
-            cooldown = min(400 * (2 ** (count - 1)), 7200)
+            cooldown = min(350 * (2 ** (count - 1)), 5400)
             SYMBOL_ERROR_COOLDOWN[sym] = time.time() + cooldown
             log.error(f"{sym} error #{count} cooldown {cooldown}s")
             await self.db.log_decision(sym, "rejected", sig.get("strat", ""), err[:120])
@@ -809,7 +817,7 @@ class QuantEngine:
             await self.update_balance()
             with STATE_LOCK:
                 free = SHARED_STATE["balance"]
-            if free < 25:
+            if free < 22:
                 await self.tg.send("❌ low balance")
                 return
             price = self.prices.get(TEST_SYMBOL)
@@ -885,9 +893,9 @@ class QuantEngine:
                     continue
                 atr = await self._estimate_atr(sym, entry)
                 if rpos["side"] == "buy":
-                    sl, tp, tp1 = entry - atr * 1.55, entry + atr * 3.2, entry + atr * 1.7
+                    sl, tp, tp1 = entry - atr * 1.45, entry + atr * 3.1, entry + atr * 1.65
                 else:
-                    sl, tp, tp1 = entry + atr * 1.55, entry - atr * 3.2, entry - atr * 1.7
+                    sl, tp, tp1 = entry + atr * 1.45, entry - atr * 3.1, entry - atr * 1.65
                 pos = {
                     "id": pid, "symbol": sym, "side": rpos["side"], "strategy": "Recovered",
                     "entry": entry, "qty": rpos["qty"], "sl": sl, "tp": tp, "tp1": tp1,
@@ -1000,7 +1008,7 @@ class QuantEngine:
                     elif sl_hit and pos.get("highest_pnl_pct", 0) > TRAIL_ACT:
                         reason = "Trail"
                     await self.force_close(pid, reason)
-            await asyncio.sleep(1.8)
+            await asyncio.sleep(1.6)
 
 # ===================== WEB =====================
 app = Flask(__name__)
@@ -1018,7 +1026,7 @@ def dashboard():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Quant v16.0</title>
+<title>Quant v16.1</title>
 <style>
 body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
 h1{color:#58a6ff}
@@ -1028,11 +1036,49 @@ h1{color:#58a6ff}
 </style>
 </head>
 <body>
-<h1>🚀 Master Quant v16.0</h1>
+<h1>🚀 Master Quant v16.1 (Balanced)</h1>
 <div class="grid">
 <div class="card">موجودی<div class="value" id="bal">0.00</div></div>
 <div class="card">پوزیشن<div class="value" id="pos">0</div></div>
 <div class="card">PnL<div class="value" id="pnl">0.00</div></div>
 <div class="card">Win Rate<div class="value" id="wr">0%</div></div>
 </div>
-<p>آخرین اسکن: <span id="scan">–</
+<p>آخرین اسکن: <span id="scan">–</span></p>
+<script>
+async function r(){try{
+ const d=await(await fetch('/api/status')).json();
+ document.getElementById('bal').textContent=(d.balance||0).toFixed(2);
+ document.getElementById('pos').textContent=Object.keys(d.active_positions||{}).length;
+ document.getElementById('pnl').textContent=(d.stats?.total_pnl||0).toFixed(2);
+ document.getElementById('wr').textContent=(d.stats?.win_rate||0)+'%';
+ document.getElementById('scan').textContent=d.last_scan||'–';
+}catch(e){}}
+r();setInterval(r,5000);
+</script>
+</body></html>
+""")
+
+# ===================== MAIN =====================
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+
+    def run_web():
+        try:
+            print(f"Flask on 0.0.0.0:{port}", flush=True)
+            app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+        except Exception as e:
+            print("Flask error:", e, flush=True)
+            traceback.print_exc()
+
+    try:
+        print("=== Master Quant v16.1 (Balanced) starting ===", flush=True)
+        Thread(target=run_web, daemon=True).start()
+        time.sleep(1)
+        engine = QuantEngine()
+        print("Engine ready", flush=True)
+        asyncio.run(engine.start())
+    except Exception as e:
+        print("FATAL:", e, flush=True)
+        traceback.print_exc()
+        time.sleep(20)
+        raise
