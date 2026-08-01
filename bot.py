@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v16.8 – Phemex-Only
-- گزارش حرفه‌ای و ریزبه‌ریز
-- ردیابی سلامت داده، کول‌داون، شکاف سیگنال تا اجرا
+Master Quant Engine v16.9 – Phemex-Only
+- نمایش مقدار واقعی trend_strength
+- گزارش حرفه‌ای با بخش قدرت روند
 - استراتژی مستقل RSI_Divergence
 """
 
@@ -81,7 +81,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("QuantV16.8")
+log = logging.getLogger("QuantV16.9")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True,
@@ -99,6 +99,7 @@ SHARED_STATE: Dict[str, Any] = {
     "fetch_stats": defaultdict(lambda: {"ok_5m": 0, "fail_5m": 0, "ok_1h": 0, "fail_1h": 0}),
     "recent_errors": [],
     "signal_but_not_executed": [],
+    "trend_strengths": [],  # لیست اخیر قدرت روند
 }
 STATE_LOCK = Lock()
 SYMBOL_ERROR_COOLDOWN: Dict[str, float] = {}
@@ -222,16 +223,17 @@ class Database:
             fetch_stats = dict(st.get("fetch_stats", {}))
             recent_errors = list(st.get("recent_errors", []))[-15:]
             signal_not_exec = list(st.get("signal_but_not_executed", []))[-10:]
+            trend_vals = list(st.get("trend_strengths", []))[-40:]
 
         now = time.time()
         lines = []
         lines.append("=" * 78)
-        lines.append("          MASTER QUANT ENGINE v16.8 – PROFESSIONAL DIAGNOSTIC REPORT")
+        lines.append("          MASTER QUANT ENGINE v16.9 – PROFESSIONAL DIAGNOSTIC REPORT")
         lines.append(f"          Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
         lines.append("=" * 78)
         lines.append("")
 
-        # 1. DASHBOARD
+        # 1. SYSTEM STATUS
         lines.append("┌─ 1. SYSTEM STATUS ──────────────────────────────────────────────────────")
         lines.append(f"│  Balance          : ${st.get('balance', 0):.2f}")
         lines.append(f"│  Peak Balance     : ${st.get('peak_balance', 0):.2f}")
@@ -261,8 +263,29 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
 
-        # 3. OPEN POSITIONS
-        lines.append("┌─ 3. OPEN POSITIONS ─────────────────────────────────────────────────────")
+        # 3. TREND STRENGTH ANALYSIS (جدید)
+        lines.append("┌─ 3. TREND STRENGTH ANALYSIS ────────────────────────────────────────────")
+        if not trend_vals:
+            lines.append("│  (هنوز مقداری ثبت نشده)")
+        else:
+            vals = [v["value"] for v in trend_vals]
+            avg_ts = sum(vals) / len(vals)
+            min_ts = min(vals)
+            max_ts = max(vals)
+            lines.append(f"│  Samples          : {len(vals)}")
+            lines.append(f"│  Average          : {avg_ts:.3f}%")
+            lines.append(f"│  Min              : {min_ts:.3f}%")
+            lines.append(f"│  Max              : {max_ts:.3f}%")
+            lines.append(f"│  Current Threshold: 0.30%")
+            lines.append("│")
+            lines.append("│  Recent values (last 15):")
+            for item in trend_vals[-15:]:
+                lines.append(f"│    {item['ts']}  {item['symbol']:<18}  {item['value']:.3f}%")
+        lines.append("└─────────────────────────────────────────────────────────────────────────")
+        lines.append("")
+
+        # 4. OPEN POSITIONS
+        lines.append("┌─ 4. OPEN POSITIONS ─────────────────────────────────────────────────────")
         active = st.get("active_positions", {})
         if not active:
             lines.append("│  (none)")
@@ -275,8 +298,8 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
 
-        # 4. CLOSED TRADES
-        lines.append("┌─ 4. CLOSED TRADES (Last 40) ────────────────────────────────────────────")
+        # 5. CLOSED TRADES
+        lines.append("┌─ 5. CLOSED TRADES (Last 40) ────────────────────────────────────────────")
         if not closed:
             lines.append("│  (none)")
         else:
@@ -287,15 +310,15 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
 
-        # 5. DECISION BREAKDOWN
-        lines.append("┌─ 5. DECISION BREAKDOWN ─────────────────────────────────────────────────")
+        # 6. DECISION BREAKDOWN
+        lines.append("┌─ 6. DECISION BREAKDOWN ─────────────────────────────────────────────────")
         reasons = Counter()
         by_symbol = defaultdict(lambda: {"sig": 0, "rej": 0})
         signals = 0
         if decisions:
             for d in decisions:
                 if d["action"] in ("neutral", "rejected"):
-                    reasons[(d["reason"] or "Unknown")[:65]] += 1
+                    reasons[(d["reason"] or "Unknown")[:70]] += 1
                     by_symbol[d["symbol"]]["rej"] += 1
                 else:
                     signals += 1
@@ -305,7 +328,7 @@ class Database:
             lines.append(f"│  Rejected        : {len(decisions) - signals}")
             lines.append("│")
             lines.append("│  Top Rejection Reasons:")
-            for reason, count in reasons.most_common(15):
+            for reason, count in reasons.most_common(12):
                 lines.append(f"│    {count:4d} × {reason}")
             lines.append("│")
             lines.append("│  Per Symbol:")
@@ -317,8 +340,8 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
 
-        # 6. SIGNAL BUT NOT EXECUTED
-        lines.append("┌─ 6. SIGNALS THAT DID NOT EXECUTE ───────────────────────────────────────")
+        # 7. SIGNALS THAT DID NOT EXECUTE
+        lines.append("┌─ 7. SIGNALS THAT DID NOT EXECUTE ───────────────────────────────────────")
         if not signal_not_exec:
             lines.append("│  (none recorded)")
         else:
@@ -327,8 +350,8 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
 
-        # 7. COOLDOWNS
-        lines.append("┌─ 7. ACTIVE COOLDOWNS ───────────────────────────────────────────────────")
+        # 8. COOLDOWNS
+        lines.append("┌─ 8. ACTIVE COOLDOWNS ───────────────────────────────────────────────────")
         has_cd = False
         for sym in SYMBOLS:
             parts = []
@@ -346,8 +369,8 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
 
-        # 8. RECENT ERRORS
-        lines.append("┌─ 8. RECENT ERRORS (Last 15) ────────────────────────────────────────────")
+        # 9. RECENT ERRORS
+        lines.append("┌─ 9. RECENT ERRORS (Last 15) ────────────────────────────────────────────")
         if not recent_errors:
             lines.append("│  (none)")
         else:
@@ -356,16 +379,16 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
 
-        # 9. LAST 20 DECISIONS
-        lines.append("┌─ 9. LAST 20 DECISIONS ──────────────────────────────────────────────────")
+        # 10. LAST 20 DECISIONS
+        lines.append("┌─ 10. LAST 20 DECISIONS ─────────────────────────────────────────────────")
         for d in (decisions or [])[:20]:
             icon = "SIG" if d["action"] not in ("neutral", "rejected") else "REJ"
             ts = (d.get("ts") or "")[:19]
-            lines.append(f"│  [{icon}] {ts} {d['symbol']:<18} | {d.get('reason','')[:55]}")
+            lines.append(f"│  [{icon}] {ts} {d['symbol']:<18} | {d.get('reason','')[:58]}")
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
         lines.append("=" * 78)
-        lines.append("End of Report – v16.8 Professional Diagnostic")
+        lines.append("End of Report – v16.9 Professional Diagnostic")
         lines.append("=" * 78)
         return "\n".join(lines)
 
@@ -453,7 +476,7 @@ class Indicators:
 
 # ===================== STRATEGY =====================
 class StrategyEngine:
-    def analyze(self, df_5m: pd.DataFrame, df_1h: pd.DataFrame) -> dict:
+    def analyze(self, df_5m: pd.DataFrame, df_1h: pd.DataFrame, symbol: str = "") -> dict:
         df = df_5m.iloc[:-1].copy()
         htf = df_1h.iloc[:-1].copy() if len(df_1h) > 30 else df
         if len(df) < 55:
@@ -468,8 +491,23 @@ class StrategyEngine:
         hp = float(hclose.iloc[-1])
 
         trend_strength = abs(e50 - e200) / (e200 + 1e-9) * 100
+
+        # ثبت مقدار قدرت روند
+        with STATE_LOCK:
+            SHARED_STATE["trend_strengths"].append({
+                "ts": datetime.utcnow().strftime("%H:%M:%S"),
+                "symbol": symbol,
+                "value": round(trend_strength, 3)
+            })
+            if len(SHARED_STATE["trend_strengths"]) > 80:
+                SHARED_STATE["trend_strengths"] = SHARED_STATE["trend_strengths"][-80:]
+
         if trend_strength < 0.30:
-            return {"action": "neutral", "reason": "روند ضعیف", "strat": "", "rsi": 0, "atr": 0, "htf": "weak"}
+            return {
+                "action": "neutral",
+                "reason": f"روند ضعیف ({trend_strength:.3f}%)",
+                "strat": "", "rsi": 0, "atr": 0, "htf": "weak"
+            }
 
         if hp > e50 * 0.993 and e50 >= e200 * 0.990:
             htf_trend = "bullish"
@@ -607,7 +645,7 @@ class TelegramController:
             while True:
                 await asyncio.sleep(60)
             return
-        await self.send("🚀 <b>Master Quant v16.8</b>\nگزارش حرفه‌ای و ریزبه‌ریز فعال شد", self.menu())
+        await self.send("🚀 <b>Master Quant v16.9</b>\nنمایش مقدار واقعی قدرت روند فعال شد", self.menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -637,7 +675,7 @@ class TelegramController:
                                 with STATE_LOCK:
                                     st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>Dashboard v16.8</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
+                                    f"📊 <b>Dashboard v16.9</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
                                     f"DD: {st['current_dd']:.1f}% | Pos: {len(st['active_positions'])}/{MAX_POS}\n"
                                     f"PnL: ${st['stats']['total_pnl']:.2f} | WR: {st['stats']['win_rate']}%\n"
                                     f"Last: {st['last_scan']}", self.menu())
@@ -658,7 +696,7 @@ class TelegramController:
                                 report = await self.engine.db.generate_txt_report(self.engine.prices)
                                 with open("report.txt", "w", encoding="utf-8") as f:
                                     f.write(report)
-                                await self.send_document("report.txt", "📄 Professional Report v16.8")
+                                await self.send_document("report.txt", "📄 Professional Report v16.9")
                             elif d == "cmd_rej":
                                 decs = await self.engine.db.get_recent_decisions(15)
                                 msg = "🚫 <b>Last decisions</b>\n\n"
@@ -698,15 +736,11 @@ class QuantEngine:
         with STATE_LOCK:
             s = SHARED_STATE["fetch_stats"][symbol]
             if timeframe == "5m":
-                if success:
-                    s["ok_5m"] += 1
-                else:
-                    s["fail_5m"] += 1
+                if success: s["ok_5m"] += 1
+                else: s["fail_5m"] += 1
             else:
-                if success:
-                    s["ok_1h"] += 1
-                else:
-                    s["fail_1h"] += 1
+                if success: s["ok_1h"] += 1
+                else: s["fail_1h"] += 1
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> list:
         try:
@@ -739,7 +773,7 @@ class QuantEngine:
 
     async def start(self):
         await self.db.init()
-        log.info("v16.8 Phemex-Only (Professional Report) starting...")
+        log.info("v16.9 Phemex-Only (Trend Strength Visibility) starting...")
         try:
             await self.ex.load_markets()
             log.info("Phemex markets loaded")
@@ -854,7 +888,7 @@ class QuantEngine:
                     else:
                         df1 = df5.copy()
 
-                    sig = self.strategy.analyze(df5, df1)
+                    sig = self.strategy.analyze(df5, df1, symbol=sym)
                     price = self.prices.get(sym) or float(df5["close"].iloc[-1])
                     if price <= 0:
                         continue
@@ -1168,7 +1202,7 @@ def dashboard():
 <html lang="fa" dir="rtl">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Quant v16.8</title>
+<title>Quant v16.9</title>
 <style>
 body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
 h1{color:#58a6ff}
@@ -1178,7 +1212,7 @@ h1{color:#58a6ff}
 </style>
 </head>
 <body>
-<h1>🚀 Master Quant v16.8</h1>
+<h1>🚀 Master Quant v16.9</h1>
 <div class="grid">
 <div class="card">موجودی<div class="value" id="bal">0.00</div></div>
 <div class="card">پوزیشن<div class="value" id="pos">0</div></div>
@@ -1211,7 +1245,7 @@ if __name__ == "__main__":
             print("Flask error:", e, flush=True)
             traceback.print_exc()
     try:
-        print("=== Master Quant v16.8 (Professional Report) starting ===", flush=True)
+        print("=== Master Quant v16.9 (Trend Strength Visibility) starting ===", flush=True)
         Thread(target=run_web, daemon=True).start()
         time.sleep(1)
         engine = QuantEngine()
