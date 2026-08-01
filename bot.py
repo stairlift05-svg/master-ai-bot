@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v16.5 – Phemex-Only (Rate Limit Fix)
-- رفع خطای Rate Limit (کد 30000)
-- فاصله بیشتر بین درخواست‌ها
-- Retry هوشمند
+Master Quant Engine v16.6 – Phemex-Only
+- بازگشت به ساختار پایدار دریافت کندل
 - استراتژی مستقل RSI_Divergence
+- لاگ دقیق اجرا
 - ۶ نماد سالم
 """
 
@@ -75,15 +74,15 @@ TEST_USD = 12.0
 CONSECUTIVE_LOSS_LIMIT = 2
 SYMBOL_COOLDOWN_HOURS = 5
 POST_CLOSE_COOLDOWN = 1800
-SCAN_INTERVAL = 80          # افزایش یافت
-SYMBOL_DELAY = 3.0          # افزایش یافت برای جلوگیری از rate limit
+SCAN_INTERVAL = 55
+SYMBOL_DELAY = 1.8
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("QuantV16.5")
+log = logging.getLogger("QuantV16.6")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True,
@@ -221,7 +220,7 @@ class Database:
 
         lines = [
             "=" * 70,
-            "       MASTER QUANT ENGINE v16.5 – Phemex-Only (Rate Limit Fix) REPORT",
+            "       MASTER QUANT ENGINE v16.6 – Phemex-Only REPORT",
             f"       Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
             "=" * 70,
             "",
@@ -558,7 +557,7 @@ class TelegramController:
             while True:
                 await asyncio.sleep(60)
             return
-        await self.send("🚀 <b>Master Quant v16.5</b>\nرفع Rate Limit + Retry", self.menu())
+        await self.send("🚀 <b>Master Quant v16.6</b>\nساختار پایدار + RSI_Divergence", self.menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -589,7 +588,7 @@ class TelegramController:
                                 with STATE_LOCK:
                                     st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>Dashboard v16.5</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
+                                    f"📊 <b>Dashboard v16.6</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
                                     f"DD: {st['current_dd']:.1f}% | Pos: {len(st['active_positions'])}/{MAX_POS}\n"
                                     f"PnL: ${st['stats']['total_pnl']:.2f} | WR: {st['stats']['win_rate']}%\n"
                                     f"Last: {st['last_scan']}", self.menu())
@@ -610,7 +609,7 @@ class TelegramController:
                                 report = await self.engine.db.generate_txt_report(self.engine.prices)
                                 with open("report.txt", "w", encoding="utf-8") as f:
                                     f.write(report)
-                                await self.send_document("report.txt", "📄 Report v16.5")
+                                await self.send_document("report.txt", "📄 Report v16.6")
                             elif d == "cmd_rej":
                                 decs = await self.engine.db.get_recent_decisions(12)
                                 msg = "🚫 <b>Last decisions</b>\n\n"
@@ -643,37 +642,23 @@ class QuantEngine:
         self.prices: Dict[str, float] = {}
         self.open_times: Dict[str, float] = {}
 
-    async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 80) -> list:
-        """با سیستم Retry برای خطای Rate Limit"""
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                candles = await self.ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-                if not candles or len(candles) < 40:
-                    return []
-                last_close = candles[-1][4]
-                if last_close <= 0 or last_close > 1e7:
-                    return []
-                return candles
-            except Exception as e:
-                err_str = str(e)
-                # تشخیص خطای Rate Limit
-                if "30000" in err_str or "rate" in err_str.lower() or "too many" in err_str.lower():
-                    wait_time = (attempt + 1) * 4  # 4، 8، 12 ثانیه
-                    log.warning(f"Rate limit {symbol} {timeframe} – صبر {wait_time}s (تلاش {attempt+1}/{max_retries})")
-                    await asyncio.sleep(wait_time)
-                    continue
-                else:
-                    log.warning(f"fetch_ohlcv {symbol} {timeframe}: {e}")
-                    await self.db.log_decision(symbol, "neutral", "", f"خطا در دریافت کندل: {err_str[:80]}")
-                    return []
-        # اگر همه تلاش‌ها شکست خورد
-        await self.db.log_decision(symbol, "neutral", "", "Rate Limit – تلاش‌ها تمام شد")
-        return []
+    async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> list:
+        try:
+            candles = await self.ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+            if not candles or len(candles) < 45:
+                return []
+            last_close = candles[-1][4]
+            if last_close <= 0 or last_close > 1e7:
+                return []
+            return candles
+        except Exception as e:
+            log.warning(f"fetch_ohlcv {symbol} {timeframe}: {e}")
+            await self.db.log_decision(symbol, "neutral", "", f"خطا در دریافت کندل: {str(e)[:80]}")
+            return []
 
     async def start(self):
         await self.db.init()
-        log.info("v16.5 Phemex-Only (Rate Limit Fix) starting...")
+        log.info("v16.6 Phemex-Only starting...")
 
         try:
             await self.ex.load_markets()
@@ -691,7 +676,7 @@ class QuantEngine:
             try:
                 await self.ex.set_leverage(LEVERAGE, sym)
                 log.info(f"Leverage OK → {sym}")
-                await asyncio.sleep(0.8)
+                await asyncio.sleep(0.5)
             except Exception as e:
                 log.warning(f"Leverage {sym}: {e}")
 
@@ -752,7 +737,7 @@ class QuantEngine:
                 await self.db.log_equity(cur, peak, SHARED_STATE.get("current_dd", 0))
             except Exception as e:
                 log.error(f"price_loop: {e}")
-            await asyncio.sleep(12)
+            await asyncio.sleep(10)
 
     async def scan_loop(self):
         while True:
@@ -766,7 +751,7 @@ class QuantEngine:
                 open_syms = {p["symbol"] for p in SHARED_STATE["active_positions"].values()}
 
             if not can:
-                await asyncio.sleep(15)
+                await asyncio.sleep(12)
                 continue
 
             with STATE_LOCK:
@@ -780,10 +765,10 @@ class QuantEngine:
                 if sym in SYMBOL_POST_CLOSE_COOLDOWN and time.time() < SYMBOL_POST_CLOSE_COOLDOWN[sym]:
                     continue
                 try:
-                    # درخواست‌ها را پشت‌سرهم می‌زنیم تا rate limit کمتر شود
-                    raw5 = await self.fetch_ohlcv(sym, TIMEFRAME, 80)
-                    await asyncio.sleep(1.2)
-                    raw1 = await self.fetch_ohlcv(sym, HTF_TIMEFRAME, 60)
+                    raw5, raw1 = await asyncio.gather(
+                        self.fetch_ohlcv(sym, TIMEFRAME, 100),
+                        self.fetch_ohlcv(sym, HTF_TIMEFRAME, 80),
+                    )
                     await asyncio.sleep(SYMBOL_DELAY)
 
                     if not raw5 or len(raw5) < 50:
@@ -819,7 +804,7 @@ class QuantEngine:
                         await self.execute_trade(sym, sig)
                 except Exception as e:
                     log.error(f"scan {sym}: {e}")
-                await asyncio.sleep(0.8)
+                await asyncio.sleep(0.5)
 
             await asyncio.sleep(SCAN_INTERVAL)
 
@@ -1109,7 +1094,7 @@ class QuantEngine:
                     elif sl_hit and pos.get("highest_pnl_pct", 0) > TRAIL_ACT:
                         reason = "Trail"
                     await self.force_close(pid, reason)
-            await asyncio.sleep(1.8)
+            await asyncio.sleep(1.6)
 
 # ===================== WEB =====================
 app = Flask(__name__)
@@ -1127,7 +1112,7 @@ def dashboard():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Quant v16.5</title>
+<title>Quant v16.6</title>
 <style>
 body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
 h1{color:#58a6ff}
@@ -1137,7 +1122,7 @@ h1{color:#58a6ff}
 </style>
 </head>
 <body>
-<h1>🚀 Master Quant v16.5 (Rate Limit Fix)</h1>
+<h1>🚀 Master Quant v16.6</h1>
 <div class="grid">
 <div class="card">موجودی<div class="value" id="bal">0.00</div></div>
 <div class="card">پوزیشن<div class="value" id="pos">0</div></div>
@@ -1172,7 +1157,7 @@ if __name__ == "__main__":
             traceback.print_exc()
 
     try:
-        print("=== Master Quant v16.5 (Rate Limit Fix) starting ===", flush=True)
+        print("=== Master Quant v16.6 starting ===", flush=True)
         Thread(target=run_web, daemon=True).start()
         time.sleep(1)
         engine = QuantEngine()
