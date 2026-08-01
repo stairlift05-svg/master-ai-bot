@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v16.9 – Phemex-Only
+Master Quant Engine v16.10 – Phemex-Only
+- آستانه قدرت روند کاهش یافت به ۰.۰۵٪
 - نمایش مقدار واقعی trend_strength
-- گزارش حرفه‌ای با بخش قدرت روند
-- استراتژی مستقل RSI_Divergence
+- گزارش حرفه‌ای
 """
 
 import asyncio
@@ -75,13 +75,14 @@ SYMBOL_COOLDOWN_HOURS = 5
 POST_CLOSE_COOLDOWN = 1800
 SCAN_INTERVAL = 55
 SYMBOL_DELAY = 2.0
+TREND_STRENGTH_THRESHOLD = 0.05   # کاهش یافته از ۰.۳۰
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("QuantV16.9")
+log = logging.getLogger("QuantV16.10")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True,
@@ -99,7 +100,7 @@ SHARED_STATE: Dict[str, Any] = {
     "fetch_stats": defaultdict(lambda: {"ok_5m": 0, "fail_5m": 0, "ok_1h": 0, "fail_1h": 0}),
     "recent_errors": [],
     "signal_but_not_executed": [],
-    "trend_strengths": [],  # لیست اخیر قدرت روند
+    "trend_strengths": [],
 }
 STATE_LOCK = Lock()
 SYMBOL_ERROR_COOLDOWN: Dict[str, float] = {}
@@ -228,12 +229,11 @@ class Database:
         now = time.time()
         lines = []
         lines.append("=" * 78)
-        lines.append("          MASTER QUANT ENGINE v16.9 – PROFESSIONAL DIAGNOSTIC REPORT")
+        lines.append("          MASTER QUANT ENGINE v16.10 – PROFESSIONAL DIAGNOSTIC REPORT")
         lines.append(f"          Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
         lines.append("=" * 78)
         lines.append("")
 
-        # 1. SYSTEM STATUS
         lines.append("┌─ 1. SYSTEM STATUS ──────────────────────────────────────────────────────")
         lines.append(f"│  Balance          : ${st.get('balance', 0):.2f}")
         lines.append(f"│  Peak Balance     : ${st.get('peak_balance', 0):.2f}")
@@ -250,7 +250,6 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
 
-        # 2. DATA HEALTH
         lines.append("┌─ 2. DATA HEALTH (Candle Fetch) ─────────────────────────────────────────")
         if not fetch_stats:
             lines.append("│  (هنوز آماری ثبت نشده)")
@@ -263,7 +262,6 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
 
-        # 3. TREND STRENGTH ANALYSIS (جدید)
         lines.append("┌─ 3. TREND STRENGTH ANALYSIS ────────────────────────────────────────────")
         if not trend_vals:
             lines.append("│  (هنوز مقداری ثبت نشده)")
@@ -276,7 +274,7 @@ class Database:
             lines.append(f"│  Average          : {avg_ts:.3f}%")
             lines.append(f"│  Min              : {min_ts:.3f}%")
             lines.append(f"│  Max              : {max_ts:.3f}%")
-            lines.append(f"│  Current Threshold: 0.30%")
+            lines.append(f"│  Current Threshold: {TREND_STRENGTH_THRESHOLD}%")
             lines.append("│")
             lines.append("│  Recent values (last 15):")
             for item in trend_vals[-15:]:
@@ -284,7 +282,6 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
 
-        # 4. OPEN POSITIONS
         lines.append("┌─ 4. OPEN POSITIONS ─────────────────────────────────────────────────────")
         active = st.get("active_positions", {})
         if not active:
@@ -298,7 +295,6 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
 
-        # 5. CLOSED TRADES
         lines.append("┌─ 5. CLOSED TRADES (Last 40) ────────────────────────────────────────────")
         if not closed:
             lines.append("│  (none)")
@@ -310,7 +306,6 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
 
-        # 6. DECISION BREAKDOWN
         lines.append("┌─ 6. DECISION BREAKDOWN ─────────────────────────────────────────────────")
         reasons = Counter()
         by_symbol = defaultdict(lambda: {"sig": 0, "rej": 0})
@@ -340,7 +335,6 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
 
-        # 7. SIGNALS THAT DID NOT EXECUTE
         lines.append("┌─ 7. SIGNALS THAT DID NOT EXECUTE ───────────────────────────────────────")
         if not signal_not_exec:
             lines.append("│  (none recorded)")
@@ -350,7 +344,6 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
 
-        # 8. COOLDOWNS
         lines.append("┌─ 8. ACTIVE COOLDOWNS ───────────────────────────────────────────────────")
         has_cd = False
         for sym in SYMBOLS:
@@ -369,7 +362,6 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
 
-        # 9. RECENT ERRORS
         lines.append("┌─ 9. RECENT ERRORS (Last 15) ────────────────────────────────────────────")
         if not recent_errors:
             lines.append("│  (none)")
@@ -379,7 +371,6 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
 
-        # 10. LAST 20 DECISIONS
         lines.append("┌─ 10. LAST 20 DECISIONS ─────────────────────────────────────────────────")
         for d in (decisions or [])[:20]:
             icon = "SIG" if d["action"] not in ("neutral", "rejected") else "REJ"
@@ -388,7 +379,7 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
         lines.append("=" * 78)
-        lines.append("End of Report – v16.9 Professional Diagnostic")
+        lines.append("End of Report – v16.10 Professional Diagnostic")
         lines.append("=" * 78)
         return "\n".join(lines)
 
@@ -492,7 +483,6 @@ class StrategyEngine:
 
         trend_strength = abs(e50 - e200) / (e200 + 1e-9) * 100
 
-        # ثبت مقدار قدرت روند
         with STATE_LOCK:
             SHARED_STATE["trend_strengths"].append({
                 "ts": datetime.utcnow().strftime("%H:%M:%S"),
@@ -502,7 +492,7 @@ class StrategyEngine:
             if len(SHARED_STATE["trend_strengths"]) > 80:
                 SHARED_STATE["trend_strengths"] = SHARED_STATE["trend_strengths"][-80:]
 
-        if trend_strength < 0.30:
+        if trend_strength < TREND_STRENGTH_THRESHOLD:
             return {
                 "action": "neutral",
                 "reason": f"روند ضعیف ({trend_strength:.3f}%)",
@@ -645,7 +635,7 @@ class TelegramController:
             while True:
                 await asyncio.sleep(60)
             return
-        await self.send("🚀 <b>Master Quant v16.9</b>\nنمایش مقدار واقعی قدرت روند فعال شد", self.menu())
+        await self.send("🚀 <b>Master Quant v16.10</b>\nآستانه قدرت روند → ۰.۰۵٪", self.menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -675,7 +665,7 @@ class TelegramController:
                                 with STATE_LOCK:
                                     st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>Dashboard v16.9</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
+                                    f"📊 <b>Dashboard v16.10</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
                                     f"DD: {st['current_dd']:.1f}% | Pos: {len(st['active_positions'])}/{MAX_POS}\n"
                                     f"PnL: ${st['stats']['total_pnl']:.2f} | WR: {st['stats']['win_rate']}%\n"
                                     f"Last: {st['last_scan']}", self.menu())
@@ -696,7 +686,7 @@ class TelegramController:
                                 report = await self.engine.db.generate_txt_report(self.engine.prices)
                                 with open("report.txt", "w", encoding="utf-8") as f:
                                     f.write(report)
-                                await self.send_document("report.txt", "📄 Professional Report v16.9")
+                                await self.send_document("report.txt", "📄 Professional Report v16.10")
                             elif d == "cmd_rej":
                                 decs = await self.engine.db.get_recent_decisions(15)
                                 msg = "🚫 <b>Last decisions</b>\n\n"
@@ -773,7 +763,7 @@ class QuantEngine:
 
     async def start(self):
         await self.db.init()
-        log.info("v16.9 Phemex-Only (Trend Strength Visibility) starting...")
+        log.info("v16.10 Phemex-Only (Trend Threshold 0.05%) starting...")
         try:
             await self.ex.load_markets()
             log.info("Phemex markets loaded")
@@ -1202,7 +1192,7 @@ def dashboard():
 <html lang="fa" dir="rtl">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Quant v16.9</title>
+<title>Quant v16.10</title>
 <style>
 body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
 h1{color:#58a6ff}
@@ -1212,7 +1202,7 @@ h1{color:#58a6ff}
 </style>
 </head>
 <body>
-<h1>🚀 Master Quant v16.9</h1>
+<h1>🚀 Master Quant v16.10</h1>
 <div class="grid">
 <div class="card">موجودی<div class="value" id="bal">0.00</div></div>
 <div class="card">پوزیشن<div class="value" id="pos">0</div></div>
@@ -1245,7 +1235,7 @@ if __name__ == "__main__":
             print("Flask error:", e, flush=True)
             traceback.print_exc()
     try:
-        print("=== Master Quant v16.9 (Trend Strength Visibility) starting ===", flush=True)
+        print("=== Master Quant v16.10 (Trend Threshold 0.05%) starting ===", flush=True)
         Thread(target=run_web, daemon=True).start()
         time.sleep(1)
         engine = QuantEngine()
