@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v16.4 – Phemex-Only
-- استراتژی مستقل RSI_Divergence با شرایط سخت
-- ۳ استراتژی قبلی + ۱ استراتژی واگرایی
-- لاگ دقیق اجرای معامله
+Master Quant Engine v16.5 – Phemex-Only (Rate Limit Fix)
+- رفع خطای Rate Limit (کد 30000)
+- فاصله بیشتر بین درخواست‌ها
+- Retry هوشمند
+- استراتژی مستقل RSI_Divergence
 - ۶ نماد سالم
 """
 
@@ -74,15 +75,15 @@ TEST_USD = 12.0
 CONSECUTIVE_LOSS_LIMIT = 2
 SYMBOL_COOLDOWN_HOURS = 5
 POST_CLOSE_COOLDOWN = 1800
-SCAN_INTERVAL = 50
-SYMBOL_DELAY = 1.3
+SCAN_INTERVAL = 80          # افزایش یافت
+SYMBOL_DELAY = 3.0          # افزایش یافت برای جلوگیری از rate limit
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("QuantV16.4")
+log = logging.getLogger("QuantV16.5")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True,
@@ -220,7 +221,7 @@ class Database:
 
         lines = [
             "=" * 70,
-            "       MASTER QUANT ENGINE v16.4 – Phemex-Only REPORT",
+            "       MASTER QUANT ENGINE v16.5 – Phemex-Only (Rate Limit Fix) REPORT",
             f"       Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
             "=" * 70,
             "",
@@ -353,7 +354,6 @@ class Indicators:
 
     @staticmethod
     def detect_rsi_divergence(df: pd.DataFrame, lookback: int = 28) -> Optional[str]:
-        """تشخیص واگرایی با سخت‌گیری بیشتر"""
         if len(df) < lookback + 5:
             return None
         close = df["close"].iloc[-lookback:]
@@ -362,29 +362,24 @@ class Indicators:
         price_highs, rsi_highs = [], []
 
         for i in range(3, len(close) - 3):
-            # کف محلی قوی‌تر
             if (close.iloc[i] < close.iloc[i-1] and close.iloc[i] < close.iloc[i-2] and
                 close.iloc[i] < close.iloc[i-3] and
                 close.iloc[i] < close.iloc[i+1] and close.iloc[i] < close.iloc[i+2]):
                 price_lows.append((i, float(close.iloc[i])))
                 rsi_lows.append((i, float(rsi.iloc[i])))
 
-            # سقف محلی قوی‌تر
             if (close.iloc[i] > close.iloc[i-1] and close.iloc[i] > close.iloc[i-2] and
                 close.iloc[i] > close.iloc[i-3] and
                 close.iloc[i] > close.iloc[i+1] and close.iloc[i] > close.iloc[i+2]):
                 price_highs.append((i, float(close.iloc[i])))
                 rsi_highs.append((i, float(rsi.iloc[i])))
 
-        # واگرایی صعودی
         if len(price_lows) >= 2 and len(rsi_lows) >= 2:
             p1, p2 = price_lows[-2], price_lows[-1]
             r1, r2 = rsi_lows[-2], rsi_lows[-1]
-            # فاصله حداقل ۴ کندل + کف قیمت پایین‌تر + RSI بالاتر
             if (p2[0] - p1[0]) >= 4 and p2[1] < p1[1] * 0.998 and r2[1] > r1[1] + 1.5:
                 return "bullish"
 
-        # واگرایی نزولی
         if len(price_highs) >= 2 and len(rsi_highs) >= 2:
             p1, p2 = price_highs[-2], price_highs[-1]
             r1, r2 = rsi_highs[-2], rsi_highs[-1]
@@ -398,7 +393,7 @@ class StrategyEngine:
     def analyze(self, df_5m: pd.DataFrame, df_1h: pd.DataFrame) -> dict:
         df = df_5m.iloc[:-1].copy()
         htf = df_1h.iloc[:-1].copy()
-        if len(df) < 60 or len(htf) < 40:
+        if len(df) < 55 or len(htf) < 35:
             return {"action": "neutral", "reason": "داده ناکافی", "strat": "", "rsi": 0, "atr": 0, "htf": ""}
 
         if df["close"].iloc[-1] <= 0 or df["high"].iloc[-1] <= 0:
@@ -444,43 +439,35 @@ class StrategyEngine:
         l12 = float(Indicators.lowest(low, 12).iloc[-1])
         vol_ok = vcur > vsma * 1.22
 
-        # ========== استراتژی ۱: Breakout_Momentum ==========
+        # استراتژی ۱
         if htf_trend == "bullish" and price > ema20 * 1.001 and price >= h12 * 0.998 and 44 < rsi < 70 and vol_ok:
             return self._build("buy", "Breakout_Momentum", price, atr, rsi, htf_trend)
         if htf_trend == "bearish" and price < ema20 * 0.999 and price <= l12 * 1.002 and 30 < rsi < 56 and vol_ok:
             return self._build("sell", "Breakout_Momentum", price, atr, rsi, htf_trend)
 
-        # ========== استراتژی ۲: SuperTrend_Pullback ==========
+        # استراتژی ۲
         if htf_trend == "bullish" and st_d.iloc[-1] == 1 and low.iloc[-1] <= st_l.iloc[-1] * 1.007 and c.iloc[-1] > c.iloc[-2] and 40 < rsi < 67 and price > ema20:
             return self._build("buy", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
         if htf_trend == "bearish" and st_d.iloc[-1] == -1 and high.iloc[-1] >= st_u.iloc[-1] * 0.993 and c.iloc[-1] < c.iloc[-2] and 33 < rsi < 60 and price < ema20:
             return self._build("sell", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
 
-        # ========== استراتژی ۳: Volume_Surge ==========
+        # استراتژی ۳
         if htf_trend == "bullish" and price > ema20 and vcur > vsma * 1.45 and c.iloc[-1] > c.iloc[-2] and 45 < rsi < 68:
             return self._build("buy", "Volume_Surge", price, atr, rsi, htf_trend)
         if htf_trend == "bearish" and price < ema20 and vcur > vsma * 1.45 and c.iloc[-1] < c.iloc[-2] and 32 < rsi < 55:
             return self._build("sell", "Volume_Surge", price, atr, rsi, htf_trend)
 
-        # ========== استراتژی ۴: RSI_Divergence (مستقل و سخت‌گیرانه) ==========
+        # استراتژی ۴: RSI_Divergence (مستقل)
         divergence = Indicators.detect_rsi_divergence(df, lookback=28)
 
         if divergence == "bullish" and htf_trend == "bullish":
-            # شرایط سخت برای خرید با واگرایی
-            if (rsi < 42 and                          # RSI در ناحیه اشباع فروش یا نزدیک
-                vcur > vsma * 1.15 and                # حجم تأیید
-                price > ema20 * 0.997 and             # قیمت نزدیک یا بالای EMA20
-                c.iloc[-1] > c.iloc[-2] and           # کندل فعلی صعودی
-                atr > atr_sma * 0.35):                # نوسان کافی
+            if (rsi < 42 and vcur > vsma * 1.15 and price > ema20 * 0.997 and
+                c.iloc[-1] > c.iloc[-2] and atr > atr_sma * 0.35):
                 return self._build("buy", "RSI_Divergence", price, atr, rsi, htf_trend)
 
         if divergence == "bearish" and htf_trend == "bearish":
-            # شرایط سخت برای فروش با واگرایی
-            if (rsi > 58 and
-                vcur > vsma * 1.15 and
-                price < ema20 * 1.003 and
-                c.iloc[-1] < c.iloc[-2] and
-                atr > atr_sma * 0.35):
+            if (rsi > 58 and vcur > vsma * 1.15 and price < ema20 * 1.003 and
+                c.iloc[-1] < c.iloc[-2] and atr > atr_sma * 0.35):
                 return self._build("sell", "RSI_Divergence", price, atr, rsi, htf_trend)
 
         return {"action": "neutral", "reason": f"بدون سیگنال (RSI={rsi:.1f})", "strat": "", "rsi": rsi, "atr": atr, "htf": htf_trend}
@@ -571,7 +558,7 @@ class TelegramController:
             while True:
                 await asyncio.sleep(60)
             return
-        await self.send("🚀 <b>Master Quant v16.4</b>\nاستراتژی مستقل RSI_Divergence اضافه شد", self.menu())
+        await self.send("🚀 <b>Master Quant v16.5</b>\nرفع Rate Limit + Retry", self.menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -602,7 +589,7 @@ class TelegramController:
                                 with STATE_LOCK:
                                     st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>Dashboard v16.4</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
+                                    f"📊 <b>Dashboard v16.5</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
                                     f"DD: {st['current_dd']:.1f}% | Pos: {len(st['active_positions'])}/{MAX_POS}\n"
                                     f"PnL: ${st['stats']['total_pnl']:.2f} | WR: {st['stats']['win_rate']}%\n"
                                     f"Last: {st['last_scan']}", self.menu())
@@ -623,7 +610,7 @@ class TelegramController:
                                 report = await self.engine.db.generate_txt_report(self.engine.prices)
                                 with open("report.txt", "w", encoding="utf-8") as f:
                                     f.write(report)
-                                await self.send_document("report.txt", "📄 Report v16.4")
+                                await self.send_document("report.txt", "📄 Report v16.5")
                             elif d == "cmd_rej":
                                 decs = await self.engine.db.get_recent_decisions(12)
                                 msg = "🚫 <b>Last decisions</b>\n\n"
@@ -656,23 +643,37 @@ class QuantEngine:
         self.prices: Dict[str, float] = {}
         self.open_times: Dict[str, float] = {}
 
-    async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> list:
-        try:
-            candles = await self.ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-            if not candles or len(candles) < 50:
-                return []
-            last_close = candles[-1][4]
-            if last_close <= 0 or last_close > 1e7:
-                return []
-            return candles
-        except Exception as e:
-            log.warning(f"fetch_ohlcv {symbol} {timeframe}: {e}")
-            await self.db.log_decision(symbol, "neutral", "", f"خطا در دریافت کندل: {str(e)[:80]}")
-            return []
+    async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 80) -> list:
+        """با سیستم Retry برای خطای Rate Limit"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                candles = await self.ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+                if not candles or len(candles) < 40:
+                    return []
+                last_close = candles[-1][4]
+                if last_close <= 0 or last_close > 1e7:
+                    return []
+                return candles
+            except Exception as e:
+                err_str = str(e)
+                # تشخیص خطای Rate Limit
+                if "30000" in err_str or "rate" in err_str.lower() or "too many" in err_str.lower():
+                    wait_time = (attempt + 1) * 4  # 4، 8، 12 ثانیه
+                    log.warning(f"Rate limit {symbol} {timeframe} – صبر {wait_time}s (تلاش {attempt+1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    log.warning(f"fetch_ohlcv {symbol} {timeframe}: {e}")
+                    await self.db.log_decision(symbol, "neutral", "", f"خطا در دریافت کندل: {err_str[:80]}")
+                    return []
+        # اگر همه تلاش‌ها شکست خورد
+        await self.db.log_decision(symbol, "neutral", "", "Rate Limit – تلاش‌ها تمام شد")
+        return []
 
     async def start(self):
         await self.db.init()
-        log.info("v16.4 Phemex-Only starting (RSI_Divergence independent)...")
+        log.info("v16.5 Phemex-Only (Rate Limit Fix) starting...")
 
         try:
             await self.ex.load_markets()
@@ -690,6 +691,7 @@ class QuantEngine:
             try:
                 await self.ex.set_leverage(LEVERAGE, sym)
                 log.info(f"Leverage OK → {sym}")
+                await asyncio.sleep(0.8)
             except Exception as e:
                 log.warning(f"Leverage {sym}: {e}")
 
@@ -750,7 +752,7 @@ class QuantEngine:
                 await self.db.log_equity(cur, peak, SHARED_STATE.get("current_dd", 0))
             except Exception as e:
                 log.error(f"price_loop: {e}")
-            await asyncio.sleep(8)
+            await asyncio.sleep(12)
 
     async def scan_loop(self):
         while True:
@@ -764,7 +766,7 @@ class QuantEngine:
                 open_syms = {p["symbol"] for p in SHARED_STATE["active_positions"].values()}
 
             if not can:
-                await asyncio.sleep(12)
+                await asyncio.sleep(15)
                 continue
 
             with STATE_LOCK:
@@ -778,19 +780,19 @@ class QuantEngine:
                 if sym in SYMBOL_POST_CLOSE_COOLDOWN and time.time() < SYMBOL_POST_CLOSE_COOLDOWN[sym]:
                     continue
                 try:
-                    raw5, raw1 = await asyncio.gather(
-                        self.fetch_ohlcv(sym, TIMEFRAME, 120),
-                        self.fetch_ohlcv(sym, HTF_TIMEFRAME, 100),
-                    )
+                    # درخواست‌ها را پشت‌سرهم می‌زنیم تا rate limit کمتر شود
+                    raw5 = await self.fetch_ohlcv(sym, TIMEFRAME, 80)
+                    await asyncio.sleep(1.2)
+                    raw1 = await self.fetch_ohlcv(sym, HTF_TIMEFRAME, 60)
                     await asyncio.sleep(SYMBOL_DELAY)
 
-                    if not raw5 or len(raw5) < 55:
+                    if not raw5 or len(raw5) < 50:
                         continue
 
                     df5 = pd.DataFrame(raw5, columns=["ts", "open", "high", "low", "close", "volume"])
                     df1 = (
                         pd.DataFrame(raw1, columns=["ts", "open", "high", "low", "close", "volume"])
-                        if raw1 and len(raw1) > 35 else df5
+                        if raw1 and len(raw1) > 30 else df5
                     )
                     sig = self.strategy.analyze(df5, df1)
 
@@ -817,7 +819,7 @@ class QuantEngine:
                         await self.execute_trade(sym, sig)
                 except Exception as e:
                     log.error(f"scan {sym}: {e}")
-                await asyncio.sleep(0.4)
+                await asyncio.sleep(0.8)
 
             await asyncio.sleep(SCAN_INTERVAL)
 
@@ -825,20 +827,17 @@ class QuantEngine:
         if sym in SYMBOL_ERROR_COOLDOWN and time.time() < SYMBOL_ERROR_COOLDOWN[sym]:
             reason = f"کول‌داون خطا ({int(SYMBOL_ERROR_COOLDOWN[sym] - time.time())}s باقی‌مانده)"
             await self.db.log_decision(sym, "rejected", sig.get("strat", ""), reason)
-            log.warning(f"EXECUTE BLOCKED {sym}: {reason}")
             return
 
         if sym in SYMBOL_POST_CLOSE_COOLDOWN and time.time() < SYMBOL_POST_CLOSE_COOLDOWN[sym]:
             reason = f"کول‌داون بعد از بستن ({int(SYMBOL_POST_CLOSE_COOLDOWN[sym] - time.time())}s باقی‌مانده)"
             await self.db.log_decision(sym, "rejected", sig.get("strat", ""), reason)
-            log.warning(f"EXECUTE BLOCKED {sym}: {reason}")
             return
 
         price = self.prices.get(sym)
         if not price or price <= 0:
             reason = "قیمت لحظه‌ای موجود نیست"
             await self.db.log_decision(sym, "rejected", sig.get("strat", ""), reason)
-            log.warning(f"EXECUTE BLOCKED {sym}: {reason}")
             await self.tg.send(f"⚠️ {sym}\nسیگنال آمد ولی قیمت موجود نیست")
             return
 
@@ -864,7 +863,6 @@ class QuantEngine:
             if qty <= 0:
                 reason = f"حجم صفر (bal={bal:.1f} free={free:.1f} price={price:.4f})"
                 await self.db.log_decision(sym, "rejected", sig.get("strat", ""), reason)
-                log.warning(f"EXECUTE BLOCKED {sym}: {reason}")
                 await self.tg.send(f"⚠️ {sym}\nسیگنال {sig.get('strat')} آمد ولی حجم صفر شد")
                 return
 
@@ -1111,7 +1109,7 @@ class QuantEngine:
                     elif sl_hit and pos.get("highest_pnl_pct", 0) > TRAIL_ACT:
                         reason = "Trail"
                     await self.force_close(pid, reason)
-            await asyncio.sleep(1.6)
+            await asyncio.sleep(1.8)
 
 # ===================== WEB =====================
 app = Flask(__name__)
@@ -1129,7 +1127,7 @@ def dashboard():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Quant v16.4</title>
+<title>Quant v16.5</title>
 <style>
 body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
 h1{color:#58a6ff}
@@ -1139,7 +1137,7 @@ h1{color:#58a6ff}
 </style>
 </head>
 <body>
-<h1>🚀 Master Quant v16.4</h1>
+<h1>🚀 Master Quant v16.5 (Rate Limit Fix)</h1>
 <div class="grid">
 <div class="card">موجودی<div class="value" id="bal">0.00</div></div>
 <div class="card">پوزیشن<div class="value" id="pos">0</div></div>
@@ -1174,7 +1172,7 @@ if __name__ == "__main__":
             traceback.print_exc()
 
     try:
-        print("=== Master Quant v16.4 starting ===", flush=True)
+        print("=== Master Quant v16.5 (Rate Limit Fix) starting ===", flush=True)
         Thread(target=run_web, daemon=True).start()
         time.sleep(1)
         engine = QuantEngine()
