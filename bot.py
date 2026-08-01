@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v16.6 – Phemex-Only
-- بازگشت به ساختار پایدار دریافت کندل
+Master Quant Engine v16.7 – Phemex-Only
+- رفع خطای input arguments برای کندل ۱ ساعته
+- اصلاح set_position_mode
+- Fallback به داده ۵ دقیقه در صورت خطای ۱ ساعته
 - استراتژی مستقل RSI_Divergence
-- لاگ دقیق اجرا
-- ۶ نماد سالم
 """
 
 import asyncio
@@ -75,14 +75,14 @@ CONSECUTIVE_LOSS_LIMIT = 2
 SYMBOL_COOLDOWN_HOURS = 5
 POST_CLOSE_COOLDOWN = 1800
 SCAN_INTERVAL = 55
-SYMBOL_DELAY = 1.8
+SYMBOL_DELAY = 2.0
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("QuantV16.6")
+log = logging.getLogger("QuantV16.7")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True,
@@ -220,7 +220,7 @@ class Database:
 
         lines = [
             "=" * 70,
-            "       MASTER QUANT ENGINE v16.6 – Phemex-Only REPORT",
+            "       MASTER QUANT ENGINE v16.7 – Phemex-Only REPORT",
             f"       Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
             "=" * 70,
             "",
@@ -391,8 +391,8 @@ class Indicators:
 class StrategyEngine:
     def analyze(self, df_5m: pd.DataFrame, df_1h: pd.DataFrame) -> dict:
         df = df_5m.iloc[:-1].copy()
-        htf = df_1h.iloc[:-1].copy()
-        if len(df) < 55 or len(htf) < 35:
+        htf = df_1h.iloc[:-1].copy() if len(df_1h) > 30 else df
+        if len(df) < 55:
             return {"action": "neutral", "reason": "داده ناکافی", "strat": "", "rsi": 0, "atr": 0, "htf": ""}
 
         if df["close"].iloc[-1] <= 0 or df["high"].iloc[-1] <= 0:
@@ -404,12 +404,12 @@ class StrategyEngine:
         hp = float(hclose.iloc[-1])
 
         trend_strength = abs(e50 - e200) / (e200 + 1e-9) * 100
-        if trend_strength < 0.35:
+        if trend_strength < 0.30:  # کمی شل‌تر برای بازیابی
             return {"action": "neutral", "reason": "روند ضعیف", "strat": "", "rsi": 0, "atr": 0, "htf": "weak"}
 
-        if hp > e50 * 0.994 and e50 >= e200 * 0.992:
+        if hp > e50 * 0.993 and e50 >= e200 * 0.990:
             htf_trend = "bullish"
-        elif hp < e50 * 1.006 and e50 <= e200 * 1.008:
+        elif hp < e50 * 1.007 and e50 <= e200 * 1.010:
             htf_trend = "bearish"
         else:
             return {"action": "neutral", "reason": "روند HTF نامشخص", "strat": "", "rsi": 0, "atr": 0, "htf": "sideways"}
@@ -422,7 +422,7 @@ class StrategyEngine:
             return {"action": "neutral", "reason": "ATR صفر یا نامعتبر", "strat": "", "rsi": 0, "atr": 0, "htf": htf_trend}
 
         atr_sma = float(Indicators.sma(atr_s, 20).iloc[-1])
-        if atr < atr_sma * 0.30 or atr > atr_sma * 4.0:
+        if atr < atr_sma * 0.28 or atr > atr_sma * 4.2:
             return {"action": "neutral", "reason": "نوسان نامناسب", "strat": "", "rsi": 0, "atr": atr, "htf": htf_trend}
 
         rsi_s = Indicators.rsi(c)
@@ -436,37 +436,35 @@ class StrategyEngine:
         vcur = float(vol.iloc[-1])
         h12 = float(Indicators.highest(high, 12).iloc[-1])
         l12 = float(Indicators.lowest(low, 12).iloc[-1])
-        vol_ok = vcur > vsma * 1.22
+        vol_ok = vcur > vsma * 1.18
 
         # استراتژی ۱
-        if htf_trend == "bullish" and price > ema20 * 1.001 and price >= h12 * 0.998 and 44 < rsi < 70 and vol_ok:
+        if htf_trend == "bullish" and price > ema20 * 1.0005 and price >= h12 * 0.997 and 42 < rsi < 72 and vol_ok:
             return self._build("buy", "Breakout_Momentum", price, atr, rsi, htf_trend)
-        if htf_trend == "bearish" and price < ema20 * 0.999 and price <= l12 * 1.002 and 30 < rsi < 56 and vol_ok:
+        if htf_trend == "bearish" and price < ema20 * 0.9995 and price <= l12 * 1.003 and 28 < rsi < 58 and vol_ok:
             return self._build("sell", "Breakout_Momentum", price, atr, rsi, htf_trend)
 
         # استراتژی ۲
-        if htf_trend == "bullish" and st_d.iloc[-1] == 1 and low.iloc[-1] <= st_l.iloc[-1] * 1.007 and c.iloc[-1] > c.iloc[-2] and 40 < rsi < 67 and price > ema20:
+        if htf_trend == "bullish" and st_d.iloc[-1] == 1 and low.iloc[-1] <= st_l.iloc[-1] * 1.008 and c.iloc[-1] > c.iloc[-2] and 38 < rsi < 68 and price > ema20:
             return self._build("buy", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
-        if htf_trend == "bearish" and st_d.iloc[-1] == -1 and high.iloc[-1] >= st_u.iloc[-1] * 0.993 and c.iloc[-1] < c.iloc[-2] and 33 < rsi < 60 and price < ema20:
+        if htf_trend == "bearish" and st_d.iloc[-1] == -1 and high.iloc[-1] >= st_u.iloc[-1] * 0.992 and c.iloc[-1] < c.iloc[-2] and 32 < rsi < 62 and price < ema20:
             return self._build("sell", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
 
         # استراتژی ۳
-        if htf_trend == "bullish" and price > ema20 and vcur > vsma * 1.45 and c.iloc[-1] > c.iloc[-2] and 45 < rsi < 68:
+        if htf_trend == "bullish" and price > ema20 and vcur > vsma * 1.40 and c.iloc[-1] > c.iloc[-2] and 43 < rsi < 70:
             return self._build("buy", "Volume_Surge", price, atr, rsi, htf_trend)
-        if htf_trend == "bearish" and price < ema20 and vcur > vsma * 1.45 and c.iloc[-1] < c.iloc[-2] and 32 < rsi < 55:
+        if htf_trend == "bearish" and price < ema20 and vcur > vsma * 1.40 and c.iloc[-1] < c.iloc[-2] and 30 < rsi < 57:
             return self._build("sell", "Volume_Surge", price, atr, rsi, htf_trend)
 
-        # استراتژی ۴: RSI_Divergence (مستقل)
+        # استراتژی ۴: RSI_Divergence
         divergence = Indicators.detect_rsi_divergence(df, lookback=28)
-
         if divergence == "bullish" and htf_trend == "bullish":
-            if (rsi < 42 and vcur > vsma * 1.15 and price > ema20 * 0.997 and
-                c.iloc[-1] > c.iloc[-2] and atr > atr_sma * 0.35):
+            if (rsi < 45 and vcur > vsma * 1.12 and price > ema20 * 0.996 and
+                c.iloc[-1] > c.iloc[-2] and atr > atr_sma * 0.32):
                 return self._build("buy", "RSI_Divergence", price, atr, rsi, htf_trend)
-
         if divergence == "bearish" and htf_trend == "bearish":
-            if (rsi > 58 and vcur > vsma * 1.15 and price < ema20 * 1.003 and
-                c.iloc[-1] < c.iloc[-2] and atr > atr_sma * 0.35):
+            if (rsi > 55 and vcur > vsma * 1.12 and price < ema20 * 1.004 and
+                c.iloc[-1] < c.iloc[-2] and atr > atr_sma * 0.32):
                 return self._build("sell", "RSI_Divergence", price, atr, rsi, htf_trend)
 
         return {"action": "neutral", "reason": f"بدون سیگنال (RSI={rsi:.1f})", "strat": "", "rsi": rsi, "atr": atr, "htf": htf_trend}
@@ -557,7 +555,7 @@ class TelegramController:
             while True:
                 await asyncio.sleep(60)
             return
-        await self.send("🚀 <b>Master Quant v16.6</b>\nساختار پایدار + RSI_Divergence", self.menu())
+        await self.send("🚀 <b>Master Quant v16.7</b>\nرفع خطای کندل ۱ ساعته + Position Mode", self.menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -588,7 +586,7 @@ class TelegramController:
                                 with STATE_LOCK:
                                     st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>Dashboard v16.6</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
+                                    f"📊 <b>Dashboard v16.7</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
                                     f"DD: {st['current_dd']:.1f}% | Pos: {len(st['active_positions'])}/{MAX_POS}\n"
                                     f"PnL: ${st['stats']['total_pnl']:.2f} | WR: {st['stats']['win_rate']}%\n"
                                     f"Last: {st['last_scan']}", self.menu())
@@ -609,7 +607,7 @@ class TelegramController:
                                 report = await self.engine.db.generate_txt_report(self.engine.prices)
                                 with open("report.txt", "w", encoding="utf-8") as f:
                                     f.write(report)
-                                await self.send_document("report.txt", "📄 Report v16.6")
+                                await self.send_document("report.txt", "📄 Report v16.7")
                             elif d == "cmd_rej":
                                 decs = await self.engine.db.get_recent_decisions(12)
                                 msg = "🚫 <b>Last decisions</b>\n\n"
@@ -643,22 +641,34 @@ class QuantEngine:
         self.open_times: Dict[str, float] = {}
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> list:
+        """نسخه مقاوم در برابر خطای input arguments"""
         try:
-            candles = await self.ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-            if not candles or len(candles) < 45:
+            # برای ۱ ساعته limit را کمتر می‌گیریم تا احتمال خطا کمتر شود
+            actual_limit = 50 if timeframe == "1h" else limit
+            candles = await self.ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=actual_limit)
+            if not candles or len(candles) < 30:
                 return []
             last_close = candles[-1][4]
             if last_close <= 0 or last_close > 1e7:
                 return []
             return candles
         except Exception as e:
-            log.warning(f"fetch_ohlcv {symbol} {timeframe}: {e}")
-            await self.db.log_decision(symbol, "neutral", "", f"خطا در دریافت کندل: {str(e)[:80]}")
+            err = str(e)
+            # اگر خطای input arguments بود، یک بار با limit کمتر تلاش می‌کنیم
+            if "30000" in err or "input arguments" in err.lower():
+                try:
+                    await asyncio.sleep(1.5)
+                    candles = await self.ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=40)
+                    if candles and len(candles) >= 25:
+                        return candles
+                except Exception:
+                    pass
+            log.warning(f"fetch_ohlcv {symbol} {timeframe}: {err[:100]}")
             return []
 
     async def start(self):
         await self.db.init()
-        log.info("v16.6 Phemex-Only starting...")
+        log.info("v16.7 Phemex-Only starting...")
 
         try:
             await self.ex.load_markets()
@@ -666,17 +676,23 @@ class QuantEngine:
         except Exception as e:
             log.error(f"load_markets: {e}")
 
+        # اصلاح set_position_mode – با symbol
         try:
-            await self.ex.set_position_mode(False)
+            await self.ex.set_position_mode(False, SYMBOLS[0])
             log.info("Position mode → One-Way")
         except Exception as e:
             log.warning(f"Position mode: {e}")
+            # تلاش جایگزین بدون symbol
+            try:
+                await self.ex.set_position_mode(False)
+            except Exception:
+                pass
 
         for sym in SYMBOLS:
             try:
                 await self.ex.set_leverage(LEVERAGE, sym)
                 log.info(f"Leverage OK → {sym}")
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.6)
             except Exception as e:
                 log.warning(f"Leverage {sym}: {e}")
 
@@ -737,7 +753,7 @@ class QuantEngine:
                 await self.db.log_equity(cur, peak, SHARED_STATE.get("current_dd", 0))
             except Exception as e:
                 log.error(f"price_loop: {e}")
-            await asyncio.sleep(10)
+            await asyncio.sleep(12)
 
     async def scan_loop(self):
         while True:
@@ -751,7 +767,7 @@ class QuantEngine:
                 open_syms = {p["symbol"] for p in SHARED_STATE["active_positions"].values()}
 
             if not can:
-                await asyncio.sleep(12)
+                await asyncio.sleep(15)
                 continue
 
             with STATE_LOCK:
@@ -765,20 +781,27 @@ class QuantEngine:
                 if sym in SYMBOL_POST_CLOSE_COOLDOWN and time.time() < SYMBOL_POST_CLOSE_COOLDOWN[sym]:
                     continue
                 try:
-                    raw5, raw1 = await asyncio.gather(
-                        self.fetch_ohlcv(sym, TIMEFRAME, 100),
-                        self.fetch_ohlcv(sym, HTF_TIMEFRAME, 80),
-                    )
+                    # اول ۵ دقیقه را می‌گیریم (پایدارتر است)
+                    raw5 = await self.fetch_ohlcv(sym, TIMEFRAME, 100)
+                    await asyncio.sleep(1.0)
+
+                    # بعد ۱ ساعته را تلاش می‌کنیم
+                    raw1 = await self.fetch_ohlcv(sym, HTF_TIMEFRAME, 50)
                     await asyncio.sleep(SYMBOL_DELAY)
 
                     if not raw5 or len(raw5) < 50:
+                        await self.db.log_decision(sym, "neutral", "", "داده ۵ دقیقه ناکافی")
                         continue
 
                     df5 = pd.DataFrame(raw5, columns=["ts", "open", "high", "low", "close", "volume"])
-                    df1 = (
-                        pd.DataFrame(raw1, columns=["ts", "open", "high", "low", "close", "volume"])
-                        if raw1 and len(raw1) > 30 else df5
-                    )
+
+                    # اگر ۱ ساعته موفق نبود، از خود ۵ دقیقه به عنوان HTF استفاده می‌کنیم
+                    if raw1 and len(raw1) > 30:
+                        df1 = pd.DataFrame(raw1, columns=["ts", "open", "high", "low", "close", "volume"])
+                    else:
+                        df1 = df5.copy()
+                        log.info(f"{sym}: استفاده از داده ۵ دقیقه به جای ۱ ساعته")
+
                     sig = self.strategy.analyze(df5, df1)
 
                     price = self.prices.get(sym) or float(df5["close"].iloc[-1])
@@ -804,7 +827,7 @@ class QuantEngine:
                         await self.execute_trade(sym, sig)
                 except Exception as e:
                     log.error(f"scan {sym}: {e}")
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.6)
 
             await asyncio.sleep(SCAN_INTERVAL)
 
@@ -893,7 +916,7 @@ class QuantEngine:
 
             if "20004" in err or "INCONSISTENT" in err.upper():
                 try:
-                    await self.ex.set_position_mode(False)
+                    await self.ex.set_position_mode(False, sym)
                 except Exception:
                     pass
 
@@ -1094,7 +1117,7 @@ class QuantEngine:
                     elif sl_hit and pos.get("highest_pnl_pct", 0) > TRAIL_ACT:
                         reason = "Trail"
                     await self.force_close(pid, reason)
-            await asyncio.sleep(1.6)
+            await asyncio.sleep(1.8)
 
 # ===================== WEB =====================
 app = Flask(__name__)
@@ -1112,7 +1135,7 @@ def dashboard():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Quant v16.6</title>
+<title>Quant v16.7</title>
 <style>
 body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
 h1{color:#58a6ff}
@@ -1122,7 +1145,7 @@ h1{color:#58a6ff}
 </style>
 </head>
 <body>
-<h1>🚀 Master Quant v16.6</h1>
+<h1>🚀 Master Quant v16.7</h1>
 <div class="grid">
 <div class="card">موجودی<div class="value" id="bal">0.00</div></div>
 <div class="card">پوزیشن<div class="value" id="pos">0</div></div>
@@ -1157,7 +1180,7 @@ if __name__ == "__main__":
             traceback.print_exc()
 
     try:
-        print("=== Master Quant v16.6 starting ===", flush=True)
+        print("=== Master Quant v16.7 starting ===", flush=True)
         Thread(target=run_web, daemon=True).start()
         time.sleep(1)
         engine = QuantEngine()
