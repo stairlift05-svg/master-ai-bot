@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v16.7 – Phemex-Only
-- رفع خطای input arguments برای کندل ۱ ساعته
-- اصلاح set_position_mode
-- Fallback به داده ۵ دقیقه در صورت خطای ۱ ساعته
+Master Quant Engine v16.8 – Phemex-Only
+- گزارش حرفه‌ای و ریزبه‌ریز
+- ردیابی سلامت داده، کول‌داون، شکاف سیگنال تا اجرا
 - استراتژی مستقل RSI_Divergence
 """
 
@@ -82,7 +81,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("QuantV16.7")
+log = logging.getLogger("QuantV16.8")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True,
@@ -97,6 +96,9 @@ SHARED_STATE: Dict[str, Any] = {
     "last_scan": "Never",
     "stats": {"total_trades": 0, "win_rate": 0.0, "total_pnl": 0.0},
     "consecutive_losses": {},
+    "fetch_stats": defaultdict(lambda: {"ok_5m": 0, "fail_5m": 0, "ok_1h": 0, "fail_1h": 0}),
+    "recent_errors": [],
+    "signal_but_not_executed": [],
 }
 STATE_LOCK = Lock()
 SYMBOL_ERROR_COOLDOWN: Dict[str, float] = {}
@@ -189,7 +191,7 @@ class Database:
                 (limit,)) as c:
                 return [dict(r) for r in await c.fetchall()]
 
-    async def get_recent_decisions(self, limit=250) -> List[dict]:
+    async def get_recent_decisions(self, limit=300) -> List[dict]:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
@@ -213,32 +215,54 @@ class Database:
 
     async def generate_txt_report(self, prices: Dict[str, float] = None) -> str:
         prices = prices or {}
-        decisions = await self.get_recent_decisions(200)
-        closed = await self.get_closed_trades(30)
+        decisions = await self.get_recent_decisions(250)
+        closed = await self.get_closed_trades(40)
         with STATE_LOCK:
             st = dict(SHARED_STATE)
+            fetch_stats = dict(st.get("fetch_stats", {}))
+            recent_errors = list(st.get("recent_errors", []))[-15:]
+            signal_not_exec = list(st.get("signal_but_not_executed", []))[-10:]
 
-        lines = [
-            "=" * 70,
-            "       MASTER QUANT ENGINE v16.7 – Phemex-Only REPORT",
-            f"       Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
-            "=" * 70,
-            "",
-            "┌─ 1. DASHBOARD ─────────────────────────────────────────────────────",
-            f"│  Balance        : ${st.get('balance', 0):.2f}",
-            f"│  Peak Balance   : ${st.get('peak_balance', 0):.2f}",
-            f"│  Current DD     : {st.get('current_dd', 0):.2f}%",
-            f"│  Daily PnL      : ${st.get('daily_pnl', 0):.2f}",
-            f"│  Open Positions : {len(st.get('active_positions', {}))} / {MAX_POS}",
-            f"│  Total Trades   : {st.get('stats', {}).get('total_trades', 0)}",
-            f"│  Win Rate       : {st.get('stats', {}).get('win_rate', 0)}%",
-            f"│  Total PnL      : ${st.get('stats', {}).get('total_pnl', 0):.2f}",
-            f"│  Last Scan      : {st.get('last_scan', 'Never')}",
-            f"│  Bot Active     : {st.get('is_active')}",
-            "└────────────────────────────────────────────────────────────────────",
-            "",
-            "┌─ 2. OPEN POSITIONS ────────────────────────────────────────────────",
-        ]
+        now = time.time()
+        lines = []
+        lines.append("=" * 78)
+        lines.append("          MASTER QUANT ENGINE v16.8 – PROFESSIONAL DIAGNOSTIC REPORT")
+        lines.append(f"          Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        lines.append("=" * 78)
+        lines.append("")
+
+        # 1. DASHBOARD
+        lines.append("┌─ 1. SYSTEM STATUS ──────────────────────────────────────────────────────")
+        lines.append(f"│  Balance          : ${st.get('balance', 0):.2f}")
+        lines.append(f"│  Peak Balance     : ${st.get('peak_balance', 0):.2f}")
+        lines.append(f"│  Current DD       : {st.get('current_dd', 0):.2f}%")
+        lines.append(f"│  Daily PnL        : ${st.get('daily_pnl', 0):.2f}")
+        lines.append(f"│  Open Positions   : {len(st.get('active_positions', {}))} / {MAX_POS}")
+        lines.append(f"│  Total Trades     : {st.get('stats', {}).get('total_trades', 0)}")
+        lines.append(f"│  Win Rate         : {st.get('stats', {}).get('win_rate', 0)}%")
+        lines.append(f"│  Total PnL        : ${st.get('stats', {}).get('total_pnl', 0):.2f}")
+        lines.append(f"│  Last Scan        : {st.get('last_scan', 'Never')}")
+        lines.append(f"│  Bot Active       : {st.get('is_active')}")
+        lines.append(f"│  DD Halted        : {st.get('dd_halted')}")
+        lines.append(f"│  Daily Halted     : {st.get('daily_halted')}")
+        lines.append("└─────────────────────────────────────────────────────────────────────────")
+        lines.append("")
+
+        # 2. DATA HEALTH
+        lines.append("┌─ 2. DATA HEALTH (Candle Fetch) ─────────────────────────────────────────")
+        if not fetch_stats:
+            lines.append("│  (هنوز آماری ثبت نشده)")
+        else:
+            lines.append("│  Symbol            | 5m OK | 5m Fail | 1h OK | 1h Fail")
+            lines.append("│  ------------------+-------+---------+-------+--------")
+            for sym in SYMBOLS:
+                s = fetch_stats.get(sym, {"ok_5m": 0, "fail_5m": 0, "ok_1h": 0, "fail_1h": 0})
+                lines.append(f"│  {sym:<18} | {s['ok_5m']:5d} | {s['fail_5m']:7d} | {s['ok_1h']:5d} | {s['fail_1h']:6d}")
+        lines.append("└─────────────────────────────────────────────────────────────────────────")
+        lines.append("")
+
+        # 3. OPEN POSITIONS
+        lines.append("┌─ 3. OPEN POSITIONS ─────────────────────────────────────────────────────")
         active = st.get("active_positions", {})
         if not active:
             lines.append("│  (none)")
@@ -246,56 +270,103 @@ class Database:
             for p in active.values():
                 pr = prices.get(p["symbol"], p["entry"])
                 pnl = (pr - p["entry"]) * p["qty"] * (1 if p["side"] == "buy" else -1)
-                lines.append(
-                    f"│  {p['symbol']:<18} {p['side'].upper():<5} "
-                    f"Entry:{p['entry']:.5f} Qty:{p['qty']:.4f} PnL:${pnl:+.3f} {p.get('strategy','')}"
-                )
-                lines.append(f"│     SL:{p['sl']:.5f} TP:{p['tp']:.5f} Partial:{p.get('is_partial',0)}")
-        lines.append("└────────────────────────────────────────────────────────────────────")
+                lines.append(f"│  {p['symbol']:<18} {p['side'].upper():<5} Entry:{p['entry']:.5f} Qty:{p['qty']:.4f}")
+                lines.append(f"│     PnL:${pnl:+.3f}  SL:{p['sl']:.5f}  TP:{p['tp']:.5f}  Strat:{p.get('strategy','')}")
+        lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
-        lines.append("┌─ 3. CLOSED TRADES ─────────────────────────────────────────────────")
+
+        # 4. CLOSED TRADES
+        lines.append("┌─ 4. CLOSED TRADES (Last 40) ────────────────────────────────────────────")
         if not closed:
             lines.append("│  (none)")
         else:
             for t in closed:
                 emoji = "WIN " if t["pnl"] > 0 else "LOSS"
                 hold_m = (t.get("hold_seconds") or 0) / 60
-                lines.append(
-                    f"│  [{emoji}] {t['symbol']:<16} {t['side']:<4} "
-                    f"PnL:${t['pnl']:+.3f} Hold:{hold_m:.1f}m {t.get('exit_reason','')}"
-                )
-        lines.append("└────────────────────────────────────────────────────────────────────")
+                lines.append(f"│  [{emoji}] {t['symbol']:<16} {t['side']:<4} PnL:${t['pnl']:+.3f} Hold:{hold_m:.1f}m  {t.get('exit_reason','')}")
+        lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
-        lines.append("┌─ 4. DECISION BREAKDOWN ────────────────────────────────────────────")
+
+        # 5. DECISION BREAKDOWN
+        lines.append("┌─ 5. DECISION BREAKDOWN ─────────────────────────────────────────────────")
         reasons = Counter()
+        by_symbol = defaultdict(lambda: {"sig": 0, "rej": 0})
+        signals = 0
         if decisions:
-            by_symbol = defaultdict(lambda: {"sig": 0, "rej": 0})
-            signals = 0
             for d in decisions:
-                if d["action"] == "neutral":
-                    reasons[(d["reason"] or "Unknown")[:60]] += 1
+                if d["action"] in ("neutral", "rejected"):
+                    reasons[(d["reason"] or "Unknown")[:65]] += 1
                     by_symbol[d["symbol"]]["rej"] += 1
                 else:
                     signals += 1
                     by_symbol[d["symbol"]]["sig"] += 1
-            lines.append(f"│  Total:{len(decisions)}  Signals:{signals}  Rejected:{len(decisions)-signals}")
-            lines.append("│  Top Rejections:")
-            for reason, count in reasons.most_common(12):
-                lines.append(f"│    {count:3d} × {reason}")
+            lines.append(f"│  Total Decisions : {len(decisions)}")
+            lines.append(f"│  Signals         : {signals}")
+            lines.append(f"│  Rejected        : {len(decisions) - signals}")
+            lines.append("│")
+            lines.append("│  Top Rejection Reasons:")
+            for reason, count in reasons.most_common(15):
+                lines.append(f"│    {count:4d} × {reason}")
+            lines.append("│")
             lines.append("│  Per Symbol:")
-            for sym, v in sorted(by_symbol.items()):
-                lines.append(f"│    {sym:<18} Sig:{v['sig']:3d} Rej:{v['rej']:3d}")
+            for sym in SYMBOLS:
+                v = by_symbol.get(sym, {"sig": 0, "rej": 0})
+                lines.append(f"│    {sym:<18} Sig:{v['sig']:4d}  Rej:{v['rej']:4d}")
         else:
             lines.append("│  (no decisions yet)")
-        lines.append("└────────────────────────────────────────────────────────────────────")
+        lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
-        lines.append("┌─ 5. LAST 12 DECISIONS ─────────────────────────────────────────────")
-        for d in (decisions or [])[:12]:
-            icon = "SIG" if d["action"] != "neutral" else "REJ"
-            lines.append(f"│  [{icon}] {d.get('ts','')[:19]} {d['symbol']} | {d.get('reason','')[:55]}")
-        lines.append("└────────────────────────────────────────────────────────────────────")
+
+        # 6. SIGNAL BUT NOT EXECUTED
+        lines.append("┌─ 6. SIGNALS THAT DID NOT EXECUTE ───────────────────────────────────────")
+        if not signal_not_exec:
+            lines.append("│  (none recorded)")
+        else:
+            for item in signal_not_exec:
+                lines.append(f"│  {item}")
+        lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
-        lines.append("=" * 70)
+
+        # 7. COOLDOWNS
+        lines.append("┌─ 7. ACTIVE COOLDOWNS ───────────────────────────────────────────────────")
+        has_cd = False
+        for sym in SYMBOLS:
+            parts = []
+            if sym in SYMBOL_ERROR_COOLDOWN and now < SYMBOL_ERROR_COOLDOWN[sym]:
+                remaining = int(SYMBOL_ERROR_COOLDOWN[sym] - now)
+                parts.append(f"ErrorCD:{remaining}s")
+            if sym in SYMBOL_POST_CLOSE_COOLDOWN and now < SYMBOL_POST_CLOSE_COOLDOWN[sym]:
+                remaining = int(SYMBOL_POST_CLOSE_COOLDOWN[sym] - now)
+                parts.append(f"PostClose:{remaining}s")
+            if parts:
+                has_cd = True
+                lines.append(f"│  {sym:<18} {' | '.join(parts)}")
+        if not has_cd:
+            lines.append("│  (no active cooldowns)")
+        lines.append("└─────────────────────────────────────────────────────────────────────────")
+        lines.append("")
+
+        # 8. RECENT ERRORS
+        lines.append("┌─ 8. RECENT ERRORS (Last 15) ────────────────────────────────────────────")
+        if not recent_errors:
+            lines.append("│  (none)")
+        else:
+            for err in recent_errors:
+                lines.append(f"│  {err}")
+        lines.append("└─────────────────────────────────────────────────────────────────────────")
+        lines.append("")
+
+        # 9. LAST 20 DECISIONS
+        lines.append("┌─ 9. LAST 20 DECISIONS ──────────────────────────────────────────────────")
+        for d in (decisions or [])[:20]:
+            icon = "SIG" if d["action"] not in ("neutral", "rejected") else "REJ"
+            ts = (d.get("ts") or "")[:19]
+            lines.append(f"│  [{icon}] {ts} {d['symbol']:<18} | {d.get('reason','')[:55]}")
+        lines.append("└─────────────────────────────────────────────────────────────────────────")
+        lines.append("")
+        lines.append("=" * 78)
+        lines.append("End of Report – v16.8 Professional Diagnostic")
+        lines.append("=" * 78)
         return "\n".join(lines)
 
 # ===================== INDICATORS =====================
@@ -359,32 +430,25 @@ class Indicators:
         rsi = Indicators.rsi(df["close"]).iloc[-lookback:]
         price_lows, rsi_lows = [], []
         price_highs, rsi_highs = [], []
-
         for i in range(3, len(close) - 3):
             if (close.iloc[i] < close.iloc[i-1] and close.iloc[i] < close.iloc[i-2] and
-                close.iloc[i] < close.iloc[i-3] and
-                close.iloc[i] < close.iloc[i+1] and close.iloc[i] < close.iloc[i+2]):
+                close.iloc[i] < close.iloc[i-3] and close.iloc[i] < close.iloc[i+1] and close.iloc[i] < close.iloc[i+2]):
                 price_lows.append((i, float(close.iloc[i])))
                 rsi_lows.append((i, float(rsi.iloc[i])))
-
             if (close.iloc[i] > close.iloc[i-1] and close.iloc[i] > close.iloc[i-2] and
-                close.iloc[i] > close.iloc[i-3] and
-                close.iloc[i] > close.iloc[i+1] and close.iloc[i] > close.iloc[i+2]):
+                close.iloc[i] > close.iloc[i-3] and close.iloc[i] > close.iloc[i+1] and close.iloc[i] > close.iloc[i+2]):
                 price_highs.append((i, float(close.iloc[i])))
                 rsi_highs.append((i, float(rsi.iloc[i])))
-
         if len(price_lows) >= 2 and len(rsi_lows) >= 2:
             p1, p2 = price_lows[-2], price_lows[-1]
             r1, r2 = rsi_lows[-2], rsi_lows[-1]
             if (p2[0] - p1[0]) >= 4 and p2[1] < p1[1] * 0.998 and r2[1] > r1[1] + 1.5:
                 return "bullish"
-
         if len(price_highs) >= 2 and len(rsi_highs) >= 2:
             p1, p2 = price_highs[-2], price_highs[-1]
             r1, r2 = rsi_highs[-2], rsi_highs[-1]
             if (p2[0] - p1[0]) >= 4 and p2[1] > p1[1] * 1.002 and r2[1] < r1[1] - 1.5:
                 return "bearish"
-
         return None
 
 # ===================== STRATEGY =====================
@@ -404,7 +468,7 @@ class StrategyEngine:
         hp = float(hclose.iloc[-1])
 
         trend_strength = abs(e50 - e200) / (e200 + 1e-9) * 100
-        if trend_strength < 0.30:  # کمی شل‌تر برای بازیابی
+        if trend_strength < 0.30:
             return {"action": "neutral", "reason": "روند ضعیف", "strat": "", "rsi": 0, "atr": 0, "htf": "weak"}
 
         if hp > e50 * 0.993 and e50 >= e200 * 0.990:
@@ -438,33 +502,27 @@ class StrategyEngine:
         l12 = float(Indicators.lowest(low, 12).iloc[-1])
         vol_ok = vcur > vsma * 1.18
 
-        # استراتژی ۱
         if htf_trend == "bullish" and price > ema20 * 1.0005 and price >= h12 * 0.997 and 42 < rsi < 72 and vol_ok:
             return self._build("buy", "Breakout_Momentum", price, atr, rsi, htf_trend)
         if htf_trend == "bearish" and price < ema20 * 0.9995 and price <= l12 * 1.003 and 28 < rsi < 58 and vol_ok:
             return self._build("sell", "Breakout_Momentum", price, atr, rsi, htf_trend)
 
-        # استراتژی ۲
         if htf_trend == "bullish" and st_d.iloc[-1] == 1 and low.iloc[-1] <= st_l.iloc[-1] * 1.008 and c.iloc[-1] > c.iloc[-2] and 38 < rsi < 68 and price > ema20:
             return self._build("buy", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
         if htf_trend == "bearish" and st_d.iloc[-1] == -1 and high.iloc[-1] >= st_u.iloc[-1] * 0.992 and c.iloc[-1] < c.iloc[-2] and 32 < rsi < 62 and price < ema20:
             return self._build("sell", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
 
-        # استراتژی ۳
         if htf_trend == "bullish" and price > ema20 and vcur > vsma * 1.40 and c.iloc[-1] > c.iloc[-2] and 43 < rsi < 70:
             return self._build("buy", "Volume_Surge", price, atr, rsi, htf_trend)
         if htf_trend == "bearish" and price < ema20 and vcur > vsma * 1.40 and c.iloc[-1] < c.iloc[-2] and 30 < rsi < 57:
             return self._build("sell", "Volume_Surge", price, atr, rsi, htf_trend)
 
-        # استراتژی ۴: RSI_Divergence
         divergence = Indicators.detect_rsi_divergence(df, lookback=28)
         if divergence == "bullish" and htf_trend == "bullish":
-            if (rsi < 45 and vcur > vsma * 1.12 and price > ema20 * 0.996 and
-                c.iloc[-1] > c.iloc[-2] and atr > atr_sma * 0.32):
+            if (rsi < 45 and vcur > vsma * 1.12 and price > ema20 * 0.996 and c.iloc[-1] > c.iloc[-2] and atr > atr_sma * 0.32):
                 return self._build("buy", "RSI_Divergence", price, atr, rsi, htf_trend)
         if divergence == "bearish" and htf_trend == "bearish":
-            if (rsi > 55 and vcur > vsma * 1.12 and price < ema20 * 1.004 and
-                c.iloc[-1] < c.iloc[-2] and atr > atr_sma * 0.32):
+            if (rsi > 55 and vcur > vsma * 1.12 and price < ema20 * 1.004 and c.iloc[-1] < c.iloc[-2] and atr > atr_sma * 0.32):
                 return self._build("sell", "RSI_Divergence", price, atr, rsi, htf_trend)
 
         return {"action": "neutral", "reason": f"بدون سیگنال (RSI={rsi:.1f})", "strat": "", "rsi": rsi, "atr": atr, "htf": htf_trend}
@@ -472,18 +530,12 @@ class StrategyEngine:
     def _build(self, side, strat, price, atr, rsi, htf):
         p = STRATEGY_PARAMS.get(strat, {"sl_m": 1.50, "tp_m": 3.2, "tp1_m": 1.7})
         if side == "buy":
-            return {
-                "action": side, "strat": strat,
-                "sl": price - atr * p["sl_m"], "tp": price + atr * p["tp_m"], "tp1": price + atr * p["tp1_m"],
-                "reason": f"سیگنال {strat}", "rsi": rsi, "atr": atr, "htf": htf,
-                "expected_rr": round(p["tp_m"] / p["sl_m"], 2),
-            }
-        return {
-            "action": side, "strat": strat,
-            "sl": price + atr * p["sl_m"], "tp": price - atr * p["tp_m"], "tp1": price - atr * p["tp1_m"],
-            "reason": f"سیگنال {strat}", "rsi": rsi, "atr": atr, "htf": htf,
-            "expected_rr": round(p["tp_m"] / p["sl_m"], 2),
-        }
+            return {"action": side, "strat": strat, "sl": price - atr * p["sl_m"], "tp": price + atr * p["tp_m"],
+                    "tp1": price + atr * p["tp1_m"], "reason": f"سیگنال {strat}", "rsi": rsi, "atr": atr, "htf": htf,
+                    "expected_rr": round(p["tp_m"] / p["sl_m"], 2)}
+        return {"action": side, "strat": strat, "sl": price + atr * p["sl_m"], "tp": price - atr * p["tp_m"],
+                "tp1": price - atr * p["tp1_m"], "reason": f"سیگنال {strat}", "rsi": rsi, "atr": atr, "htf": htf,
+                "expected_rr": round(p["tp_m"] / p["sl_m"], 2)}
 
 # ===================== RISK =====================
 class RiskManager:
@@ -555,7 +607,7 @@ class TelegramController:
             while True:
                 await asyncio.sleep(60)
             return
-        await self.send("🚀 <b>Master Quant v16.7</b>\nرفع خطای کندل ۱ ساعته + Position Mode", self.menu())
+        await self.send("🚀 <b>Master Quant v16.8</b>\nگزارش حرفه‌ای و ریزبه‌ریز فعال شد", self.menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -569,9 +621,8 @@ class TelegramController:
                             d = cb["data"]
                             try:
                                 async with aiohttp.ClientSession() as ss:
-                                    await ss.post(
-                                        f"{self.base}/answerCallbackQuery",
-                                        json={"callback_query_id": cb["id"], "text": "OK"}, timeout=4)
+                                    await ss.post(f"{self.base}/answerCallbackQuery",
+                                                  json={"callback_query_id": cb["id"], "text": "OK"}, timeout=4)
                             except Exception:
                                 pass
                             if d == "cmd_start":
@@ -586,7 +637,7 @@ class TelegramController:
                                 with STATE_LOCK:
                                     st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>Dashboard v16.7</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
+                                    f"📊 <b>Dashboard v16.8</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
                                     f"DD: {st['current_dd']:.1f}% | Pos: {len(st['active_positions'])}/{MAX_POS}\n"
                                     f"PnL: ${st['stats']['total_pnl']:.2f} | WR: {st['stats']['win_rate']}%\n"
                                     f"Last: {st['last_scan']}", self.menu())
@@ -607,12 +658,12 @@ class TelegramController:
                                 report = await self.engine.db.generate_txt_report(self.engine.prices)
                                 with open("report.txt", "w", encoding="utf-8") as f:
                                     f.write(report)
-                                await self.send_document("report.txt", "📄 Report v16.7")
+                                await self.send_document("report.txt", "📄 Professional Report v16.8")
                             elif d == "cmd_rej":
-                                decs = await self.engine.db.get_recent_decisions(12)
+                                decs = await self.engine.db.get_recent_decisions(15)
                                 msg = "🚫 <b>Last decisions</b>\n\n"
                                 for x in decs:
-                                    icon = "✅" if x["action"] != "neutral" else "⛔"
+                                    icon = "✅" if x["action"] not in ("neutral", "rejected") else "⛔"
                                     msg += f"{icon} <b>{x['symbol']}</b>\n{x['reason'][:70]}\n\n"
                                 await self.send(msg, self.menu())
                             elif d == "cmd_realtest":
@@ -628,38 +679,58 @@ class QuantEngine:
         self.strategy = StrategyEngine()
         self.risk = RiskManager()
         self.tg = TelegramController(self)
-
         self.ex = ccxt.phemex({
-            "apiKey": API_KEY,
-            "secret": API_SECRET,
-            "enableRateLimit": True,
-            "options": {"defaultType": "swap"},
+            "apiKey": API_KEY, "secret": API_SECRET,
+            "enableRateLimit": True, "options": {"defaultType": "swap"},
         })
         self.ex.set_sandbox_mode(TESTNET)
-
         self.prices: Dict[str, float] = {}
         self.open_times: Dict[str, float] = {}
 
+    def _record_error(self, msg: str):
+        with STATE_LOCK:
+            errs = SHARED_STATE["recent_errors"]
+            errs.append(f"{datetime.utcnow().strftime('%H:%M:%S')} {msg[:120]}")
+            if len(errs) > 30:
+                SHARED_STATE["recent_errors"] = errs[-30:]
+
+    def _record_fetch(self, symbol: str, timeframe: str, success: bool):
+        with STATE_LOCK:
+            s = SHARED_STATE["fetch_stats"][symbol]
+            if timeframe == "5m":
+                if success:
+                    s["ok_5m"] += 1
+                else:
+                    s["fail_5m"] += 1
+            else:
+                if success:
+                    s["ok_1h"] += 1
+                else:
+                    s["fail_1h"] += 1
+
     async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> list:
-        """نسخه مقاوم در برابر خطای input arguments"""
         try:
-            # برای ۱ ساعته limit را کمتر می‌گیریم تا احتمال خطا کمتر شود
             actual_limit = 50 if timeframe == "1h" else limit
             candles = await self.ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=actual_limit)
             if not candles or len(candles) < 30:
+                self._record_fetch(symbol, timeframe, False)
                 return []
             last_close = candles[-1][4]
             if last_close <= 0 or last_close > 1e7:
+                self._record_fetch(symbol, timeframe, False)
                 return []
+            self._record_fetch(symbol, timeframe, True)
             return candles
         except Exception as e:
             err = str(e)
-            # اگر خطای input arguments بود، یک بار با limit کمتر تلاش می‌کنیم
+            self._record_fetch(symbol, timeframe, False)
+            self._record_error(f"fetch {symbol} {timeframe}: {err[:80]}")
             if "30000" in err or "input arguments" in err.lower():
                 try:
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(1.2)
                     candles = await self.ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=40)
                     if candles and len(candles) >= 25:
+                        self._record_fetch(symbol, timeframe, True)
                         return candles
                 except Exception:
                     pass
@@ -668,21 +739,19 @@ class QuantEngine:
 
     async def start(self):
         await self.db.init()
-        log.info("v16.7 Phemex-Only starting...")
-
+        log.info("v16.8 Phemex-Only (Professional Report) starting...")
         try:
             await self.ex.load_markets()
             log.info("Phemex markets loaded")
         except Exception as e:
             log.error(f"load_markets: {e}")
+            self._record_error(f"load_markets: {e}")
 
-        # اصلاح set_position_mode – با symbol
         try:
             await self.ex.set_position_mode(False, SYMBOLS[0])
             log.info("Position mode → One-Way")
         except Exception as e:
             log.warning(f"Position mode: {e}")
-            # تلاش جایگزین بدون symbol
             try:
                 await self.ex.set_position_mode(False)
             except Exception:
@@ -709,13 +778,7 @@ class QuantEngine:
 
         await self.smart_sync()
         await self.update_balance()
-
-        await asyncio.gather(
-            self.price_loop(),
-            self.scan_loop(),
-            self.watchdog_loop(),
-            self.tg.poll(),
-        )
+        await asyncio.gather(self.price_loop(), self.scan_loop(), self.watchdog_loop(), self.tg.poll())
 
     async def update_balance(self):
         try:
@@ -730,6 +793,7 @@ class QuantEngine:
             log.info(f"Balance: ${usdt:.2f}")
         except Exception as e:
             log.error(f"Balance: {e}")
+            self._record_error(f"Balance: {e}")
 
     async def price_loop(self):
         while True:
@@ -758,18 +822,12 @@ class QuantEngine:
     async def scan_loop(self):
         while True:
             with STATE_LOCK:
-                can = (
-                    SHARED_STATE["is_active"]
-                    and not SHARED_STATE["dd_halted"]
-                    and not SHARED_STATE["daily_halted"]
-                    and len(SHARED_STATE["active_positions"]) < MAX_POS
-                )
+                can = (SHARED_STATE["is_active"] and not SHARED_STATE["dd_halted"] and
+                       not SHARED_STATE["daily_halted"] and len(SHARED_STATE["active_positions"]) < MAX_POS)
                 open_syms = {p["symbol"] for p in SHARED_STATE["active_positions"].values()}
-
             if not can:
                 await asyncio.sleep(15)
                 continue
-
             with STATE_LOCK:
                 SHARED_STATE["last_scan"] = time.strftime("%H:%M:%S")
 
@@ -781,11 +839,8 @@ class QuantEngine:
                 if sym in SYMBOL_POST_CLOSE_COOLDOWN and time.time() < SYMBOL_POST_CLOSE_COOLDOWN[sym]:
                     continue
                 try:
-                    # اول ۵ دقیقه را می‌گیریم (پایدارتر است)
                     raw5 = await self.fetch_ohlcv(sym, TIMEFRAME, 100)
                     await asyncio.sleep(1.0)
-
-                    # بعد ۱ ساعته را تلاش می‌کنیم
                     raw1 = await self.fetch_ohlcv(sym, HTF_TIMEFRAME, 50)
                     await asyncio.sleep(SYMBOL_DELAY)
 
@@ -794,23 +849,18 @@ class QuantEngine:
                         continue
 
                     df5 = pd.DataFrame(raw5, columns=["ts", "open", "high", "low", "close", "volume"])
-
-                    # اگر ۱ ساعته موفق نبود، از خود ۵ دقیقه به عنوان HTF استفاده می‌کنیم
                     if raw1 and len(raw1) > 30:
                         df1 = pd.DataFrame(raw1, columns=["ts", "open", "high", "low", "close", "volume"])
                     else:
                         df1 = df5.copy()
-                        log.info(f"{sym}: استفاده از داده ۵ دقیقه به جای ۱ ساعته")
 
                     sig = self.strategy.analyze(df5, df1)
-
                     price = self.prices.get(sym) or float(df5["close"].iloc[-1])
                     if price <= 0:
                         continue
 
-                    await self.db.log_decision(
-                        sym, sig["action"], sig.get("strat", ""), sig.get("reason", ""),
-                        price, sig.get("rsi", 0), sig.get("atr", 0), sig.get("htf", ""))
+                    await self.db.log_decision(sym, sig["action"], sig.get("strat", ""), sig.get("reason", ""),
+                                               price, sig.get("rsi", 0), sig.get("atr", 0), sig.get("htf", ""))
 
                     if sig["action"] != "neutral":
                         atr = sig.get("atr", 0)
@@ -827,25 +877,34 @@ class QuantEngine:
                         await self.execute_trade(sym, sig)
                 except Exception as e:
                     log.error(f"scan {sym}: {e}")
+                    self._record_error(f"scan {sym}: {e}")
                 await asyncio.sleep(0.6)
-
             await asyncio.sleep(SCAN_INTERVAL)
 
     async def execute_trade(self, sym: str, sig: dict):
-        if sym in SYMBOL_ERROR_COOLDOWN and time.time() < SYMBOL_ERROR_COOLDOWN[sym]:
-            reason = f"کول‌داون خطا ({int(SYMBOL_ERROR_COOLDOWN[sym] - time.time())}s باقی‌مانده)"
-            await self.db.log_decision(sym, "rejected", sig.get("strat", ""), reason)
-            return
+        def record_not_executed(reason: str):
+            with STATE_LOCK:
+                lst = SHARED_STATE["signal_but_not_executed"]
+                lst.append(f"{datetime.utcnow().strftime('%H:%M:%S')} {sym} {sig.get('strat')} → {reason}")
+                if len(lst) > 20:
+                    SHARED_STATE["signal_but_not_executed"] = lst[-20:]
 
-        if sym in SYMBOL_POST_CLOSE_COOLDOWN and time.time() < SYMBOL_POST_CLOSE_COOLDOWN[sym]:
-            reason = f"کول‌داون بعد از بستن ({int(SYMBOL_POST_CLOSE_COOLDOWN[sym] - time.time())}s باقی‌مانده)"
+        if sym in SYMBOL_ERROR_COOLDOWN and time.time() < SYMBOL_ERROR_COOLDOWN[sym]:
+            reason = f"کول‌داون خطا ({int(SYMBOL_ERROR_COOLDOWN[sym] - time.time())}s)"
             await self.db.log_decision(sym, "rejected", sig.get("strat", ""), reason)
+            record_not_executed(reason)
+            return
+        if sym in SYMBOL_POST_CLOSE_COOLDOWN and time.time() < SYMBOL_POST_CLOSE_COOLDOWN[sym]:
+            reason = f"کول‌داون بعد از بستن ({int(SYMBOL_POST_CLOSE_COOLDOWN[sym] - time.time())}s)"
+            await self.db.log_decision(sym, "rejected", sig.get("strat", ""), reason)
+            record_not_executed(reason)
             return
 
         price = self.prices.get(sym)
         if not price or price <= 0:
             reason = "قیمت لحظه‌ای موجود نیست"
             await self.db.log_decision(sym, "rejected", sig.get("strat", ""), reason)
+            record_not_executed(reason)
             await self.tg.send(f"⚠️ {sym}\nسیگنال آمد ولی قیمت موجود نیست")
             return
 
@@ -856,64 +915,57 @@ class QuantEngine:
         if bal < 22:
             reason = f"موجودی کم ({bal:.2f})"
             await self.db.log_decision(sym, "rejected", sig.get("strat", ""), reason)
+            record_not_executed(reason)
             return
-
         if open_count >= MAX_POS:
-            reason = f"حداکثر پوزیشن پر است ({open_count}/{MAX_POS})"
+            reason = f"حداکثر پوزیشن پر ({open_count}/{MAX_POS})"
             await self.db.log_decision(sym, "rejected", sig.get("strat", ""), reason)
+            record_not_executed(reason)
             return
 
         try:
             bal_data = await self.ex.fetch_balance()
             free = float(bal_data.get("USDT", {}).get("free", 0) or 0)
             qty = self.risk.calculate_qty(bal, price, sig["sl"], free, sym, self.ex)
-
             if qty <= 0:
-                reason = f"حجم صفر (bal={bal:.1f} free={free:.1f} price={price:.4f})"
+                reason = f"حجم صفر (bal={bal:.1f} free={free:.1f})"
                 await self.db.log_decision(sym, "rejected", sig.get("strat", ""), reason)
+                record_not_executed(reason)
                 await self.tg.send(f"⚠️ {sym}\nسیگنال {sig.get('strat')} آمد ولی حجم صفر شد")
                 return
-
             notional = qty * price
             if notional < MIN_ORDER_USD:
-                reason = f"ارزش سفارش کمتر از حداقل ({notional:.2f} < {MIN_ORDER_USD})"
+                reason = f"ارزش سفارش کم ({notional:.2f} < {MIN_ORDER_USD})"
                 await self.db.log_decision(sym, "rejected", sig.get("strat", ""), reason)
-                await self.tg.send(f"⚠️ {sym}\n{reason}")
+                record_not_executed(reason)
                 return
 
             order = await self.ex.create_market_order(sym, sig["action"], qty)
             fill = float(order.get("average") or price)
             pid = f"pos_{uuid.uuid4().hex[:8]}"
-            pos = {
-                "id": pid, "symbol": sym, "side": sig["action"], "strategy": sig["strat"],
-                "entry": fill, "qty": qty, "sl": sig["sl"], "tp": sig["tp"], "tp1": sig["tp1"],
-                "is_partial": 0, "highest_pnl_pct": 0.0,
-            }
+            pos = {"id": pid, "symbol": sym, "side": sig["action"], "strategy": sig["strat"],
+                   "entry": fill, "qty": qty, "sl": sig["sl"], "tp": sig["tp"], "tp1": sig["tp1"],
+                   "is_partial": 0, "highest_pnl_pct": 0.0}
             with STATE_LOCK:
                 SHARED_STATE["active_positions"][pid] = pos
             self.open_times[pid] = time.time()
             await self.db.insert_trade(pos)
             SYMBOL_ERROR_COUNT.pop(sym, None)
             SYMBOL_ERROR_COOLDOWN.pop(sym, None)
-
-            await self.tg.send(
-                f"🎯 <b>{sig['action'].upper()}</b> {sig['strat']}\n"
-                f"{sym} @ {fill:.4f}\nQty: {qty:.4f} | RR≈{sig.get('expected_rr','?')}"
-            )
+            await self.tg.send(f"🎯 <b>{sig['action'].upper()}</b> {sig['strat']}\n{sym} @ {fill:.4f}\nQty: {qty:.4f}")
             log.info(f"TRADE OPENED {sym} {sig['action']} qty={qty:.4f} @ {fill:.4f}")
-
         except Exception as e:
             err = str(e)
             SYMBOL_ERROR_COUNT[sym] = SYMBOL_ERROR_COUNT.get(sym, 0) + 1
             count = SYMBOL_ERROR_COUNT[sym]
             cooldown = min(350 * (2 ** (count - 1)), 5400)
             SYMBOL_ERROR_COOLDOWN[sym] = time.time() + cooldown
-
-            reason = f"خطای API: {err[:120]}"
+            reason = f"خطای API: {err[:100]}"
             await self.db.log_decision(sym, "rejected", sig.get("strat", ""), reason)
+            record_not_executed(reason)
+            self._record_error(f"EXECUTE {sym}: {err[:80]}")
             log.error(f"EXECUTE ERROR {sym} #{count}: {err}")
             await self.tg.send(f"❌ {sym}\nخطا در باز کردن معامله:\n{err[:150]}")
-
             if "20004" in err or "INCONSISTENT" in err.upper():
                 try:
                     await self.ex.set_position_mode(False, sym)
@@ -937,11 +989,9 @@ class QuantEngine:
             order = await self.ex.create_market_order(TEST_SYMBOL, "buy", qty)
             fill = float(order.get("average") or price)
             pid = f"test_{uuid.uuid4().hex[:6]}"
-            pos = {
-                "id": pid, "symbol": TEST_SYMBOL, "side": "buy", "strategy": "RealTest",
-                "entry": fill, "qty": qty, "sl": fill * 0.97, "tp": fill * 1.03, "tp1": fill * 1.015,
-                "is_partial": 0, "highest_pnl_pct": 0.0,
-            }
+            pos = {"id": pid, "symbol": TEST_SYMBOL, "side": "buy", "strategy": "RealTest",
+                   "entry": fill, "qty": qty, "sl": fill * 0.97, "tp": fill * 1.03, "tp1": fill * 1.015,
+                   "is_partial": 0, "highest_pnl_pct": 0.0}
             with STATE_LOCK:
                 SHARED_STATE["active_positions"][pid] = pos
             self.open_times[pid] = time.time()
@@ -978,7 +1028,6 @@ class QuantEngine:
                     side = "buy" if contracts > 0 else "sell"
                     entry = float(p.get("entryPrice") or p.get("avgEntryPrice") or 0)
                     remote_map[matched] = {"symbol": matched, "side": side, "qty": abs(contracts), "entry": entry}
-
             with STATE_LOCK:
                 local_items = list(SHARED_STATE["active_positions"].items())
             for pid, pos in local_items:
@@ -989,7 +1038,6 @@ class QuantEngine:
                     with STATE_LOCK:
                         SHARED_STATE["active_positions"].pop(pid, None)
                     self.open_times.pop(pid, None)
-
             with STATE_LOCK:
                 known = {p["symbol"] for p in SHARED_STATE["active_positions"].values()}
             for sym, rpos in remote_map.items():
@@ -1005,11 +1053,9 @@ class QuantEngine:
                     sl, tp, tp1 = entry - atr * 1.50, entry + atr * 3.2, entry + atr * 1.7
                 else:
                     sl, tp, tp1 = entry + atr * 1.50, entry - atr * 3.2, entry - atr * 1.7
-                pos = {
-                    "id": pid, "symbol": sym, "side": rpos["side"], "strategy": "Recovered",
-                    "entry": entry, "qty": rpos["qty"], "sl": sl, "tp": tp, "tp1": tp1,
-                    "is_partial": 0, "highest_pnl_pct": 0.0,
-                }
+                pos = {"id": pid, "symbol": sym, "side": rpos["side"], "strategy": "Recovered",
+                       "entry": entry, "qty": rpos["qty"], "sl": sl, "tp": tp, "tp1": tp1,
+                       "is_partial": 0, "highest_pnl_pct": 0.0}
                 with STATE_LOCK:
                     SHARED_STATE["active_positions"][pid] = pos
                 self.open_times[pid] = time.time()
@@ -1018,6 +1064,7 @@ class QuantEngine:
             log.info(f"Sync done active={len(SHARED_STATE['active_positions'])}")
         except Exception as e:
             log.error(f"smart_sync: {e}")
+            self._record_error(f"smart_sync: {e}")
 
     async def force_close(self, pid: str, reason: str):
         with STATE_LOCK:
@@ -1038,9 +1085,7 @@ class QuantEngine:
                 SHARED_STATE["active_positions"].pop(pid, None)
             self.open_times.pop(pid, None)
             await self.db.update_analytics()
-
             SYMBOL_POST_CLOSE_COOLDOWN[pos["symbol"]] = time.time() + POST_CLOSE_COOLDOWN
-
             sym = pos["symbol"]
             if net < 0:
                 with STATE_LOCK:
@@ -1058,6 +1103,7 @@ class QuantEngine:
             await self.tg.send(f"{'🟢' if net >= 0 else '🔴'} closed ({reason}) | ${net:.2f}")
         except Exception as e:
             log.error(f"force_close: {e}")
+            self._record_error(f"force_close: {e}")
 
     async def watchdog_loop(self):
         while True:
@@ -1070,36 +1116,25 @@ class QuantEngine:
                 price = self.prices.get(pos["symbol"])
                 if not price:
                     continue
-
                 hold = now - self.open_times.get(pid, now)
                 can_partial = hold >= MIN_HOLD_FOR_PARTIAL
                 can_trail = hold >= MIN_HOLD_FOR_TRAIL
-
-                pnl_pct = (
-                    (price - pos["entry"]) / pos["entry"] * 100
-                    if pos["side"] == "buy"
-                    else (pos["entry"] - price) / pos["entry"] * 100
-                )
-
+                pnl_pct = ((price - pos["entry"]) / pos["entry"] * 100 if pos["side"] == "buy"
+                           else (pos["entry"] - price) / pos["entry"] * 100)
                 if can_trail and pnl_pct > TRAIL_ACT and pnl_pct > pos["highest_pnl_pct"]:
                     pos["highest_pnl_pct"] = pnl_pct
                     new_sl = price * (1 - TRAIL_STEP / 100) if pos["side"] == "buy" else price * (1 + TRAIL_STEP / 100)
                     if (pos["side"] == "buy" and new_sl > pos["sl"]) or (pos["side"] == "sell" and new_sl < pos["sl"]):
                         pos["sl"] = new_sl
                         await self.db.update_trade(pid, pos["qty"], pos["sl"], pos["is_partial"], pos["highest_pnl_pct"])
-
                 if PARTIAL_TP and pos["is_partial"] == 0 and can_partial:
-                    hit_tp1 = (
-                        (pos["side"] == "buy" and price >= pos["tp1"])
-                        or (pos["side"] == "sell" and price <= pos["tp1"])
-                    )
+                    hit_tp1 = ((pos["side"] == "buy" and price >= pos["tp1"]) or (pos["side"] == "sell" and price <= pos["tp1"]))
                     if hit_tp1 and pnl_pct >= MIN_PROFIT_FOR_BE:
                         try:
                             half = float(self.ex.amount_to_precision(pos["symbol"], pos["qty"] / 2))
                             if half > 0:
                                 close_side = "sell" if pos["side"] == "buy" else "buy"
-                                await self.ex.create_market_order(
-                                    pos["symbol"], close_side, half, params={"reduceOnly": True})
+                                await self.ex.create_market_order(pos["symbol"], close_side, half, params={"reduceOnly": True})
                                 pos["qty"] -= half
                                 pos["is_partial"] = 1
                                 pos["sl"] = pos["entry"]
@@ -1107,7 +1142,6 @@ class QuantEngine:
                                 await self.tg.send(f"🔹 Partial TP → BE {pos['symbol']}")
                         except Exception as e:
                             log.error(f"partial tp: {e}")
-
                 sl_hit = (pos["side"] == "buy" and price <= pos["sl"]) or (pos["side"] == "sell" and price >= pos["sl"])
                 tp_hit = (pos["side"] == "buy" and price >= pos["tp"]) or (pos["side"] == "sell" and price <= pos["tp"])
                 if sl_hit or tp_hit:
@@ -1133,9 +1167,8 @@ def dashboard():
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Quant v16.7</title>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quant v16.8</title>
 <style>
 body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
 h1{color:#58a6ff}
@@ -1145,7 +1178,7 @@ h1{color:#58a6ff}
 </style>
 </head>
 <body>
-<h1>🚀 Master Quant v16.7</h1>
+<h1>🚀 Master Quant v16.8</h1>
 <div class="grid">
 <div class="card">موجودی<div class="value" id="bal">0.00</div></div>
 <div class="card">پوزیشن<div class="value" id="pos">0</div></div>
@@ -1170,7 +1203,6 @@ r();setInterval(r,5000);
 # ===================== MAIN =====================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-
     def run_web():
         try:
             print(f"Flask on 0.0.0.0:{port}", flush=True)
@@ -1178,9 +1210,8 @@ if __name__ == "__main__":
         except Exception as e:
             print("Flask error:", e, flush=True)
             traceback.print_exc()
-
     try:
-        print("=== Master Quant v16.7 starting ===", flush=True)
+        print("=== Master Quant v16.8 (Professional Report) starting ===", flush=True)
         Thread(target=run_web, daemon=True).start()
         time.sleep(1)
         engine = QuantEngine()
