@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v16.10 – Phemex-Only
-- آستانه قدرت روند کاهش یافت به ۰.۰۵٪
+Master Quant Engine v16.11 – Phemex-Only
+- آستانه قدرت روند کاهش یافت به ۰.۰۱٪
 - نمایش مقدار واقعی trend_strength
 - گزارش حرفه‌ای
 """
@@ -75,14 +75,14 @@ SYMBOL_COOLDOWN_HOURS = 5
 POST_CLOSE_COOLDOWN = 1800
 SCAN_INTERVAL = 55
 SYMBOL_DELAY = 2.0
-TREND_STRENGTH_THRESHOLD = 0.05   # کاهش یافته از ۰.۳۰
+TREND_STRENGTH_THRESHOLD = 0.01   # کاهش یافته به ۰.۰۱٪
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("QuantV16.10")
+log = logging.getLogger("QuantV16.11")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True,
@@ -229,7 +229,7 @@ class Database:
         now = time.time()
         lines = []
         lines.append("=" * 78)
-        lines.append("          MASTER QUANT ENGINE v16.10 – PROFESSIONAL DIAGNOSTIC REPORT")
+        lines.append("          MASTER QUANT ENGINE v16.11 – PROFESSIONAL DIAGNOSTIC REPORT")
         lines.append(f"          Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
         lines.append("=" * 78)
         lines.append("")
@@ -379,7 +379,7 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
         lines.append("=" * 78)
-        lines.append("End of Report – v16.10 Professional Diagnostic")
+        lines.append("End of Report – v16.11 Professional Diagnostic")
         lines.append("=" * 78)
         return "\n".join(lines)
 
@@ -635,7 +635,7 @@ class TelegramController:
             while True:
                 await asyncio.sleep(60)
             return
-        await self.send("🚀 <b>Master Quant v16.10</b>\nآستانه قدرت روند → ۰.۰۵٪", self.menu())
+        await self.send("🚀 <b>Master Quant v16.11</b>\nآستانه قدرت روند → ۰.۰۱٪", self.menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -665,7 +665,7 @@ class TelegramController:
                                 with STATE_LOCK:
                                     st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>Dashboard v16.10</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
+                                    f"📊 <b>Dashboard v16.11</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
                                     f"DD: {st['current_dd']:.1f}% | Pos: {len(st['active_positions'])}/{MAX_POS}\n"
                                     f"PnL: ${st['stats']['total_pnl']:.2f} | WR: {st['stats']['win_rate']}%\n"
                                     f"Last: {st['last_scan']}", self.menu())
@@ -686,7 +686,7 @@ class TelegramController:
                                 report = await self.engine.db.generate_txt_report(self.engine.prices)
                                 with open("report.txt", "w", encoding="utf-8") as f:
                                     f.write(report)
-                                await self.send_document("report.txt", "📄 Professional Report v16.10")
+                                await self.send_document("report.txt", "📄 Professional Report v16.11")
                             elif d == "cmd_rej":
                                 decs = await self.engine.db.get_recent_decisions(15)
                                 msg = "🚫 <b>Last decisions</b>\n\n"
@@ -763,7 +763,7 @@ class QuantEngine:
 
     async def start(self):
         await self.db.init()
-        log.info("v16.10 Phemex-Only (Trend Threshold 0.05%) starting...")
+        log.info("v16.11 Phemex-Only (Trend Threshold 0.01%) starting...")
         try:
             await self.ex.load_markets()
             log.info("Phemex markets loaded")
@@ -1192,7 +1192,7 @@ def dashboard():
 <html lang="fa" dir="rtl">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Quant v16.10</title>
+<title>Quant v16.11</title>
 <style>
 body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
 h1{color:#58a6ff}
@@ -1202,7 +1202,7 @@ h1{color:#58a6ff}
 </style>
 </head>
 <body>
-<h1>🚀 Master Quant v16.10</h1>
+<h1>🚀 Master Quant v16.11</h1>
 <div class="grid">
 <div class="card">موجودی<div class="value" id="bal">0.00</div></div>
 <div class="card">پوزیشن<div class="value" id="pos">0</div></div>
@@ -1235,7 +1235,7 @@ if __name__ == "__main__":
             print("Flask error:", e, flush=True)
             traceback.print_exc()
     try:
-        print("=== Master Quant v16.10 (Trend Threshold 0.05%) starting ===", flush=True)
+        print("=== Master Quant v16.11 (Trend Threshold 0.01%) starting ===", flush=True)
         Thread(target=run_web, daemon=True).start()
         time.sleep(1)
         engine = QuantEngine()
