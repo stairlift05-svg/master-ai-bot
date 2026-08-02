@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v16.11 – Phemex-Only
-- آستانه قدرت روند کاهش یافت به ۰.۰۱٪
-- نمایش مقدار واقعی trend_strength
+Master Quant Engine v16.12 – Phemex-Only
+- رفع مشکل «قیمت لحظه‌ای موجود نیست»
+- آستانه قدرت روند ۰.۰۱٪
 - گزارش حرفه‌ای
 """
 
@@ -75,14 +75,14 @@ SYMBOL_COOLDOWN_HOURS = 5
 POST_CLOSE_COOLDOWN = 1800
 SCAN_INTERVAL = 55
 SYMBOL_DELAY = 2.0
-TREND_STRENGTH_THRESHOLD = 0.01   # کاهش یافته به ۰.۰۱٪
+TREND_STRENGTH_THRESHOLD = 0.01
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("QuantV16.11")
+log = logging.getLogger("QuantV16.12")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True,
@@ -229,7 +229,7 @@ class Database:
         now = time.time()
         lines = []
         lines.append("=" * 78)
-        lines.append("          MASTER QUANT ENGINE v16.11 – PROFESSIONAL DIAGNOSTIC REPORT")
+        lines.append("          MASTER QUANT ENGINE v16.12 – PROFESSIONAL DIAGNOSTIC REPORT")
         lines.append(f"          Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
         lines.append("=" * 78)
         lines.append("")
@@ -379,7 +379,7 @@ class Database:
         lines.append("└─────────────────────────────────────────────────────────────────────────")
         lines.append("")
         lines.append("=" * 78)
-        lines.append("End of Report – v16.11 Professional Diagnostic")
+        lines.append("End of Report – v16.12 Professional Diagnostic")
         lines.append("=" * 78)
         return "\n".join(lines)
 
@@ -635,7 +635,7 @@ class TelegramController:
             while True:
                 await asyncio.sleep(60)
             return
-        await self.send("🚀 <b>Master Quant v16.11</b>\nآستانه قدرت روند → ۰.۰۱٪", self.menu())
+        await self.send("🚀 <b>Master Quant v16.12</b>\nرفع مشکل قیمت لحظه‌ای", self.menu())
         while True:
             try:
                 async with aiohttp.ClientSession() as s:
@@ -665,7 +665,7 @@ class TelegramController:
                                 with STATE_LOCK:
                                     st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>Dashboard v16.11</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
+                                    f"📊 <b>Dashboard v16.12</b>\nBalance: <b>${st['balance']:.2f}</b>\n"
                                     f"DD: {st['current_dd']:.1f}% | Pos: {len(st['active_positions'])}/{MAX_POS}\n"
                                     f"PnL: ${st['stats']['total_pnl']:.2f} | WR: {st['stats']['win_rate']}%\n"
                                     f"Last: {st['last_scan']}", self.menu())
@@ -686,7 +686,7 @@ class TelegramController:
                                 report = await self.engine.db.generate_txt_report(self.engine.prices)
                                 with open("report.txt", "w", encoding="utf-8") as f:
                                     f.write(report)
-                                await self.send_document("report.txt", "📄 Professional Report v16.11")
+                                await self.send_document("report.txt", "📄 Professional Report v16.12")
                             elif d == "cmd_rej":
                                 decs = await self.engine.db.get_recent_decisions(15)
                                 msg = "🚫 <b>Last decisions</b>\n\n"
@@ -761,9 +761,25 @@ class QuantEngine:
             log.warning(f"fetch_ohlcv {symbol} {timeframe}: {err[:100]}")
             return []
 
+    async def get_live_price(self, symbol: str) -> float:
+        """قیمت لحظه‌ای با چند لایه پشتیبان"""
+        price = self.prices.get(symbol)
+        if price and price > 0:
+            return price
+        try:
+            ticker = await self.ex.fetch_ticker(symbol)
+            price = float(ticker.get("last") or ticker.get("close") or 0)
+            if price > 0:
+                self.prices[symbol] = price
+                return price
+        except Exception as e:
+            log.warning(f"fetch_ticker {symbol}: {e}")
+            self._record_error(f"fetch_ticker {symbol}: {e}")
+        return 0.0
+
     async def start(self):
         await self.db.init()
-        log.info("v16.11 Phemex-Only (Trend Threshold 0.01%) starting...")
+        log.info("v16.12 Phemex-Only (Price Fallback Fix) starting...")
         try:
             await self.ex.load_markets()
             log.info("Phemex markets loaded")
@@ -878,8 +894,13 @@ class QuantEngine:
                     else:
                         df1 = df5.copy()
 
+                    # به‌روزرسانی قیمت از آخرین کندل
+                    last_close = float(df5["close"].iloc[-1])
+                    if last_close > 0:
+                        self.prices[sym] = last_close
+
                     sig = self.strategy.analyze(df5, df1, symbol=sym)
-                    price = self.prices.get(sym) or float(df5["close"].iloc[-1])
+                    price = self.prices.get(sym) or last_close
                     if price <= 0:
                         continue
 
@@ -924,12 +945,13 @@ class QuantEngine:
             record_not_executed(reason)
             return
 
-        price = self.prices.get(sym)
+        # لایه چندگانه برای گرفتن قیمت
+        price = await self.get_live_price(sym)
         if not price or price <= 0:
-            reason = "قیمت لحظه‌ای موجود نیست"
+            reason = "قیمت لحظه‌ای موجود نیست (حتی بعد از fetch_ticker)"
             await self.db.log_decision(sym, "rejected", sig.get("strat", ""), reason)
             record_not_executed(reason)
-            await self.tg.send(f"⚠️ {sym}\nسیگنال آمد ولی قیمت موجود نیست")
+            await self.tg.send(f"⚠️ {sym}\nسیگنال آمد ولی قیمت پیدا نشد")
             return
 
         with STATE_LOCK:
@@ -1005,7 +1027,7 @@ class QuantEngine:
             if free < 22:
                 await self.tg.send("❌ low balance")
                 return
-            price = self.prices.get(TEST_SYMBOL)
+            price = await self.get_live_price(TEST_SYMBOL)
             if not price:
                 await self.tg.send("❌ no price")
                 return
@@ -1192,7 +1214,7 @@ def dashboard():
 <html lang="fa" dir="rtl">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Quant v16.11</title>
+<title>Quant v16.12</title>
 <style>
 body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
 h1{color:#58a6ff}
@@ -1202,7 +1224,7 @@ h1{color:#58a6ff}
 </style>
 </head>
 <body>
-<h1>🚀 Master Quant v16.11</h1>
+<h1>🚀 Master Quant v16.12</h1>
 <div class="grid">
 <div class="card">موجودی<div class="value" id="bal">0.00</div></div>
 <div class="card">پوزیشن<div class="value" id="pos">0</div></div>
@@ -1235,7 +1257,7 @@ if __name__ == "__main__":
             print("Flask error:", e, flush=True)
             traceback.print_exc()
     try:
-        print("=== Master Quant v16.11 (Trend Threshold 0.01%) starting ===", flush=True)
+        print("=== Master Quant v16.12 (Price Fallback Fix) starting ===", flush=True)
         Thread(target=run_web, daemon=True).start()
         time.sleep(1)
         engine = QuantEngine()
