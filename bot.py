@@ -720,7 +720,7 @@ class QuantEngine:
                     SHARED_STATE["peak_balance"] = total
                 if SHARED_STATE["day_start_balance"] <= 0 and total > 0:
                     SHARED_STATE["day_start_balance"] = total
-            log.info(f"Balance total=${total:.2f} free=${free:.2f}")
+            log.info(f"Balance total=\( {total:.2f} free= \){free:.2f}")
         except Exception as e:
             self._record_error(f"Balance: {e}")
 
@@ -842,7 +842,7 @@ class QuantEngine:
             free = float((bal_data.get("USDT") or {}).get("free") or free)
             qty = self.risk.calculate_qty(bal, free, price, sig["sl"], sym, self.ex)
             notional = qty * price
-            log.info(f"PRE-ORDER {sym} {sig['action']} qty={qty:.6f} notional=${notional:.2f} free=${free:.2f}")
+            log.info(f"PRE-ORDER {sym} {sig['action']} qty={qty:.6f} notional=\( {notional:.2f} free= \){free:.2f}")
             if qty <= 0 or notional < MIN_ORDER_USD:
                 record_miss(f"حجم کم notional=${notional:.2f}")
                 return
