@@ -34,9 +34,9 @@ TG_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT    = os.getenv("TELEGRAM_CHAT_ID", "")
 
 SYMBOLS = [
-    "ETH/USDT:USDT",
-    "BNB/USDT:USDT",
-    "XRP/USDT:USDT",
+    "ETHFI/USDT:USDT",
+    "PORTAL/USDT:USDT",
+    "MAVIA/USDT:USDT",
     "DOT/USDT:USDT",
     "AVAX/USDT:USDT",
     "SOL/USDT:USDT",
