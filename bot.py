@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v17.6  –  STABLE
-هسته اجرا = الگوی v16.2 (ترید واقعی)
-استراتژی = نسخه بهبودیافته
+Master Quant Engine v17.7 – Phemex Stable
+- هسته اجرا مثل v16.2/v17.6
+- سقف سخت notional بعد از amount_to_precision
+- سایز بر اساس free (نه total)
+- ثبت معامله فقط بعد از موفقیت سفارش
+- cooldown یک‌ساعته برای 11001
 """
 
 import asyncio
@@ -16,7 +19,7 @@ import uuid
 from collections import Counter, defaultdict
 from datetime import datetime
 from threading import Thread, Lock
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any
 
 import aiohttp
 import aiosqlite
@@ -33,6 +36,7 @@ TESTNET    = os.getenv("PHEMEX_TESTNET", "False").lower() in ("true", "1", "yes"
 TG_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT    = os.getenv("TELEGRAM_CHAT_ID", "")
 
+# XRP/AVAX فعلاً نگه داشته شده‌اند با سقف سخت‌تر؛ در صورت 11001 یک‌ساعت خاموش می‌شوند
 SYMBOLS = [
     "ETH/USDT:USDT",
     "BNB/USDT:USDT",
@@ -57,11 +61,10 @@ MAX_POS = 5
 MAX_DD = 7.5
 MAX_DAILY_LOSS = 3.8
 
-# === سایز مثل v16.x که ترید می‌کرد ===
-RISK_PCT = 0.35          # درصد ریسک از موجودی روی هر معامله
-MAX_NOTIONAL_USD = 80.0  # سقف نرم
-MIN_ORDER_USD = 8.0
-TEST_USD = 15.0
+RISK_PCT = 0.30
+MAX_NOTIONAL_USD = 50.0   # سقف سخت‌تر برای جلوگیری از 11001
+MIN_ORDER_USD = 10.0
+TEST_USD = 12.0
 
 TAKER_FEE = 0.0006
 FEE_BUFFER = 1.30
@@ -79,13 +82,14 @@ SYMBOL_DELAY = 1.5
 TREND_STRENGTH_THRESHOLD = 0.01
 SYNC_INTERVAL = 90
 GHOST_MISS_LIMIT = 3
+BALANCE_ERROR_COOLDOWN = 3600  # 1h برای 11001
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("QuantV17.6")
+log = logging.getLogger("QuantV17.7")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True, "dd_halted": False, "daily_halted": False,
@@ -217,7 +221,7 @@ class Database:
         now = time.time()
         lines = [
             "=" * 78,
-            "     MASTER QUANT ENGINE v17.6  |  STABLE (v16.2 EXEC CORE)",
+            "     MASTER QUANT ENGINE v17.7  |  SIZE FIX + FREE BALANCE",
             f"     Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
             "=" * 78, "",
             "┌─ 1. SUMMARY ───────────────────────────────────────────────────────────",
@@ -392,7 +396,8 @@ class StrategyEngine:
         if atr <= 0 or pd.isna(atr):
             return {"action": "neutral", "reason": "ATR صفر", "strat": "", "rsi": 0, "atr": 0, "htf": htf_trend}
         rsi = float(Indicators.rsi(c).iloc[-1])
-        if pd.isna(rsi) or rsi <= 2 or rsi >= 98:
+        # RSI نامعتبر یا قفل‌شده (مثل 4.9 مداوم روی داده خراب)
+        if pd.isna(rsi) or rsi <= 3 or rsi >= 97:
             return {"action": "neutral", "reason": f"RSI نامعتبر ({rsi:.1f})", "strat": "", "rsi": rsi, "atr": atr, "htf": htf_trend}
 
         ema20 = float(c.ewm(span=20, adjust=False).mean().iloc[-1])
@@ -405,7 +410,6 @@ class StrategyEngine:
         candle_bull = c.iloc[-1] > c.iloc[-2]
         candle_bear = c.iloc[-1] < c.iloc[-2]
 
-        # RSI Extreme قبل از فیلتر روند ضعیف
         if rsi < 22 and candle_bull and vcur > vsma * 0.9:
             return self._build("buy", "RSI_Extreme_Bounce", price, atr, rsi, htf_trend)
         if rsi > 78 and candle_bear and vcur > vsma * 0.9:
@@ -420,12 +424,10 @@ class StrategyEngine:
             return self._build("buy", "Breakout_Momentum", price, atr, rsi, htf_trend)
         if htf_trend == "bearish" and price < ema20 * 0.9995 and price <= l12 * 1.003 and 30 < rsi < 58 and vol_ok:
             return self._build("sell", "Breakout_Momentum", price, atr, rsi, htf_trend)
-
         if htf_trend == "bullish" and st_d.iloc[-1] == 1 and low.iloc[-1] <= st_l.iloc[-1] * 1.008 and candle_bull and 38 < rsi < 68 and price > ema20:
             return self._build("buy", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
         if htf_trend == "bearish" and st_d.iloc[-1] == -1 and high.iloc[-1] >= st_u.iloc[-1] * 0.992 and candle_bear and 32 < rsi < 62 and price < ema20:
             return self._build("sell", "SuperTrend_Pullback", price, atr, rsi, htf_trend)
-
         if htf_trend == "bullish" and price > ema20 and vcur > vsma * 1.35 and candle_bull and 43 < rsi < 70:
             return self._build("buy", "Volume_Surge", price, atr, rsi, htf_trend)
         if htf_trend == "bearish" and price < ema20 and vcur > vsma * 1.35 and candle_bear and 30 < rsi < 57:
@@ -452,32 +454,43 @@ class StrategyEngine:
                 "rsi": rsi, "atr": atr, "htf": htf}
 
 class RiskManager:
-    """سایز ریسک‌محور مثل نسخه‌های قدیمی که ترید می‌کردند"""
+    """سایز بر اساس free + سقف سخت بعد از precision"""
 
     @staticmethod
-    def calculate_qty(exchange, symbol: str, balance: float, price: float, sl: float) -> float:
-        if price <= 0 or balance < 20:
+    def calculate_qty(exchange, symbol: str, free_balance: float, price: float, sl: float) -> float:
+        if price <= 0 or free_balance < 20:
             return 0.0
         dist = abs(price - sl)
-        if dist <= 0 or dist / price < 0.001:
-            dist = price * 0.008  # حداقل فاصله حدود 0.8%
+        # حداقل فاصله تا SL حدود 0.3٪ تا qty منفجر نشود
+        if dist <= 0 or dist / price < 0.003:
+            dist = price * 0.008
 
-        risk_usd = balance * (RISK_PCT / 100.0)
+        risk_usd = free_balance * (RISK_PCT / 100.0)
         raw_qty = risk_usd / dist
+        raw_qty = min(raw_qty, MAX_NOTIONAL_USD / price)
 
-        # سقف notional
-        max_qty = MAX_NOTIONAL_USD / price
-        raw_qty = min(raw_qty, max_qty)
-
-        # حداقل notional
         if raw_qty * price < MIN_ORDER_USD:
             raw_qty = MIN_ORDER_USD / price
 
+        # مارجین تقریبی نباید از free بیشتر شود
+        max_by_margin = (free_balance * LEVERAGE * 0.7) / price
+        raw_qty = min(raw_qty, max_by_margin)
+
         try:
             qty = float(exchange.amount_to_precision(symbol, raw_qty))
-            if qty <= 0:
+            notional = qty * price
+            if notional > MAX_NOTIONAL_USD * 1.05:
+                qty = float(exchange.amount_to_precision(symbol, MAX_NOTIONAL_USD / price))
+                notional = qty * price
+            if notional < MIN_ORDER_USD * 0.5 or qty <= 0:
                 return 0.0
-            return qty
+            # مارجین نهایی
+            if (notional / LEVERAGE) > free_balance * 0.85:
+                qty = float(exchange.amount_to_precision(
+                    symbol, (free_balance * 0.7 * LEVERAGE) / price))
+                if qty * price < MIN_ORDER_USD * 0.5:
+                    return 0.0
+            return max(qty, 0.0)
         except Exception as e:
             log.error(f"amount_to_precision: {e}")
             return 0.0
@@ -537,9 +550,8 @@ class TelegramController:
                 await asyncio.sleep(60)
             return
         await self.send(
-            f"🚀 <b>v17.6 STABLE</b>\n"
-            f"Exec core = v16.2 style\n"
-            f"Risk {RISK_PCT}% | Max ${MAX_NOTIONAL_USD:.0f}",
+            f"🚀 <b>v17.7 Size Fix</b>\n"
+            f"Max ${MAX_NOTIONAL_USD:.0f} | Risk {RISK_PCT}% | Free-based",
             self.menu())
         while True:
             try:
@@ -573,7 +585,7 @@ class TelegramController:
                                 with STATE_LOCK:
                                     st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>v17.6</b>\nTotal ${st['balance']:.2f}\nFree ${st.get('free_balance',0):.2f}\n"
+                                    f"📊 <b>v17.7</b>\nTotal ${st['balance']:.2f}\nFree ${st.get('free_balance',0):.2f}\n"
                                     f"Pos {len(st['active_positions'])}/{MAX_POS}",
                                     self.menu())
                             elif d == "cmd_pos":
@@ -596,7 +608,7 @@ class TelegramController:
                                     self.engine.prices, self.engine.open_times)
                                 with open("report.txt", "w", encoding="utf-8") as f:
                                     f.write(report)
-                                await self.send_document("report.txt", "📄 v17.6")
+                                await self.send_document("report.txt", "📄 v17.7")
                             elif d == "cmd_rej":
                                 decs = await self.engine.db.get_recent_decisions(12)
                                 msg = "🚫\n"
@@ -616,7 +628,6 @@ class QuantEngine:
         self.strategy = StrategyEngine()
         self.risk = RiskManager()
         self.tg = TelegramController(self)
-        # === همان الگوی ساده v16.2 ===
         self.ex = ccxt.phemex({
             "apiKey": API_KEY,
             "secret": API_SECRET,
@@ -680,7 +691,7 @@ class QuantEngine:
 
     async def start(self):
         await self.db.init()
-        log.info("v17.6 STABLE (v16.2 exec) starting...")
+        log.info("v17.7 SIZE FIX starting...")
         try:
             await self.ex.load_markets()
         except Exception as e:
@@ -711,10 +722,12 @@ class QuantEngine:
             bal = await self.ex.fetch_balance()
             usdt = bal.get("USDT") or {}
             total = float(usdt.get("total") or 0)
-            free = float(usdt.get("free") or total)
+            free = float(usdt.get("free") or 0)
+            if free <= 0:
+                free = total
             with STATE_LOCK:
                 SHARED_STATE["balance"] = total
-                SHARED_STATE["free_balance"] = free if free > 0 else total
+                SHARED_STATE["free_balance"] = free
                 if total > SHARED_STATE["peak_balance"]:
                     SHARED_STATE["peak_balance"] = total
                 if SHARED_STATE["day_start_balance"] <= 0 and total > 0:
@@ -811,7 +824,6 @@ class QuantEngine:
             await asyncio.sleep(SCAN_INTERVAL)
 
     async def execute_trade(self, sym, sig):
-        """مسیر ساده شبیه v16.2 — بدون پیچیدگی اضافی"""
         def record_miss(reason):
             with STATE_LOCK:
                 lst = SHARED_STATE["signal_but_not_executed"]
@@ -830,21 +842,40 @@ class QuantEngine:
 
         with STATE_LOCK:
             bal = SHARED_STATE["balance"]
+            free = SHARED_STATE.get("free_balance") or bal
             open_count = len(SHARED_STATE["active_positions"])
 
-        if bal < 25 or open_count >= MAX_POS:
+        if free < 25 or open_count >= MAX_POS:
             return
 
         try:
-            qty = self.risk.calculate_qty(self.ex, sym, bal, price, sig["sl"])
-            notional = qty * price
-            log.info(f"ORDER PREP {sym} {sig['action']} qty={qty} notional=\( {notional:.2f} bal= \){bal:.2f}")
+            # تازه‌سازی free قبل از سفارش
+            try:
+                bal_data = await self.ex.fetch_balance()
+                free = float((bal_data.get("USDT") or {}).get("free") or free)
+            except Exception:
+                pass
 
-            if qty <= 0 or notional < MIN_ORDER_USD * 0.7:
-                record_miss(f"qty={qty}")
+            qty = self.risk.calculate_qty(self.ex, sym, free, price, sig["sl"])
+            notional = qty * price
+            margin = notional / LEVERAGE if LEVERAGE else notional
+
+            log.info(
+                f"ORDER PREP {sym} {sig['action']} strat={sig.get('strat')} "
+                f"qty={qty} notional=\( {notional:.2f} margin= \){margin:.2f} free=${free:.2f}"
+            )
+
+            if qty <= 0 or notional < MIN_ORDER_USD * 0.5:
+                record_miss(f"qty={qty} notional=${notional:.2f}")
+                return
+            if notional > MAX_NOTIONAL_USD * 1.1:
+                record_miss(f"notional ${notional:.2f} > max")
+                return
+            if margin > free * 0.85:
+                record_miss(f"margin ${margin:.2f} > free ${free:.2f}")
                 return
 
-            # === فقط همین — عین نسخه‌های تریدکننده ===
+            # سفارش — فقط بعد از موفقیت ثبت می‌شود
             order = await self.ex.create_market_order(sym, sig["action"], qty)
 
             fill = float(order.get("average") or order.get("price") or price)
@@ -876,21 +907,27 @@ class QuantEngine:
             err = str(e)
             SYMBOL_ERROR_COUNT[sym] = SYMBOL_ERROR_COUNT.get(sym, 0) + 1
             count = SYMBOL_ERROR_COUNT[sym]
-            SYMBOL_ERROR_COOLDOWN[sym] = time.time() + min(180 * count, 1800)
+            # 11001 → یک ساعت خاموشی برای همان نماد
+            if "11001" in err or "NO_ENOUGH" in err.upper() or "11082" in err:
+                SYMBOL_ERROR_COOLDOWN[sym] = time.time() + BALANCE_ERROR_COOLDOWN
+                log.warning(f"11001 on {sym} → cooldown {BALANCE_ERROR_COOLDOWN}s")
+            else:
+                SYMBOL_ERROR_COOLDOWN[sym] = time.time() + min(180 * count, 1800)
             await self.db.log_decision(sym, "rejected", sig.get("strat", ""), f"API: {err[:80]}")
             record_miss(err[:80])
             self._record_error(f"EXECUTE {sym}: {err[:80]}")
             await self.tg.send(f"❌ {sym}\n{err[:140]}")
+            # هیچ insert_trade — جلوگیری از ghost
 
     async def real_test_trade(self):
-        await self.tg.send("⚡ Real test v17.6...")
+        await self.tg.send("⚡ Real test v17.7...")
         try:
             await self.update_balance()
             with STATE_LOCK:
-                bal = SHARED_STATE["balance"]
-            await self.tg.send(f"💰 Balance ${bal:.2f}")
-            if bal < 25:
-                await self.tg.send("❌ موجودی کم")
+                free = SHARED_STATE.get("free_balance") or SHARED_STATE["balance"]
+            await self.tg.send(f"💰 Free ${free:.2f}")
+            if free < 25:
+                await self.tg.send("❌ Free کم است")
                 return
 
             price = await self.get_live_price(TEST_SYMBOL)
@@ -898,18 +935,17 @@ class QuantEngine:
                 await self.tg.send("❌ no price")
                 return
 
-            # SL فرضی برای تست (\~1%)
             fake_sl = price * 0.99
-            qty = self.risk.calculate_qty(self.ex, TEST_SYMBOL, bal, price, fake_sl)
-            # برای تست کمی کوچک‌تر
+            qty = self.risk.calculate_qty(self.ex, TEST_SYMBOL, free, price, fake_sl)
             try:
-                qty = float(self.ex.amount_to_precision(TEST_SYMBOL, qty * 0.5))
+                qty = float(self.ex.amount_to_precision(TEST_SYMBOL, min(qty, TEST_USD / price)))
             except Exception:
                 pass
 
             notional = qty * price
-            log.info(f"TEST qty={qty} notional=${notional:.2f}")
-            await self.tg.send(f"🧪 qty={qty}\n\~${notional:.1f}")
+            margin = notional / LEVERAGE
+            log.info(f"TEST qty={qty} notional=\( {notional:.2f} margin= \){margin:.2f} free=${free:.2f}")
+            await self.tg.send(f"🧪 qty={qty}\n\~\( {notional:.1f} margin\~ \){margin:.1f}")
 
             if qty <= 0:
                 await self.tg.send("❌ qty=0")
@@ -1110,12 +1146,12 @@ def api_status():
 @app.route("/")
 def dashboard():
     return render_template_string("""
-<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8"><title>v17.6</title>
+<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8"><title>v17.7</title>
 <style>body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
 h1{color:#58a6ff}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
 .card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:12px}
 .value{font-size:1.2rem;font-weight:700;color:#58a6ff}</style></head><body>
-<h1>🚀 Quant v17.6 STABLE</h1>
+<h1>🚀 Quant v17.7</h1>
 <div class="grid">
 <div class="card">Total<div class="value" id="bal">0</div></div>
 <div class="card">Free<div class="value" id="free">0</div></div>
@@ -1141,7 +1177,7 @@ if __name__ == "__main__":
             print("Flask error:", e, flush=True)
             traceback.print_exc()
     try:
-        print("=== Master Quant v17.6 STABLE starting ===", flush=True)
+        print("=== Master Quant v17.7 SIZE FIX starting ===", flush=True)
         Thread(target=run_web, daemon=True).start()
         time.sleep(1)
         engine = QuantEngine()
