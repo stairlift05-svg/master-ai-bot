@@ -39,8 +39,8 @@ from flask import Flask, jsonify, render_template_string
 
 load_dotenv()
 
-ARIAX_KEY    = os.getenv("ARIAX_KEY", "")
-ARIAX_SECRET = os.getenv("ARIAX_SECRET", "")
+ARIAX_KEY    = os.getenv("arx-60dac4c765f31be1d91b1030de3aeda6", "")
+ARIAX_SECRET = os.getenv("cwvUNUa7tPHbrW2I-PrvU1DQh451sIusDMIJ9OWPgEc", "")
 ARIAX_BASE   = os.getenv("ARIAX_BASE", "https://dryclean-app-1.onrender.com").rstrip("/")
 TG_TOKEN     = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT      = os.getenv("TELEGRAM_CHAT_ID", "")
