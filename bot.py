@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v17.7 – Phemex Stable
-- هسته اجرا مثل v16.2/v17.6
-- سقف سخت notional بعد از amount_to_precision
-- سایز بر اساس free (نه total)
-- ثبت معامله فقط بعد از موفقیت سفارش
-- cooldown یک‌ساعته برای 11001
+Master Quant Engine v19.0 – AriaX Testnet
+اجرا روی AriaX | سیگنال از کندل عمومی Binance (بدون کلید)
+مستندات: https://ariax-1.onrender.com
+Env: ARIAX_KEY, ARIAX_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 """
 
 import asyncio
@@ -19,7 +17,7 @@ import uuid
 from collections import Counter, defaultdict
 from datetime import datetime
 from threading import Thread, Lock
-from typing import Dict, Any
+from typing import Dict, Any, Optional, List
 
 import aiohttp
 import aiosqlite
@@ -30,21 +28,24 @@ from flask import Flask, jsonify, render_template_string
 
 load_dotenv()
 
-API_KEY    = os.getenv("PHEMEX_API_KEY", "")
-API_SECRET = os.getenv("PHEMEX_API_SECRET", "")
-TESTNET    = os.getenv("PHEMEX_TESTNET", "False").lower() in ("true", "1", "yes")
-TG_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TG_CHAT    = os.getenv("TELEGRAM_CHAT_ID", "")
+ARIAX_KEY    = os.getenv("ARIAX_KEY", "")
+ARIAX_SECRET = os.getenv("ARIAX_SECRET", "")
+ARIAX_BASE   = os.getenv("ARIAX_BASE", "https://ariax-1.onrender.com").rstrip("/")
+TG_TOKEN     = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TG_CHAT      = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# XRP/AVAX فعلاً نگه داشته شده‌اند با سقف سخت‌تر؛ در صورت 11001 یک‌ساعت خاموش می‌شوند
-SYMBOLS = [
-    "ETH/USDT:USDT",
-    "BNB/USDT:USDT",
-    "XRP/USDT:USDT",
-    "DOT/USDT:USDT",
-    "AVAX/USDT:USDT",
-    "SOL/USDT:USDT",
-]
+# نمادهای AriaX (فرمت API) → جفت عمومی برای کندل
+SYMBOL_MAP = {
+    "ETHUSD":  "ETH/USDT",
+    "SOLUSD":  "SOL/USDT",
+    "XRPUSD":  "XRP/USDT",
+    "AVAXUSD": "AVAX/USDT",
+    "DOTUSD":  "DOT/USDT",
+    "LINKUSD": "LINK/USDT",
+    "ADAUSD":  "ADA/USDT",
+    "DOGEUSD": "DOGE/USDT",
+}
+SYMBOLS = list(SYMBOL_MAP.keys())  # لیست معاملات روی AriaX
 
 STRATEGY_PARAMS = {
     "Breakout_Momentum":   {"sl_m": 1.50, "tp_m": 3.6, "tp1_m": 1.9},
@@ -58,16 +59,14 @@ TIMEFRAME = "5m"
 HTF_TIMEFRAME = "1h"
 LEVERAGE = 5
 MAX_POS = 5
-MAX_DD = 7.5
-MAX_DAILY_LOSS = 3.8
-
-RISK_PCT = 0.30
-MAX_NOTIONAL_USD = 50.0   # سقف سخت‌تر برای جلوگیری از 11001
-MIN_ORDER_USD = 10.0
-TEST_USD = 12.0
-
-TAKER_FEE = 0.0006
-FEE_BUFFER = 1.30
+MAX_DD = 10.0
+MAX_DAILY_LOSS = 5.0
+RISK_PCT = 0.40
+MAX_NOTIONAL_USD = 80.0
+MIN_ORDER_USD = 8.0
+TEST_USD = 15.0
+TAKER_FEE = 0.0005
+FEE_BUFFER = 1.2
 TRAIL_ACT = 3.2
 TRAIL_STEP = 1.0
 PARTIAL_TP = True
@@ -75,21 +74,20 @@ MIN_HOLD_FOR_PARTIAL = 720
 MIN_HOLD_FOR_TRAIL = 1080
 MIN_PROFIT_FOR_BE = 0.75
 MAX_HOLD_SECONDS = 4 * 3600
-TEST_SYMBOL = "SOL/USDT:USDT"
-POST_CLOSE_COOLDOWN = 1800
-SCAN_INTERVAL = 55
-SYMBOL_DELAY = 1.5
+TEST_SYMBOL = "ETHUSD"
+POST_CLOSE_COOLDOWN = 1200
+SCAN_INTERVAL = 50
+SYMBOL_DELAY = 1.0
 TREND_STRENGTH_THRESHOLD = 0.01
-SYNC_INTERVAL = 90
+SYNC_INTERVAL = 60
 GHOST_MISS_LIMIT = 3
-BALANCE_ERROR_COOLDOWN = 3600  # 1h برای 11001
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("QuantV17.7")
+log = logging.getLogger("QuantV19")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True, "dd_halted": False, "daily_halted": False,
@@ -99,6 +97,7 @@ SHARED_STATE: Dict[str, Any] = {
     "stats": {"total_trades": 0, "win_rate": 0.0, "total_pnl": 0.0},
     "fetch_stats": defaultdict(lambda: {"ok_5m": 0, "fail_5m": 0, "ok_1h": 0, "fail_1h": 0}),
     "recent_errors": [], "signal_but_not_executed": [], "trend_strengths": [],
+    "exchange": "ariax-testnet",
 }
 STATE_LOCK = Lock()
 SYMBOL_ERROR_COOLDOWN: Dict[str, float] = {}
@@ -106,6 +105,129 @@ SYMBOL_ERROR_COUNT: Dict[str, int] = {}
 SYMBOL_POST_CLOSE_COOLDOWN: Dict[str, float] = {}
 POSITION_MISS_COUNT: Dict[str, int] = {}
 
+
+# ─────────────────────────────────────────────
+# AriaX REST Client
+# ─────────────────────────────────────────────
+class AriaXClient:
+    def __init__(self, base: str, key: str, secret: str):
+        self.base = base.rstrip("/")
+        self.headers = {
+            "X-API-Key": key,
+            "X-API-Secret": secret,
+            "Content-Type": "application/json",
+        }
+        self._session: Optional[aiohttp.ClientSession] = None
+        self.config: Dict[str, Any] = {}
+        self.symbol_meta: Dict[str, Dict] = {}  # minq / step
+
+    async def session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            timeout = aiohttp.ClientTimeout(total=45, connect=20)
+            self._session = aiohttp.ClientSession(headers=self.headers, timeout=timeout)
+        return self._session
+
+    async def close(self):
+        if self._session and not self._session.closed:
+            await self._session.close()
+
+    async def _req(self, method: str, path: str, json_body=None) -> Any:
+        s = await self.session()
+        url = f"{self.base}{path}"
+        for attempt in range(3):
+            try:
+                async with s.request(method, url, json=json_body) as r:
+                    text = await r.text()
+                    try:
+                        data = await r.json(content_type=None)
+                    except Exception:
+                        data = {"raw": text[:500], "status": r.status}
+                    if r.status >= 400:
+                        raise Exception(f"HTTP {r.status}: {text[:300]}")
+                    return data
+            except asyncio.TimeoutError:
+                log.warning(f"AriaX timeout {path} try={attempt+1}")
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(2 + attempt * 2)
+            except aiohttp.ClientError as e:
+                log.warning(f"AriaX net {path}: {e}")
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(2 + attempt * 2)
+        return {}
+
+    async def get_markets(self):
+        return await self._req("GET", "/api/markets")
+
+    async def get_wallet(self):
+        return await self._req("GET", "/api/wallet")
+
+    async def get_positions(self):
+        return await self._req("GET", "/api/positions")
+
+    async def get_orders(self):
+        return await self._req("GET", "/api/orders")
+
+    async def get_fills(self):
+        return await self._req("GET", "/api/fills")
+
+    async def get_performance(self):
+        return await self._req("GET", "/api/performance")
+
+    async def get_config(self):
+        try:
+            data = await self._req("GET", "/api/config")
+            self.config = data if isinstance(data, dict) else {}
+            # استخراج minq/step در صورت وجود
+            meta = self.config.get("symbols") or self.config.get("markets") or self.config
+            if isinstance(meta, dict):
+                for k, v in meta.items():
+                    if isinstance(v, dict) and ("minq" in v or "step" in v or "minQty" in v):
+                        self.symbol_meta[k.upper()] = v
+            return data
+        except Exception as e:
+            log.warning(f"config: {e}")
+            return {}
+
+    async def place_order(self, symbol: str, side: str, qty: float, lev: int = 5,
+                          order_type: str = "market", price: float = None) -> dict:
+        body = {
+            "symbol": symbol,
+            "side": side.lower(),
+            "type": order_type.lower(),
+            "qty": float(qty),
+            "lev": int(lev),
+        }
+        if order_type.lower() == "limit" and price is not None:
+            body["price"] = float(price)
+        log.info(f"ARIAX ORDER {body}")
+        return await self._req("POST", "/api/order", json_body=body)
+
+    async def cancel_order(self, order_id) -> dict:
+        return await self._req("POST", "/api/cancel", json_body={"id": order_id})
+
+    def quantize_qty(self, symbol: str, qty: float) -> float:
+        meta = self.symbol_meta.get(symbol.upper(), {})
+        step = float(meta.get("step") or meta.get("qtyStep") or meta.get("stepSize") or 0)
+        minq = float(meta.get("minq") or meta.get("minQty") or meta.get("min") or 0)
+        if step > 0:
+            qty = (int(qty / step)) * step
+        if minq > 0 and qty < minq:
+            qty = minq
+        # دقت معقول
+        if qty >= 1:
+            qty = round(qty, 4)
+        elif qty >= 0.01:
+            qty = round(qty, 6)
+        else:
+            qty = round(qty, 8)
+        return max(qty, 0.0)
+
+
+# ─────────────────────────────────────────────
+# Database
+# ─────────────────────────────────────────────
 class Database:
     def __init__(self, path="bot.db"):
         self.path = path
@@ -221,12 +343,12 @@ class Database:
         now = time.time()
         lines = [
             "=" * 78,
-            "     MASTER QUANT ENGINE v17.7  |  SIZE FIX + FREE BALANCE",
+            "     MASTER QUANT ENGINE v19.0  |  ARIAX TESTNET",
             f"     Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
             "=" * 78, "",
             "┌─ 1. SUMMARY ───────────────────────────────────────────────────────────",
             f"│  Total ${st.get('balance',0):,.2f}  Free ${st.get('free_balance',0):,.2f}",
-            f"│  Risk {RISK_PCT}%  MaxNotional ${MAX_NOTIONAL_USD:.0f}",
+            f"│  Risk {RISK_PCT}%  MaxNotional ${MAX_NOTIONAL_USD:.0f}  Lev {LEVERAGE}x",
             f"│  DD {st.get('current_dd',0):.2f}%  Open {len(active)}/{MAX_POS}",
             f"│  Trades {st.get('stats',{}).get('total_trades',0)}  WR {st.get('stats',{}).get('win_rate',0)}%  PnL ${st.get('stats',{}).get('total_pnl',0):+.2f}",
             f"│  Scan {st.get('last_scan')}  Sync {st.get('last_sync')}",
@@ -242,10 +364,10 @@ class Database:
                 hold_h = (now - open_times.get(pid, now)) / 3600
                 lines.append(f"│  {p['symbol']} {p['side'].upper()} {p.get('strategy','')} ${upnl:+.3f} {hold_h:.1f}h")
         lines += ["└────────────────────────────────────────────────────────────────────────", "",
-                  "┌─ 3. DATA ──────────────────────────────────────────────────────────────"]
+                  "┌─ 3. DATA (candles via public Binance) ─────────────────────────────────"]
         for sym in SYMBOLS:
             s = fetch_stats.get(sym, {"ok_5m": 0, "fail_5m": 0, "ok_1h": 0, "fail_1h": 0})
-            lines.append(f"│  {sym:<18} 5m {s['ok_5m']}/{s['fail_5m']}  1h {s['ok_1h']}/{s['fail_1h']}")
+            lines.append(f"│  {sym:<12} 5m {s['ok_5m']}/{s['fail_5m']}  1h {s['ok_1h']}/{s['fail_1h']}")
         lines += ["└────────────────────────────────────────────────────────────────────────", "",
                   "┌─ 4. CLOSED ────────────────────────────────────────────────────────────"]
         if not closed:
@@ -253,7 +375,7 @@ class Database:
         else:
             for t in closed[:10]:
                 tag = "WIN" if t["pnl"] > 0 else "LOSS"
-                lines.append(f"│  [{tag}] {t['symbol']:<16} ${t['pnl']:+.3f}  {t.get('exit_reason','')[:28]}")
+                lines.append(f"│  [{tag}] {t['symbol']:<12} ${t['pnl']:+.3f}  {t.get('exit_reason','')[:28]}")
         reasons = Counter()
         sigs = 0
         for d in decisions:
@@ -278,10 +400,14 @@ class Database:
                   "┌─ 7. LAST ──────────────────────────────────────────────────────────────"]
         for d in (decisions or [])[:12]:
             icon = "SIG" if d["action"] not in ("neutral", "rejected") else "REJ"
-            lines.append(f"│  [{icon}] {(d.get('ts') or '')[:19]} {d['symbol']:<18} {d.get('reason','')[:40]}")
+            lines.append(f"│  [{icon}] {(d.get('ts') or '')[:19]} {d['symbol']:<12} {d.get('reason','')[:40]}")
         lines += ["└────────────────────────────────────────────────────────────────────────", "=" * 78]
         return "\n".join(lines)
 
+
+# ─────────────────────────────────────────────
+# Indicators & Strategy (unchanged logic)
+# ─────────────────────────────────────────────
 class Indicators:
     @staticmethod
     def rsi(series, n=14):
@@ -362,6 +488,7 @@ class Indicators:
                 return "bearish"
         return None
 
+
 class StrategyEngine:
     def analyze(self, df_5m, df_1h, symbol=""):
         df = df_5m.iloc[:-1].copy()
@@ -396,7 +523,6 @@ class StrategyEngine:
         if atr <= 0 or pd.isna(atr):
             return {"action": "neutral", "reason": "ATR صفر", "strat": "", "rsi": 0, "atr": 0, "htf": htf_trend}
         rsi = float(Indicators.rsi(c).iloc[-1])
-        # RSI نامعتبر یا قفل‌شده (مثل 4.9 مداوم روی داده خراب)
         if pd.isna(rsi) or rsi <= 3 or rsi >= 97:
             return {"action": "neutral", "reason": f"RSI نامعتبر ({rsi:.1f})", "strat": "", "rsi": rsi, "atr": atr, "htf": htf_trend}
 
@@ -453,48 +579,33 @@ class StrategyEngine:
                 "tp1": price - atr * p["tp1_m"], "reason": f"سیگنال {strat}",
                 "rsi": rsi, "atr": atr, "htf": htf}
 
-class RiskManager:
-    """سایز بر اساس free + سقف سخت بعد از precision"""
 
+class RiskManager:
     @staticmethod
-    def calculate_qty(exchange, symbol: str, free_balance: float, price: float, sl: float) -> float:
-        if price <= 0 or free_balance < 20:
+    def calculate_qty(ariax: AriaXClient, symbol: str, free: float, price: float, sl: float) -> float:
+        if price <= 0 or free < 15:
             return 0.0
         dist = abs(price - sl)
-        # حداقل فاصله تا SL حدود 0.3٪ تا qty منفجر نشود
         if dist <= 0 or dist / price < 0.003:
             dist = price * 0.008
-
-        risk_usd = free_balance * (RISK_PCT / 100.0)
+        risk_usd = free * (RISK_PCT / 100.0)
         raw_qty = risk_usd / dist
         raw_qty = min(raw_qty, MAX_NOTIONAL_USD / price)
-
         if raw_qty * price < MIN_ORDER_USD:
             raw_qty = MIN_ORDER_USD / price
-
-        # مارجین تقریبی نباید از free بیشتر شود
-        max_by_margin = (free_balance * LEVERAGE * 0.7) / price
+        max_by_margin = (free * LEVERAGE * 0.65) / price
         raw_qty = min(raw_qty, max_by_margin)
-
-        try:
-            qty = float(exchange.amount_to_precision(symbol, raw_qty))
-            notional = qty * price
-            if notional > MAX_NOTIONAL_USD * 1.05:
-                qty = float(exchange.amount_to_precision(symbol, MAX_NOTIONAL_USD / price))
-                notional = qty * price
-            if notional < MIN_ORDER_USD * 0.5 or qty <= 0:
-                return 0.0
-            # مارجین نهایی
-            if (notional / LEVERAGE) > free_balance * 0.85:
-                qty = float(exchange.amount_to_precision(
-                    symbol, (free_balance * 0.7 * LEVERAGE) / price))
-                if qty * price < MIN_ORDER_USD * 0.5:
-                    return 0.0
-            return max(qty, 0.0)
-        except Exception as e:
-            log.error(f"amount_to_precision: {e}")
+        qty = ariax.quantize_qty(symbol, raw_qty)
+        if qty * price < MIN_ORDER_USD * 0.5:
             return 0.0
+        if (qty * price) / LEVERAGE > free * 0.85:
+            qty = ariax.quantize_qty(symbol, (free * 0.65 * LEVERAGE) / price)
+        return max(qty, 0.0)
 
+
+# ─────────────────────────────────────────────
+# Telegram
+# ─────────────────────────────────────────────
 class TelegramController:
     def __init__(self, engine):
         self.engine = engine
@@ -513,8 +624,7 @@ class TelegramController:
         with STATE_LOCK:
             positions = list(SHARED_STATE["active_positions"].items())
         for pid, p in positions[:5]:
-            short = p["symbol"].split("/")[0]
-            rows.append([{"text": f"❌ Close {short} {p['side'].upper()}", "callback_data": f"close_{pid}"}])
+            rows.append([{"text": f"❌ Close {p['symbol']} {p['side'].upper()}", "callback_data": f"close_{pid}"}])
         return {"inline_keyboard": rows}
 
     async def send(self, text, markup=None):
@@ -550,8 +660,9 @@ class TelegramController:
                 await asyncio.sleep(60)
             return
         await self.send(
-            f"🚀 <b>v17.7 Size Fix</b>\n"
-            f"Max ${MAX_NOTIONAL_USD:.0f} | Risk {RISK_PCT}% | Free-based",
+            f"🚀 <b>v19.0 AriaX Testnet</b>\n"
+            f"Base: {ARIAX_BASE}\n"
+            f"Risk {RISK_PCT}% | Lev {LEVERAGE}x | Max ${MAX_NOTIONAL_USD:.0f}",
             self.menu())
         while True:
             try:
@@ -585,7 +696,7 @@ class TelegramController:
                                 with STATE_LOCK:
                                     st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>v17.7</b>\nTotal ${st['balance']:.2f}\nFree ${st.get('free_balance',0):.2f}\n"
+                                    f"📊 <b>v19 AriaX</b>\nTotal ${st['balance']:.2f}\nFree ${st.get('free_balance',0):.2f}\n"
                                     f"Pos {len(st['active_positions'])}/{MAX_POS}",
                                     self.menu())
                             elif d == "cmd_pos":
@@ -608,7 +719,7 @@ class TelegramController:
                                     self.engine.prices, self.engine.open_times)
                                 with open("report.txt", "w", encoding="utf-8") as f:
                                     f.write(report)
-                                await self.send_document("report.txt", "📄 v17.7")
+                                await self.send_document("report.txt", "📄 v19 AriaX")
                             elif d == "cmd_rej":
                                 decs = await self.engine.db.get_recent_decisions(12)
                                 msg = "🚫\n"
@@ -622,19 +733,19 @@ class TelegramController:
                 log.error(f"TG: {e}")
             await asyncio.sleep(1)
 
+
+# ─────────────────────────────────────────────
+# Engine
+# ─────────────────────────────────────────────
 class QuantEngine:
     def __init__(self):
         self.db = Database()
         self.strategy = StrategyEngine()
         self.risk = RiskManager()
         self.tg = TelegramController(self)
-        self.ex = ccxt.phemex({
-            "apiKey": API_KEY,
-            "secret": API_SECRET,
-            "enableRateLimit": True,
-            "options": {"defaultType": "swap"},
-        })
-        self.ex.set_sandbox_mode(TESTNET)
+        self.ariax = AriaXClient(ARIAX_BASE, ARIAX_KEY, ARIAX_SECRET)
+        # فقط برای کندل عمومی — بدون کلید
+        self.pub = ccxt.binance({"enableRateLimit": True, "options": {"defaultType": "spot"}})
         self.prices: Dict[str, float] = {}
         self.open_times: Dict[str, float] = {}
 
@@ -652,63 +763,152 @@ class QuantEngine:
             else:
                 s["ok_1h" if success else "fail_1h"] += 1
 
-    def _match_symbol(self, raw):
-        if not raw:
-            return None
-        raw_u = raw.upper()
-        for s in SYMBOLS:
-            if s.split("/")[0].upper() in raw_u:
-                return s
-        return None
+    def _parse_wallet(self, data) -> tuple:
+        """استخراج total/free از پاسخ‌های مختلف wallet"""
+        if not isinstance(data, dict):
+            return 0.0, 0.0
+        # اشکال رایج
+        total = float(
+            data.get("balance")
+            or data.get("equity")
+            or data.get("total")
+            or data.get("wallet")
+            or (data.get("USDT") or {}).get("total")
+            or 0
+        )
+        free = float(
+            data.get("free")
+            or data.get("available")
+            or data.get("free_margin")
+            or data.get("availableMargin")
+            or data.get("margin_free")
+            or (data.get("USDT") or {}).get("free")
+            or total
+        )
+        if free <= 0 and total > 0:
+            free = total
+        return total, free
 
-    async def fetch_ohlcv(self, symbol, timeframe, limit=100):
+    def _parse_positions(self, data) -> Dict[str, dict]:
+        """نرمال‌سازی لیست پوزیشن‌ها"""
+        out = {}
+        rows = data
+        if isinstance(data, dict):
+            rows = data.get("positions") or data.get("data") or data.get("items") or []
+            if not rows and data.get("symbol"):
+                rows = [data]
+        if not isinstance(rows, list):
+            return out
+        for p in rows:
+            if not isinstance(p, dict):
+                continue
+            sym = str(p.get("symbol") or p.get("pair") or "").upper().replace("/", "").replace(":", "")
+            if not sym:
+                continue
+            # qty / size
+            qty = float(p.get("qty") or p.get("size") or p.get("quantity") or p.get("contracts") or 0)
+            if abs(qty) < 1e-12:
+                continue
+            side_raw = str(p.get("side") or p.get("positionSide") or "").lower()
+            if side_raw in ("sell", "short", "s"):
+                side = "sell"
+                qty = abs(qty)
+            elif side_raw in ("buy", "long", "b"):
+                side = "buy"
+                qty = abs(qty)
+            else:
+                side = "buy" if qty > 0 else "sell"
+                qty = abs(qty)
+            entry = float(p.get("entry") or p.get("entryPrice") or p.get("avgPrice") or p.get("price") or 0)
+            out[sym] = {"symbol": sym, "side": side, "qty": qty, "entry": entry, "raw": p}
+        return out
+
+    def _parse_markets_price(self, data, symbol: str) -> float:
+        if not data:
+            return 0.0
+        # dict of symbol -> price or list
+        if isinstance(data, dict):
+            if symbol in data:
+                item = data[symbol]
+                if isinstance(item, (int, float)):
+                    return float(item)
+                if isinstance(item, dict):
+                    return float(item.get("price") or item.get("last") or item.get("mark") or item.get("close") or 0)
+            # nested
+            markets = data.get("markets") or data.get("data") or data.get("prices") or data
+            if isinstance(markets, dict) and symbol in markets:
+                item = markets[symbol]
+                if isinstance(item, (int, float)):
+                    return float(item)
+                if isinstance(item, dict):
+                    return float(item.get("price") or item.get("last") or item.get("mark") or 0)
+            if isinstance(markets, list):
+                for m in markets:
+                    if isinstance(m, dict) and str(m.get("symbol", "")).upper() == symbol:
+                        return float(m.get("price") or m.get("last") or m.get("mark") or 0)
+        if isinstance(data, list):
+            for m in data:
+                if isinstance(m, dict) and str(m.get("symbol", "")).upper() == symbol:
+                    return float(m.get("price") or m.get("last") or m.get("mark") or 0)
+        return 0.0
+
+    async def fetch_ohlcv_public(self, ariax_sym: str, timeframe: str, limit: int = 100):
+        pub_sym = SYMBOL_MAP.get(ariax_sym)
+        if not pub_sym:
+            self._record_fetch(ariax_sym, timeframe, False)
+            return []
         try:
             actual = 50 if timeframe == "1h" else limit
-            candles = await self.ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=actual)
+            candles = await self.pub.fetch_ohlcv(pub_sym, timeframe=timeframe, limit=actual)
             if not candles or len(candles) < 30 or candles[-1][4] <= 0:
-                self._record_fetch(symbol, timeframe, False)
+                self._record_fetch(ariax_sym, timeframe, False)
                 return []
-            self._record_fetch(symbol, timeframe, True)
+            self._record_fetch(ariax_sym, timeframe, True)
             return candles
         except Exception as e:
-            self._record_fetch(symbol, timeframe, False)
-            self._record_error(f"fetch {symbol}: {str(e)[:80]}")
+            self._record_fetch(ariax_sym, timeframe, False)
+            self._record_error(f"ohlcv {ariax_sym}: {str(e)[:80]}")
             return []
 
-    async def get_live_price(self, symbol):
-        price = self.prices.get(symbol)
-        if price and price > 0:
-            return price
+    async def get_live_price(self, symbol: str) -> float:
+        if self.prices.get(symbol, 0) > 0:
+            return self.prices[symbol]
         try:
-            ticker = await self.ex.fetch_ticker(symbol)
-            price = float(ticker.get("last") or ticker.get("close") or 0)
-            if price > 0:
-                self.prices[symbol] = price
-                return price
+            markets = await self.ariax.get_markets()
+            px = self._parse_markets_price(markets, symbol)
+            if px > 0:
+                self.prices[symbol] = px
+                return px
         except Exception as e:
-            self._record_error(f"ticker {symbol}: {e}")
+            self._record_error(f"markets price: {e}")
+        # fallback public
+        try:
+            pub_sym = SYMBOL_MAP.get(symbol)
+            if pub_sym:
+                t = await self.pub.fetch_ticker(pub_sym)
+                px = float(t.get("last") or t.get("close") or 0)
+                if px > 0:
+                    self.prices[symbol] = px
+                    return px
+        except Exception:
+            pass
         return 0.0
 
     async def start(self):
         await self.db.init()
-        log.info("v17.7 SIZE FIX starting...")
+        log.info(f"v19.0 AriaX Testnet starting | base={ARIAX_BASE}")
+        if not ARIAX_KEY or not ARIAX_SECRET:
+            log.error("ARIAX_KEY / ARIAX_SECRET missing!")
         try:
-            await self.ex.load_markets()
+            await self.pub.load_markets()
+            log.info("Public Binance markets loaded (candles only)")
         except Exception as e:
-            log.error(f"markets: {e}")
-
+            log.warning(f"public markets: {e}")
         try:
-            await self.ex.set_position_mode(False)
-        except Exception:
-            pass
-
-        for sym in SYMBOLS:
-            try:
-                await self.ex.set_leverage(LEVERAGE, sym)
-                log.info(f"Leverage OK → {sym}")
-                await asyncio.sleep(0.35)
-            except Exception as e:
-                log.warning(f"Lev {sym}: {e}")
+            cfg = await self.ariax.get_config()
+            log.info(f"AriaX config keys: {list(cfg.keys())[:12] if isinstance(cfg, dict) else type(cfg)}")
+        except Exception as e:
+            log.warning(f"AriaX config (may be cold-start): {e}")
 
         await self.smart_sync(startup=True)
         await self.update_balance()
@@ -719,12 +919,8 @@ class QuantEngine:
 
     async def update_balance(self):
         try:
-            bal = await self.ex.fetch_balance()
-            usdt = bal.get("USDT") or {}
-            total = float(usdt.get("total") or 0)
-            free = float(usdt.get("free") or 0)
-            if free <= 0:
-                free = total
+            data = await self.ariax.get_wallet()
+            total, free = self._parse_wallet(data)
             with STATE_LOCK:
                 SHARED_STATE["balance"] = total
                 SHARED_STATE["free_balance"] = free
@@ -732,17 +928,19 @@ class QuantEngine:
                     SHARED_STATE["peak_balance"] = total
                 if SHARED_STATE["day_start_balance"] <= 0 and total > 0:
                     SHARED_STATE["day_start_balance"] = total
-            log.info(f"Balance total=\( {total:.2f} free= \){free:.2f}")
+            log.info(f"Wallet total=${total:.2f} free=${free:.2f} raw_keys={list(data.keys())[:8] if isinstance(data, dict) else '-'}")
         except Exception as e:
-            self._record_error(f"Balance: {e}")
+            self._record_error(f"Wallet: {e}")
+            log.error(f"Wallet: {e}")
 
     async def price_loop(self):
         while True:
             try:
-                tickers = await self.ex.fetch_tickers(SYMBOLS)
-                for s, d in tickers.items():
-                    if d.get("last"):
-                        self.prices[s] = float(d["last"])
+                markets = await self.ariax.get_markets()
+                for sym in SYMBOLS:
+                    px = self._parse_markets_price(markets, sym)
+                    if px > 0:
+                        self.prices[sym] = px
                 await self.update_balance()
                 with STATE_LOCK:
                     cur = SHARED_STATE["balance"]
@@ -758,7 +956,7 @@ class QuantEngine:
                 await self.db.log_equity(cur, peak, SHARED_STATE.get("current_dd", 0))
             except Exception as e:
                 log.error(f"price_loop: {e}")
-            await asyncio.sleep(12)
+            await asyncio.sleep(15)
 
     async def sync_loop(self):
         while True:
@@ -775,7 +973,7 @@ class QuantEngine:
                        not SHARED_STATE["daily_halted"] and len(SHARED_STATE["active_positions"]) < MAX_POS)
                 open_syms = {p["symbol"] for p in SHARED_STATE["active_positions"].values()}
             if not can:
-                await asyncio.sleep(15)
+                await asyncio.sleep(12)
                 continue
             with STATE_LOCK:
                 SHARED_STATE["last_scan"] = time.strftime("%H:%M:%S")
@@ -787,16 +985,16 @@ class QuantEngine:
                 if sym in SYMBOL_POST_CLOSE_COOLDOWN and time.time() < SYMBOL_POST_CLOSE_COOLDOWN[sym]:
                     continue
                 try:
-                    raw5 = await self.fetch_ohlcv(sym, TIMEFRAME, 100)
-                    await asyncio.sleep(0.8)
-                    raw1 = await self.fetch_ohlcv(sym, HTF_TIMEFRAME, 50)
+                    raw5 = await self.fetch_ohlcv_public(sym, TIMEFRAME, 100)
+                    await asyncio.sleep(0.4)
+                    raw1 = await self.fetch_ohlcv_public(sym, HTF_TIMEFRAME, 50)
                     await asyncio.sleep(SYMBOL_DELAY)
                     if not raw5 or len(raw5) < 50:
                         continue
                     df5 = pd.DataFrame(raw5, columns=["ts", "open", "high", "low", "close", "volume"])
                     df1 = pd.DataFrame(raw1, columns=["ts", "open", "high", "low", "close", "volume"]) if raw1 and len(raw1) > 30 else df5.copy()
                     last_close = float(df5["close"].iloc[-1])
-                    if last_close > 0:
+                    if last_close > 0 and self.prices.get(sym, 0) <= 0:
                         self.prices[sym] = last_close
                     sig = self.strategy.analyze(df5, df1, symbol=sym)
                     price = self.prices.get(sym) or last_close
@@ -820,7 +1018,7 @@ class QuantEngine:
                 except Exception as e:
                     log.error(f"scan {sym}: {e}")
                     self._record_error(f"scan {sym}: {e}")
-                await asyncio.sleep(0.4)
+                await asyncio.sleep(0.3)
             await asyncio.sleep(SCAN_INTERVAL)
 
     async def execute_trade(self, sym, sig):
@@ -832,58 +1030,49 @@ class QuantEngine:
 
         if sym in SYMBOL_ERROR_COOLDOWN and time.time() < SYMBOL_ERROR_COOLDOWN[sym]:
             return
-        if sym in SYMBOL_POST_CLOSE_COOLDOWN and time.time() < SYMBOL_POST_CLOSE_COOLDOWN[sym]:
-            return
 
         price = await self.get_live_price(sym)
         if not price or price <= 0:
-            record_miss("قیمت لحظه‌ای موجود نیست")
+            record_miss("قیمت موجود نیست")
             return
 
         with STATE_LOCK:
-            bal = SHARED_STATE["balance"]
-            free = SHARED_STATE.get("free_balance") or bal
+            free = SHARED_STATE.get("free_balance") or SHARED_STATE["balance"]
             open_count = len(SHARED_STATE["active_positions"])
-
-        if free < 25 or open_count >= MAX_POS:
+        if free < 15 or open_count >= MAX_POS:
             return
 
         try:
-            # تازه‌سازی free قبل از سفارش
-            try:
-                bal_data = await self.ex.fetch_balance()
-                free = float((bal_data.get("USDT") or {}).get("free") or free)
-            except Exception:
-                pass
+            await self.update_balance()
+            with STATE_LOCK:
+                free = SHARED_STATE.get("free_balance") or SHARED_STATE["balance"]
 
-            qty = self.risk.calculate_qty(self.ex, sym, free, price, sig["sl"])
+            qty = self.risk.calculate_qty(self.ariax, sym, free, price, sig["sl"])
             notional = qty * price
-            margin = notional / LEVERAGE if LEVERAGE else notional
-
-            log.info(
-                f"ORDER PREP {sym} {sig['action']} strat={sig.get('strat')} "
-                f"qty={qty} notional=\( {notional:.2f} margin= \){margin:.2f} free=${free:.2f}"
-            )
+            margin = notional / LEVERAGE
+            log.info(f"ORDER PREP {sym} {sig['action']} qty={qty} notional=${notional:.2f} margin=${margin:.2f} free=${free:.2f}")
 
             if qty <= 0 or notional < MIN_ORDER_USD * 0.5:
-                record_miss(f"qty={qty} notional=${notional:.2f}")
+                record_miss(f"qty={qty}")
                 return
-            if notional > MAX_NOTIONAL_USD * 1.1:
-                record_miss(f"notional ${notional:.2f} > max")
-                return
-            if margin > free * 0.85:
-                record_miss(f"margin ${margin:.2f} > free ${free:.2f}")
+            if margin > free * 0.9:
+                record_miss(f"margin ${margin:.2f} > free")
                 return
 
-            # سفارش — فقط بعد از موفقیت ثبت می‌شود
-            order = await self.ex.create_market_order(sym, sig["action"], qty)
+            resp = await self.ariax.place_order(sym, sig["action"], qty, lev=LEVERAGE, order_type="market")
+            log.info(f"ORDER RESP {sym}: {str(resp)[:200]}")
 
-            fill = float(order.get("average") or order.get("price") or price)
-            filled = float(order.get("filled") or order.get("amount") or qty)
-            if fill <= 0:
-                fill = price
-            if filled <= 0:
-                filled = qty
+            # استخراج fill از پاسخ
+            fill = price
+            filled = qty
+            if isinstance(resp, dict):
+                fill = float(resp.get("avgPrice") or resp.get("price") or resp.get("fill_price")
+                             or resp.get("entry") or price)
+                filled = float(resp.get("qty") or resp.get("filled") or resp.get("size") or qty)
+                err = resp.get("error") or resp.get("msg") or resp.get("message")
+                if err and str(err).lower() not in ("ok", "success", "none", ""):
+                    if resp.get("ok") is False or resp.get("success") is False:
+                        raise Exception(str(err))
 
             pid = f"pos_{uuid.uuid4().hex[:8]}"
             pos = {
@@ -900,60 +1089,47 @@ class QuantEngine:
             SYMBOL_ERROR_COOLDOWN.pop(sym, None)
             await self.tg.send(
                 f"🎯 <b>{sig['action'].upper()}</b> {sig['strat']}\n"
-                f"{sym} @ {fill:.4f}\nQty {filled:.6f} | \~${filled*fill:.1f}",
+                f"{sym} @ {fill:.4f}\nQty {filled} | ~${filled*fill:.1f}\n🧪 AriaX Testnet",
                 self.tg.menu())
-            log.info(f"TRADE OPENED {sym} @ {fill:.4f} qty={filled}")
+            log.info(f"TRADE OPENED {sym} @ {fill:.4f}")
         except Exception as e:
             err = str(e)
             SYMBOL_ERROR_COUNT[sym] = SYMBOL_ERROR_COUNT.get(sym, 0) + 1
             count = SYMBOL_ERROR_COUNT[sym]
-            # 11001 → یک ساعت خاموشی برای همان نماد
-            if "11001" in err or "NO_ENOUGH" in err.upper() or "11082" in err:
-                SYMBOL_ERROR_COOLDOWN[sym] = time.time() + BALANCE_ERROR_COOLDOWN
-                log.warning(f"11001 on {sym} → cooldown {BALANCE_ERROR_COOLDOWN}s")
-            else:
-                SYMBOL_ERROR_COOLDOWN[sym] = time.time() + min(180 * count, 1800)
+            SYMBOL_ERROR_COOLDOWN[sym] = time.time() + min(120 * count, 1800)
             await self.db.log_decision(sym, "rejected", sig.get("strat", ""), f"API: {err[:80]}")
             record_miss(err[:80])
             self._record_error(f"EXECUTE {sym}: {err[:80]}")
             await self.tg.send(f"❌ {sym}\n{err[:140]}")
-            # هیچ insert_trade — جلوگیری از ghost
 
     async def real_test_trade(self):
-        await self.tg.send("⚡ Real test v17.7...")
+        await self.tg.send("⚡ Real test AriaX...")
         try:
             await self.update_balance()
             with STATE_LOCK:
                 free = SHARED_STATE.get("free_balance") or SHARED_STATE["balance"]
             await self.tg.send(f"💰 Free ${free:.2f}")
-            if free < 25:
-                await self.tg.send("❌ Free کم است")
+            if free < 15:
+                await self.tg.send("❌ موجودی کم")
                 return
-
             price = await self.get_live_price(TEST_SYMBOL)
             if not price:
-                await self.tg.send("❌ no price")
+                await self.tg.send("❌ قیمت یافت نشد")
                 return
-
             fake_sl = price * 0.99
-            qty = self.risk.calculate_qty(self.ex, TEST_SYMBOL, free, price, fake_sl)
-            try:
-                qty = float(self.ex.amount_to_precision(TEST_SYMBOL, min(qty, TEST_USD / price)))
-            except Exception:
-                pass
-
+            qty = self.risk.calculate_qty(self.ariax, TEST_SYMBOL, free, price, fake_sl)
+            qty = self.ariax.quantize_qty(TEST_SYMBOL, min(qty, TEST_USD / price))
             notional = qty * price
-            margin = notional / LEVERAGE
-            log.info(f"TEST qty={qty} notional=\( {notional:.2f} margin= \){margin:.2f} free=${free:.2f}")
-            await self.tg.send(f"🧪 qty={qty}\n\~\( {notional:.1f} margin\~ \){margin:.1f}")
-
+            await self.tg.send(f"🧪 {TEST_SYMBOL} qty={qty}\n~${notional:.1f}")
             if qty <= 0:
                 await self.tg.send("❌ qty=0")
                 return
-
-            order = await self.ex.create_market_order(TEST_SYMBOL, "buy", qty)
-            fill = float(order.get("average") or price)
-            filled = float(order.get("filled") or qty)
+            resp = await self.ariax.place_order(TEST_SYMBOL, "buy", qty, lev=LEVERAGE)
+            log.info(f"TEST RESP: {resp}")
+            fill = price
+            if isinstance(resp, dict):
+                fill = float(resp.get("avgPrice") or resp.get("price") or price)
+            filled = qty
             pid = f"test_{uuid.uuid4().hex[:6]}"
             pos = {
                 "id": pid, "symbol": TEST_SYMBOL, "side": "buy", "strategy": "RealTest",
@@ -964,40 +1140,18 @@ class QuantEngine:
                 SHARED_STATE["active_positions"][pid] = pos
             self.open_times[pid] = time.time()
             await self.tg.send(f"🧪 opened @ {fill:.5f}")
-            await asyncio.sleep(20)
+            await asyncio.sleep(12)
             await self.force_close(pid, "RealTest")
             await self.tg.send("✅ test closed", self.tg.menu())
         except Exception as e:
-            err = str(e)
-            await self.tg.send(f"❌ Test:\n{err[:220]}")
-            self._record_error(f"real_test: {err[:80]}")
-
-    async def _estimate_atr(self, sym, entry):
-        try:
-            raw = await self.fetch_ohlcv(sym, TIMEFRAME, 50)
-            if raw and len(raw) >= 20:
-                df = pd.DataFrame(raw, columns=["ts", "open", "high", "low", "close", "volume"])
-                atr = float(Indicators.atr(df, 14).iloc[-1])
-                if atr > 0:
-                    return atr
-        except Exception:
-            pass
-        return entry * 0.012
+            await self.tg.send(f"❌ Test:\n{str(e)[:220]}")
+            self._record_error(f"real_test: {e}")
 
     async def smart_sync(self, startup=False):
         try:
-            remote_positions = await self.ex.fetch_positions()
-            remote_map = {}
-            for p in remote_positions:
-                contracts = float(p.get("contracts") or 0)
-                if abs(contracts) <= 0:
-                    continue
-                matched = self._match_symbol(p.get("symbol", ""))
-                if matched:
-                    side = "buy" if contracts > 0 else "sell"
-                    entry = float(p.get("entryPrice") or p.get("avgEntryPrice") or 0)
-                    remote_map[matched] = {"symbol": matched, "side": side, "qty": abs(contracts), "entry": entry}
-            log.info(f"Remote: {list(remote_map.keys()) or '(none)'}")
+            data = await self.ariax.get_positions()
+            remote_map = self._parse_positions(data)
+            log.info(f"Remote positions: {list(remote_map.keys()) or '(none)'}")
 
             with STATE_LOCK:
                 local_items = list(SHARED_STATE["active_positions"].items())
@@ -1023,11 +1177,11 @@ class QuantEngine:
                 entry = rpos["entry"] if rpos["entry"] > 0 else self.prices.get(sym, 0)
                 if entry <= 0:
                     continue
-                atr = await self._estimate_atr(sym, entry)
+                atr_est = entry * 0.012
                 if rpos["side"] == "buy":
-                    sl, tp, tp1 = entry - atr * 1.5, entry + atr * 3.2, entry + atr * 1.7
+                    sl, tp, tp1 = entry - atr_est * 1.5, entry + atr_est * 3.2, entry + atr_est * 1.7
                 else:
-                    sl, tp, tp1 = entry + atr * 1.5, entry - atr * 3.2, entry - atr * 1.7
+                    sl, tp, tp1 = entry + atr_est * 1.5, entry - atr_est * 3.2, entry - atr_est * 1.7
                 pid = f"recovered_{uuid.uuid4().hex[:8]}"
                 pos = {"id": pid, "symbol": sym, "side": rpos["side"], "strategy": "Recovered",
                        "entry": entry, "qty": rpos["qty"], "sl": sl, "tp": tp, "tp1": tp1,
@@ -1060,7 +1214,7 @@ class QuantEngine:
         hold = time.time() - self.open_times.get(pid, time.time())
         try:
             close_side = "sell" if pos["side"] == "buy" else "buy"
-            await self.ex.create_market_order(pos["symbol"], close_side, pos["qty"], params={"reduceOnly": True})
+            await self.ariax.place_order(pos["symbol"], close_side, pos["qty"], lev=LEVERAGE, order_type="market")
             raw_pnl = (price - pos["entry"]) * pos["qty"] * (1 if pos["side"] == "buy" else -1)
             fees = abs(price * pos["qty"]) * TAKER_FEE * 2 * FEE_BUFFER
             net = raw_pnl - fees
@@ -1075,7 +1229,7 @@ class QuantEngine:
             await self.tg.send(f"{'🟢' if net >= 0 else '🔴'} closed ({reason}) ${net:.2f}", self.tg.menu())
         except Exception as e:
             err = str(e)
-            if any(x in err.lower() for x in ("not found", "39999", "reduce", "no position")):
+            if any(x in err.lower() for x in ("not found", "no position", "already", "404")):
                 await self.db.close_trade(pid, 0.0, 0, f"ghost_{reason}", hold)
                 with STATE_LOCK:
                     SHARED_STATE["active_positions"].pop(pid, None)
@@ -1114,10 +1268,10 @@ class QuantEngine:
                     hit = ((pos["side"] == "buy" and price >= pos["tp1"]) or (pos["side"] == "sell" and price <= pos["tp1"]))
                     if hit and pnl_pct >= MIN_PROFIT_FOR_BE:
                         try:
-                            half = float(self.ex.amount_to_precision(pos["symbol"], pos["qty"] / 2))
+                            half = self.ariax.quantize_qty(pos["symbol"], pos["qty"] / 2)
                             if half > 0:
                                 cs = "sell" if pos["side"] == "buy" else "buy"
-                                await self.ex.create_market_order(pos["symbol"], cs, half, params={"reduceOnly": True})
+                                await self.ariax.place_order(pos["symbol"], cs, half, lev=LEVERAGE)
                                 pos["qty"] -= half
                                 pos["is_partial"] = 1
                                 pos["sl"] = pos["entry"]
@@ -1134,24 +1288,27 @@ class QuantEngine:
                     elif sl_hit and pos.get("highest_pnl_pct", 0) > TRAIL_ACT:
                         reason = "Trail"
                     await self.force_close(pid, reason)
-            await asyncio.sleep(1.8)
+            await asyncio.sleep(2.0)
+
 
 app = Flask(__name__)
+
 
 @app.route("/api/status")
 def api_status():
     with STATE_LOCK:
         return jsonify(dict(SHARED_STATE))
 
+
 @app.route("/")
 def dashboard():
     return render_template_string("""
-<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8"><title>v17.7</title>
+<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8"><title>v19 AriaX</title>
 <style>body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
-h1{color:#58a6ff}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
+h1{color:#7ee787}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
 .card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:12px}
-.value{font-size:1.2rem;font-weight:700;color:#58a6ff}</style></head><body>
-<h1>🚀 Quant v17.7</h1>
+.value{font-size:1.2rem;font-weight:700;color:#7ee787}</style></head><body>
+<h1>🚀 Quant v19.0 AriaX Testnet</h1>
 <div class="grid">
 <div class="card">Total<div class="value" id="bal">0</div></div>
 <div class="card">Free<div class="value" id="free">0</div></div>
@@ -1167,8 +1324,10 @@ document.getElementById('pnl').textContent=(d.stats?.total_pnl||0).toFixed(2);}c
 r();setInterval(r,5000);</script></body></html>
 """)
 
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
+
     def run_web():
         try:
             print(f"Flask on 0.0.0.0:{port}", flush=True)
@@ -1176,8 +1335,10 @@ if __name__ == "__main__":
         except Exception as e:
             print("Flask error:", e, flush=True)
             traceback.print_exc()
+
     try:
-        print("=== Master Quant v17.7 SIZE FIX starting ===", flush=True)
+        print("=== Master Quant v19.0 AriaX Testnet starting ===", flush=True)
+        print(f"ARIAX_BASE={ARIAX_BASE}", flush=True)
         Thread(target=run_web, daemon=True).start()
         time.sleep(1)
         engine = QuantEngine()
