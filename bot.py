@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v19.0 – AriaX Testnet
-اجرا روی AriaX | سیگنال از کندل عمومی Binance (بدون کلید)
+Master Quant Engine v19.1 – AriaX Testnet
+اجرا روی AriaX | کندل از Bybit/OKX عمومی (بدون کلید؛ Binance اغلب IP بن می‌شود)
 مستندات: https://ariax-1.onrender.com
 Env: ARIAX_KEY, ARIAX_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 """
@@ -76,18 +76,19 @@ MIN_PROFIT_FOR_BE = 0.75
 MAX_HOLD_SECONDS = 4 * 3600
 TEST_SYMBOL = "ETHUSD"
 POST_CLOSE_COOLDOWN = 1200
-SCAN_INTERVAL = 50
-SYMBOL_DELAY = 1.0
+SCAN_INTERVAL = 70
+SYMBOL_DELAY = 2.0
 TREND_STRENGTH_THRESHOLD = 0.01
 SYNC_INTERVAL = 60
 GHOST_MISS_LIMIT = 3
+OHLCV_PAUSE = 1.2  # فاصله بین درخواست کندل برای جلوگیری از بن
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("QuantV19")
+log = logging.getLogger("QuantV19.1")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True, "dd_halted": False, "daily_halted": False,
@@ -123,7 +124,8 @@ class AriaXClient:
 
     async def session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=45, connect=20)
+            # timeout بلند برای cold-start سرویس AriaX روی Render
+            timeout = aiohttp.ClientTimeout(total=90, connect=30)
             self._session = aiohttp.ClientSession(headers=self.headers, timeout=timeout)
         return self._session
 
@@ -134,7 +136,7 @@ class AriaXClient:
     async def _req(self, method: str, path: str, json_body=None) -> Any:
         s = await self.session()
         url = f"{self.base}{path}"
-        for attempt in range(3):
+        for attempt in range(5):
             try:
                 async with s.request(method, url, json=json_body) as r:
                     text = await r.text()
@@ -146,15 +148,17 @@ class AriaXClient:
                         raise Exception(f"HTTP {r.status}: {text[:300]}")
                     return data
             except asyncio.TimeoutError:
-                log.warning(f"AriaX timeout {path} try={attempt+1}")
-                if attempt == 2:
+                wait = 5 + attempt * 5
+                log.warning(f"AriaX timeout {path} try={attempt+1}/5 sleep={wait}s (cold-start?)")
+                if attempt == 4:
                     raise
-                await asyncio.sleep(2 + attempt * 2)
+                await asyncio.sleep(wait)
             except aiohttp.ClientError as e:
-                log.warning(f"AriaX net {path}: {e}")
-                if attempt == 2:
+                wait = 3 + attempt * 3
+                log.warning(f"AriaX net {path}: {e} try={attempt+1}")
+                if attempt == 4:
                     raise
-                await asyncio.sleep(2 + attempt * 2)
+                await asyncio.sleep(wait)
         return {}
 
     async def get_markets(self):
@@ -343,7 +347,7 @@ class Database:
         now = time.time()
         lines = [
             "=" * 78,
-            "     MASTER QUANT ENGINE v19.0  |  ARIAX TESTNET",
+            "     MASTER QUANT ENGINE v19.1  |  ARIAX TESTNET",
             f"     Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
             "=" * 78, "",
             "┌─ 1. SUMMARY ───────────────────────────────────────────────────────────",
@@ -660,8 +664,9 @@ class TelegramController:
                 await asyncio.sleep(60)
             return
         await self.send(
-            f"🚀 <b>v19.0 AriaX Testnet</b>\n"
+            f"🚀 <b>v19.1 AriaX Testnet</b>\n"
             f"Base: {ARIAX_BASE}\n"
+            f"Candles: Bybit→OKX→Binance\n"
             f"Risk {RISK_PCT}% | Lev {LEVERAGE}x | Max ${MAX_NOTIONAL_USD:.0f}",
             self.menu())
         while True:
@@ -744,8 +749,19 @@ class QuantEngine:
         self.risk = RiskManager()
         self.tg = TelegramController(self)
         self.ariax = AriaXClient(ARIAX_BASE, ARIAX_KEY, ARIAX_SECRET)
-        # فقط برای کندل عمومی — بدون کلید
-        self.pub = ccxt.binance({"enableRateLimit": True, "options": {"defaultType": "spot"}})
+        # کندل عمومی: Bybit اول (IPهای Render اغلب روی Binance بن می‌شوند)
+        self.pub_sources = []
+        for cls_name, opts in (
+            ("bybit", {"enableRateLimit": True, "options": {"defaultType": "spot"}}),
+            ("okx", {"enableRateLimit": True}),
+            ("binance", {"enableRateLimit": True, "options": {"defaultType": "spot"}}),
+        ):
+            try:
+                cls = getattr(ccxt, cls_name)
+                self.pub_sources.append(cls(opts))
+            except Exception as e:
+                log.warning(f"init {cls_name}: {e}")
+        self.pub = self.pub_sources[0] if self.pub_sources else None
         self.prices: Dict[str, float] = {}
         self.open_times: Dict[str, float] = {}
 
@@ -854,21 +870,27 @@ class QuantEngine:
 
     async def fetch_ohlcv_public(self, ariax_sym: str, timeframe: str, limit: int = 100):
         pub_sym = SYMBOL_MAP.get(ariax_sym)
-        if not pub_sym:
+        if not pub_sym or not self.pub_sources:
             self._record_fetch(ariax_sym, timeframe, False)
             return []
-        try:
-            actual = 50 if timeframe == "1h" else limit
-            candles = await self.pub.fetch_ohlcv(pub_sym, timeframe=timeframe, limit=actual)
-            if not candles or len(candles) < 30 or candles[-1][4] <= 0:
-                self._record_fetch(ariax_sym, timeframe, False)
-                return []
-            self._record_fetch(ariax_sym, timeframe, True)
-            return candles
-        except Exception as e:
-            self._record_fetch(ariax_sym, timeframe, False)
-            self._record_error(f"ohlcv {ariax_sym}: {str(e)[:80]}")
-            return []
+        actual = 50 if timeframe == "1h" else limit
+        last_err = ""
+        for ex in self.pub_sources:
+            try:
+                candles = await ex.fetch_ohlcv(pub_sym, timeframe=timeframe, limit=actual)
+                await asyncio.sleep(OHLCV_PAUSE)
+                if candles and len(candles) >= 30 and candles[-1][4] > 0:
+                    self._record_fetch(ariax_sym, timeframe, True)
+                    return candles
+            except Exception as e:
+                last_err = str(e)[:80]
+                log.warning(f"ohlcv {ex.id} {ariax_sym}: {last_err}")
+                await asyncio.sleep(1.5)
+                continue
+        self._record_fetch(ariax_sym, timeframe, False)
+        if last_err:
+            self._record_error(f"ohlcv {ariax_sym}: {last_err}")
+        return []
 
     async def get_live_price(self, symbol: str) -> float:
         if self.prices.get(symbol, 0) > 0:
@@ -881,34 +903,39 @@ class QuantEngine:
                 return px
         except Exception as e:
             self._record_error(f"markets price: {e}")
-        # fallback public
-        try:
-            pub_sym = SYMBOL_MAP.get(symbol)
-            if pub_sym:
-                t = await self.pub.fetch_ticker(pub_sym)
-                px = float(t.get("last") or t.get("close") or 0)
-                if px > 0:
-                    self.prices[symbol] = px
-                    return px
-        except Exception:
-            pass
+        # fallback public ticker
+        pub_sym = SYMBOL_MAP.get(symbol)
+        if pub_sym:
+            for ex in self.pub_sources:
+                try:
+                    t = await ex.fetch_ticker(pub_sym)
+                    px = float(t.get("last") or t.get("close") or 0)
+                    if px > 0:
+                        self.prices[symbol] = px
+                        return px
+                except Exception:
+                    continue
         return 0.0
 
     async def start(self):
         await self.db.init()
-        log.info(f"v19.0 AriaX Testnet starting | base={ARIAX_BASE}")
+        log.info(f"v19.1 AriaX Testnet starting | base={ARIAX_BASE}")
         if not ARIAX_KEY or not ARIAX_SECRET:
             log.error("ARIAX_KEY / ARIAX_SECRET missing!")
+        for ex in self.pub_sources:
+            try:
+                await ex.load_markets()
+                log.info(f"Public candles source OK: {ex.id}")
+                break
+            except Exception as e:
+                log.warning(f"public markets {ex.id}: {e}")
         try:
-            await self.pub.load_markets()
-            log.info("Public Binance markets loaded (candles only)")
-        except Exception as e:
-            log.warning(f"public markets: {e}")
-        try:
+            # اولین درخواست ممکن است به خاطر cold-start طول بکشد
+            log.info("Warming AriaX (cold-start can take 30–60s)...")
             cfg = await self.ariax.get_config()
             log.info(f"AriaX config keys: {list(cfg.keys())[:12] if isinstance(cfg, dict) else type(cfg)}")
         except Exception as e:
-            log.warning(f"AriaX config (may be cold-start): {e}")
+            log.warning(f"AriaX config (will retry in loops): {e}")
 
         await self.smart_sync(startup=True)
         await self.update_balance()
@@ -1308,7 +1335,7 @@ def dashboard():
 h1{color:#7ee787}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
 .card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:12px}
 .value{font-size:1.2rem;font-weight:700;color:#7ee787}</style></head><body>
-<h1>🚀 Quant v19.0 AriaX Testnet</h1>
+<h1>🚀 Quant v19.1 AriaX Testnet</h1>
 <div class="grid">
 <div class="card">Total<div class="value" id="bal">0</div></div>
 <div class="card">Free<div class="value" id="free">0</div></div>
@@ -1337,7 +1364,7 @@ if __name__ == "__main__":
             traceback.print_exc()
 
     try:
-        print("=== Master Quant v19.0 AriaX Testnet starting ===", flush=True)
+        print("=== Master Quant v19.1 AriaX Testnet starting ===", flush=True)
         print(f"ARIAX_BASE={ARIAX_BASE}", flush=True)
         Thread(target=run_web, daemon=True).start()
         time.sleep(1)
