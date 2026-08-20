@@ -8,6 +8,9 @@ Env: ARIAX_KEY, ARIAX_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 """
 
 import asyncio
+import hashlib
+import hmac
+import json
 import logging
 import os
 import sys
@@ -88,7 +91,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("QuantV19.1")
+log = logging.getLogger("QuantV19.2")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True, "dd_halted": False, "daily_halted": False,
@@ -111,22 +114,47 @@ POSITION_MISS_COUNT: Dict[str, int] = {}
 # AriaX REST Client
 # ─────────────────────────────────────────────
 class AriaXClient:
+    """
+    کلاینت AriaX Testnet
+    - هدرهای ساده: X-API-Key / X-API-Secret (طبق نمونه رسمی)
+    - هدرهای Bybit v5: X-BAPI-* با HMAC-SHA256 (طبق راهنمای سازندگان)
+    """
+
     def __init__(self, base: str, key: str, secret: str):
         self.base = base.rstrip("/")
-        self.headers = {
-            "X-API-Key": key,
-            "X-API-Secret": secret,
-            "Content-Type": "application/json",
-        }
+        self.key = key or ""
+        self.secret = secret or ""
         self._session: Optional[aiohttp.ClientSession] = None
         self.config: Dict[str, Any] = {}
-        self.symbol_meta: Dict[str, Dict] = {}  # minq / step
+        self.symbol_meta: Dict[str, Dict] = {}
+
+    def _sign_headers(self, method: str, path: str, body_str: str = "") -> Dict[str, str]:
+        ts = str(int(time.time() * 1000))
+        recv = "5000"
+        # Bybit v5: timestamp + api_key + recv_window + (query or body)
+        payload = f"{ts}{self.key}{recv}{body_str}"
+        sign = hmac.new(
+            self.secret.encode("utf-8"),
+            payload.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return {
+            "Content-Type": "application/json",
+            # ساده (نمونه رسمی)
+            "X-API-Key": self.key,
+            "X-API-Secret": self.secret,
+            # Bybit v5 style
+            "X-BAPI-API-KEY": self.key,
+            "X-BAPI-SIGN": sign,
+            "X-BAPI-TIMESTAMP": ts,
+            "X-BAPI-RECV-WINDOW": recv,
+            "X-BAPI-SIGN-TYPE": "2",
+        }
 
     async def session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            # timeout بلند برای cold-start سرویس AriaX روی Render
-            timeout = aiohttp.ClientTimeout(total=90, connect=30)
-            self._session = aiohttp.ClientSession(headers=self.headers, timeout=timeout)
+            timeout = aiohttp.ClientTimeout(total=55, connect=25)
+            self._session = aiohttp.ClientSession(timeout=timeout)
         return self._session
 
     async def close(self):
@@ -136,28 +164,46 @@ class AriaXClient:
     async def _req(self, method: str, path: str, json_body=None) -> Any:
         s = await self.session()
         url = f"{self.base}{path}"
-        for attempt in range(5):
+        body_str = ""
+        if json_body is not None:
+            body_str = json.dumps(json_body, separators=(",", ":"), ensure_ascii=False)
+        headers = self._sign_headers(method, path, body_str)
+        for attempt in range(4):
             try:
-                async with s.request(method, url, json=json_body) as r:
-                    text = await r.text()
-                    try:
-                        data = await r.json(content_type=None)
-                    except Exception:
-                        data = {"raw": text[:500], "status": r.status}
-                    if r.status >= 400:
-                        raise Exception(f"HTTP {r.status}: {text[:300]}")
-                    return data
+                if method.upper() == "GET":
+                    async with s.request(method, url, headers=headers) as r:
+                        text = await r.text()
+                        try:
+                            data = json.loads(text) if text else {}
+                        except Exception:
+                            data = {"raw": text[:500], "status": r.status}
+                        if r.status >= 400:
+                            raise Exception(f"HTTP {r.status}: {text[:300]}")
+                        return data
+                else:
+                    async with s.request(method, url, headers=headers, data=body_str.encode("utf-8")) as r:
+                        text = await r.text()
+                        try:
+                            data = json.loads(text) if text else {}
+                        except Exception:
+                            data = {"raw": text[:500], "status": r.status}
+                        if r.status >= 400:
+                            raise Exception(f"HTTP {r.status}: {text[:300]}")
+                        return data
             except asyncio.TimeoutError:
-                wait = 5 + attempt * 5
-                log.warning(f"AriaX timeout {path} try={attempt+1}/5 sleep={wait}s (cold-start?)")
-                if attempt == 4:
+                wait = 4 + attempt * 4
+                log.warning(f"AriaX timeout {path} try={attempt+1}/4 sleep={wait}s")
+                if attempt == 3:
                     raise
+                # refresh sign each retry
+                headers = self._sign_headers(method, path, body_str)
                 await asyncio.sleep(wait)
             except aiohttp.ClientError as e:
                 wait = 3 + attempt * 3
                 log.warning(f"AriaX net {path}: {e} try={attempt+1}")
-                if attempt == 4:
+                if attempt == 3:
                     raise
+                headers = self._sign_headers(method, path, body_str)
                 await asyncio.sleep(wait)
         return {}
 
@@ -183,12 +229,11 @@ class AriaXClient:
         try:
             data = await self._req("GET", "/api/config")
             self.config = data if isinstance(data, dict) else {}
-            # استخراج minq/step در صورت وجود
             meta = self.config.get("symbols") or self.config.get("markets") or self.config
             if isinstance(meta, dict):
                 for k, v in meta.items():
                     if isinstance(v, dict) and ("minq" in v or "step" in v or "minQty" in v):
-                        self.symbol_meta[k.upper()] = v
+                        self.symbol_meta[str(k).upper()] = v
             return data
         except Exception as e:
             log.warning(f"config: {e}")
@@ -347,7 +392,7 @@ class Database:
         now = time.time()
         lines = [
             "=" * 78,
-            "     MASTER QUANT ENGINE v19.1  |  ARIAX TESTNET",
+            "     MASTER QUANT ENGINE v19.2  |  ARIAX TESTNET",
             f"     Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
             "=" * 78, "",
             "┌─ 1. SUMMARY ───────────────────────────────────────────────────────────",
@@ -664,7 +709,7 @@ class TelegramController:
                 await asyncio.sleep(60)
             return
         await self.send(
-            f"🚀 <b>v19.1 AriaX Testnet</b>\n"
+            f"🚀 <b>v19.2 AriaX (Bybit-auth)</b>\n"
             f"Base: {ARIAX_BASE}\n"
             f"Candles: Bybit→OKX→Binance\n"
             f"Risk {RISK_PCT}% | Lev {LEVERAGE}x | Max ${MAX_NOTIONAL_USD:.0f}",
@@ -919,7 +964,7 @@ class QuantEngine:
 
     async def start(self):
         await self.db.init()
-        log.info(f"v19.1 AriaX Testnet starting | base={ARIAX_BASE}")
+        log.info(f"v19.2 AriaX Testnet starting | base={ARIAX_BASE}")
         if not ARIAX_KEY or not ARIAX_SECRET:
             log.error("ARIAX_KEY / ARIAX_SECRET missing!")
         for ex in self.pub_sources:
@@ -929,16 +974,38 @@ class QuantEngine:
                 break
             except Exception as e:
                 log.warning(f"public markets {ex.id}: {e}")
-        try:
-            # اولین درخواست ممکن است به خاطر cold-start طول بکشد
-            log.info("Warming AriaX (cold-start can take 30–60s)...")
-            cfg = await self.ariax.get_config()
-            log.info(f"AriaX config keys: {list(cfg.keys())[:12] if isinstance(cfg, dict) else type(cfg)}")
-        except Exception as e:
-            log.warning(f"AriaX config (will retry in loops): {e}")
+        # گرم‌کردن بدون بلاک کردن کل ربات
+        log.info("Warming AriaX in background (cold-start OK)...")
 
-        await self.smart_sync(startup=True)
-        await self.update_balance()
+        async def _warmup():
+            for name, fn in (
+                ("markets", self.ariax.get_markets),
+                ("config", self.ariax.get_config),
+                ("wallet", self.ariax.get_wallet),
+            ):
+                try:
+                    data = await fn()
+                    keys = list(data.keys())[:10] if isinstance(data, dict) else type(data)
+                    log.info(f"AriaX {name} OK keys={keys}")
+                    if name == "wallet":
+                        total, free = self._parse_wallet(data)
+                        with STATE_LOCK:
+                            SHARED_STATE["balance"] = total
+                            SHARED_STATE["free_balance"] = free
+                            if total > SHARED_STATE["peak_balance"]:
+                                SHARED_STATE["peak_balance"] = total
+                        log.info(f"Wallet total=${total:.2f} free=${free:.2f}")
+                except Exception as e:
+                    log.warning(f"AriaX warmup {name}: {e}")
+                    await asyncio.sleep(3)
+
+        asyncio.create_task(_warmup())
+        # کمی صبر برای اولین پاسخ؛ لوپ‌ها حتی بدون AriaX هم بالا می‌آیند
+        await asyncio.sleep(2)
+        try:
+            await asyncio.wait_for(self.smart_sync(startup=True), timeout=40)
+        except Exception as e:
+            log.warning(f"startup sync skip: {e}")
         await asyncio.gather(
             self.price_loop(), self.scan_loop(), self.watchdog_loop(),
             self.sync_loop(), self.tg.poll(),
@@ -1335,7 +1402,7 @@ def dashboard():
 h1{color:#7ee787}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
 .card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:12px}
 .value{font-size:1.2rem;font-weight:700;color:#7ee787}</style></head><body>
-<h1>🚀 Quant v19.1 AriaX Testnet</h1>
+<h1>🚀 Quant v19.2 AriaX Testnet</h1>
 <div class="grid">
 <div class="card">Total<div class="value" id="bal">0</div></div>
 <div class="card">Free<div class="value" id="free">0</div></div>
@@ -1364,7 +1431,7 @@ if __name__ == "__main__":
             traceback.print_exc()
 
     try:
-        print("=== Master Quant v19.1 AriaX Testnet starting ===", flush=True)
+        print("=== Master Quant v19.2 AriaX Testnet starting ===", flush=True)
         print(f"ARIAX_BASE={ARIAX_BASE}", flush=True)
         Thread(target=run_web, daemon=True).start()
         time.sleep(1)
