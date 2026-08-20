@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Master Quant Engine v19.1 – AriaX Testnet
-اجرا روی AriaX | کندل از Bybit/OKX عمومی (بدون کلید؛ Binance اغلب IP بن می‌شود)
-مستندات: https://ariax-1.onrender.com
-Env: ARIAX_KEY, ARIAX_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+Master Quant Engine v19.3 – AriaX Testnet (FIXED)
+اجرا روی AriaX | کندل: AriaX خود صرافی → Bybit → OKX → Binance
+مستندات: https://dryclean-app-1.onrender.com/docs
+Env: ARIAX_KEY, ARIAX_SECRET, ARIAX_BASE, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+
+FIXES v19.3:
+  1) ARIAX_BASE → https://dryclean-app-1.onrender.com  (ariax-1.onrender.com مرده است)
+  2) امضای Bybit v5 صحیح: X-BAPI-SIGNATURE (نه X-BAPI-SIGN) + امضای query-string برای GET
+  3) پارس /api/config برای minq/step (کوانتیزه دقیق مقدار سفارش)
+  4) انتقال خودکار وجه از کیف اسپات به کیف فیوچرز (free_margin از کیف فیوچرز خوانده می‌شود)
+  5) کندل از خود AriaX (/v5/market/kline عمومی) به‌عنوان منبع اول — بدون وابستگی به IP بیرونی
+  6) پارس کیف پول دوگانه (اسپات/فیوچرز)
 """
 
 import asyncio
@@ -33,7 +41,7 @@ load_dotenv()
 
 ARIAX_KEY    = os.getenv("ARIAX_KEY", "")
 ARIAX_SECRET = os.getenv("ARIAX_SECRET", "")
-ARIAX_BASE   = os.getenv("ARIAX_BASE", "https://ariax-1.onrender.com").rstrip("/")
+ARIAX_BASE   = os.getenv("ARIAX_BASE", "https://dryclean-app-1.onrender.com").rstrip("/")
 TG_TOKEN     = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT      = os.getenv("TELEGRAM_CHAT_ID", "")
 
@@ -48,6 +56,9 @@ SYMBOL_MAP = {
     "ADAUSD":  "ADA/USDT",
     "DOGEUSD": "DOGE/USDT",
 }
+# FIX 5: نماد v5 برای کندل از خود صرافی (ETHUSD → ETHUSDT)
+V5_SYMBOL = {k: k[:-3] + "USDT" for k in SYMBOL_MAP}
+TF_V5 = {"1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240"}
 SYMBOLS = list(SYMBOL_MAP.keys())  # لیست معاملات روی AriaX
 
 STRATEGY_PARAMS = {
@@ -91,7 +102,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-7s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("QuantV19.2")
+log = logging.getLogger("QuantV19.3")
 
 SHARED_STATE: Dict[str, Any] = {
     "is_active": True, "dd_halted": False, "daily_halted": False,
@@ -111,13 +122,13 @@ POSITION_MISS_COUNT: Dict[str, int] = {}
 
 
 # ─────────────────────────────────────────────
-# AriaX REST Client
+# AriaX REST Client  (FIXED)
 # ─────────────────────────────────────────────
 class AriaXClient:
     """
-    کلاینت AriaX Testnet
-    - هدرهای ساده: X-API-Key / X-API-Secret (طبق نمونه رسمی)
-    - هدرهای Bybit v5: X-BAPI-* با HMAC-SHA256 (طبق راهنمای سازندگان)
+    کلاینت AriaX Testnet v2.1
+    - هدرهای legacy: X-API-Key / X-API-Secret (برای /api/*)
+    - هدرهای Bybit v5 صحیح: X-BAPI-SIGNATURE + امضای query برای GET
     """
 
     def __init__(self, base: str, key: str, secret: str):
@@ -127,28 +138,33 @@ class AriaXClient:
         self._session: Optional[aiohttp.ClientSession] = None
         self.config: Dict[str, Any] = {}
         self.symbol_meta: Dict[str, Dict] = {}
+        # FIX 4: موجودی دو کیف
+        self.spot_avail = 0.0
+        self.futures_avail = 0.0
 
     def _sign_headers(self, method: str, path: str, body_str: str = "") -> Dict[str, str]:
         ts = str(int(time.time() * 1000))
         recv = "5000"
-        # Bybit v5: timestamp + api_key + recv_window + (query or body)
-        payload = f"{ts}{self.key}{recv}{body_str}"
+        # FIX 2: برای GET امضا روی query-string است؛ برای POST روی raw body
+        if method.upper() == "GET":
+            payload = path.split("?", 1)[1] if "?" in path else ""
+        else:
+            payload = body_str
         sign = hmac.new(
             self.secret.encode("utf-8"),
-            payload.encode("utf-8"),
+            f"{ts}{self.key}{recv}{payload}".encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
         return {
             "Content-Type": "application/json",
-            # ساده (نمونه رسمی)
+            # legacy (برای اندپوینت‌های /api/*)
             "X-API-Key": self.key,
             "X-API-Secret": self.secret,
-            # Bybit v5 style
+            # Bybit v5 style (برای اندپوینت‌های /v5/*)
             "X-BAPI-API-KEY": self.key,
-            "X-BAPI-SIGN": sign,
+            "X-BAPI-SIGNATURE": sign,          # FIX: نام صحیح هدر
             "X-BAPI-TIMESTAMP": ts,
             "X-BAPI-RECV-WINDOW": recv,
-            "X-BAPI-SIGN-TYPE": "2",
         }
 
     async def session(self) -> aiohttp.ClientSession:
@@ -195,7 +211,6 @@ class AriaXClient:
                 log.warning(f"AriaX timeout {path} try={attempt+1}/4 sleep={wait}s")
                 if attempt == 3:
                     raise
-                # refresh sign each retry
                 headers = self._sign_headers(method, path, body_str)
                 await asyncio.sleep(wait)
             except aiohttp.ClientError as e:
@@ -207,6 +222,7 @@ class AriaXClient:
                 await asyncio.sleep(wait)
         return {}
 
+    # ---------- اندپوینت‌ها ----------
     async def get_markets(self):
         return await self._req("GET", "/api/markets")
 
@@ -229,15 +245,46 @@ class AriaXClient:
         try:
             data = await self._req("GET", "/api/config")
             self.config = data if isinstance(data, dict) else {}
-            meta = self.config.get("symbols") or self.config.get("markets") or self.config
+            # FIX 3: فرمت واقعی پاسخ: {ok, data: {SYM: {minq, step, ...}}, ...}
+            meta = (self.config.get("data") or self.config.get("symbols")
+                    or self.config.get("markets") or self.config)
             if isinstance(meta, dict):
                 for k, v in meta.items():
-                    if isinstance(v, dict) and ("minq" in v or "step" in v or "minQty" in v):
+                    if isinstance(v, dict) and ("minq" in v or "step" in v):
                         self.symbol_meta[str(k).upper()] = v
+            log.info(f"AriaX config: {len(self.symbol_meta)} symbols meta")
             return data
         except Exception as e:
             log.warning(f"config: {e}")
             return {}
+
+    async def transfer_to_futures(self, amount: float) -> dict:
+        """FIX 4: انتقال واقعی وجه اسپات→فیوچرز (API رابط کاربری)."""
+        return await self._req("POST", "/api/transfer", json_body={
+            "from": "spot", "to": "futures", "amount": float(amount)})
+
+    async def ensure_futures_margin(self, min_free: float = 30.0) -> None:
+        """اگر کیف فیوچرز خالی بود، به‌طور خودکار از اسپات شارژ کن."""
+        try:
+            w = await self.get_wallet()
+            if not isinstance(w, dict) or not w.get("ok"):
+                return
+            fut = (w.get("futures") or {}).get("balances", {}).get("USDT", 0.0)
+            flocks = (w.get("futures") or {}).get("locks", {}).get("USDT", 0.0)
+            spot_free = (w.get("balances", {}).get("USDT", 0.0)
+                         - w.get("locks", {}).get("USDT", 0.0))
+            self.spot_avail = max(0.0, spot_free)
+            self.futures_avail = max(0.0, fut - flocks)
+            if self.futures_avail < min_free and self.spot_avail > min_free:
+                move = round(min(self.spot_avail * 0.9, 5000.0), 2)
+                if move >= 10:
+                    r = await self.transfer_to_futures(move)
+                    if r.get("ok"):
+                        log.info(f"💸 auto-transfer spot→futures ${move:.2f}")
+                    else:
+                        log.warning(f"auto-transfer failed: {r.get('error')}")
+        except Exception as e:
+            log.warning(f"ensure_futures_margin: {e}")
 
     async def place_order(self, symbol: str, side: str, qty: float, lev: int = 5,
                           order_type: str = "market", price: float = None) -> dict:
@@ -264,7 +311,6 @@ class AriaXClient:
             qty = (int(qty / step)) * step
         if minq > 0 and qty < minq:
             qty = minq
-        # دقت معقول
         if qty >= 1:
             qty = round(qty, 4)
         elif qty >= 0.01:
@@ -273,9 +319,27 @@ class AriaXClient:
             qty = round(qty, 8)
         return max(qty, 0.0)
 
+    # FIX 5: کندل از خود AriaX (عمومی، بدون کلید) — جدیدترین اول → قدیمی اول
+    async def fetch_ariax_klines(self, ariax_sym: str, timeframe: str, limit: int = 100):
+        v5 = V5_SYMBOL.get(ariax_sym)
+        iv = TF_V5.get(timeframe)
+        if not v5 or not iv:
+            return []
+        path = f"/v5/market/kline?category=linear&symbol={v5}&interval={iv}&limit={min(limit, 1000)}"
+        try:
+            data = await self._req("GET", path)
+            rows = ((data or {}).get("result") or {}).get("list") or []
+            # Bybit شکل: [ts, o, h, l, c, volume, turnover] جدیدترین اول
+            out = [[int(r[0]), float(r[1]), float(r[2]), float(r[3]),
+                    float(r[4]), float(r[5])] for r in reversed(rows)]
+            return out
+        except Exception as e:
+            log.warning(f"ariax klines {ariax_sym}: {e}")
+            return []
+
 
 # ─────────────────────────────────────────────
-# Database
+# Database (unchanged)
 # ─────────────────────────────────────────────
 class Database:
     def __init__(self, path="bot.db"):
@@ -392,7 +456,7 @@ class Database:
         now = time.time()
         lines = [
             "=" * 78,
-            "     MASTER QUANT ENGINE v19.2  |  ARIAX TESTNET",
+            "     MASTER QUANT ENGINE v19.3  |  ARIAX TESTNET",
             f"     Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
             "=" * 78, "",
             "┌─ 1. SUMMARY ───────────────────────────────────────────────────────────",
@@ -413,7 +477,7 @@ class Database:
                 hold_h = (now - open_times.get(pid, now)) / 3600
                 lines.append(f"│  {p['symbol']} {p['side'].upper()} {p.get('strategy','')} ${upnl:+.3f} {hold_h:.1f}h")
         lines += ["└────────────────────────────────────────────────────────────────────────", "",
-                  "┌─ 3. DATA (candles via public Binance) ─────────────────────────────────"]
+                  "┌─ 3. DATA (candles: AriaX → Bybit → OKX → Binance) ─────────────────────"]
         for sym in SYMBOLS:
             s = fetch_stats.get(sym, {"ok_5m": 0, "fail_5m": 0, "ok_1h": 0, "fail_1h": 0})
             lines.append(f"│  {sym:<12} 5m {s['ok_5m']}/{s['fail_5m']}  1h {s['ok_1h']}/{s['fail_1h']}")
@@ -709,9 +773,9 @@ class TelegramController:
                 await asyncio.sleep(60)
             return
         await self.send(
-            f"🚀 <b>v19.2 AriaX (Bybit-auth)</b>\n"
+            f"🚀 <b>v19.3 AriaX (FIXED)</b>\n"
             f"Base: {ARIAX_BASE}\n"
-            f"Candles: Bybit→OKX→Binance\n"
+            f"Candles: AriaX → Bybit → OKX → Binance\n"
             f"Risk {RISK_PCT}% | Lev {LEVERAGE}x | Max ${MAX_NOTIONAL_USD:.0f}",
             self.menu())
         while True:
@@ -746,7 +810,7 @@ class TelegramController:
                                 with STATE_LOCK:
                                     st = dict(SHARED_STATE)
                                 await self.send(
-                                    f"📊 <b>v19 AriaX</b>\nTotal ${st['balance']:.2f}\nFree ${st.get('free_balance',0):.2f}\n"
+                                    f"📊 <b>v19.3 AriaX</b>\nTotal ${st['balance']:.2f}\nFree ${st.get('free_balance',0):.2f}\n"
                                     f"Pos {len(st['active_positions'])}/{MAX_POS}",
                                     self.menu())
                             elif d == "cmd_pos":
@@ -769,7 +833,7 @@ class TelegramController:
                                     self.engine.prices, self.engine.open_times)
                                 with open("report.txt", "w", encoding="utf-8") as f:
                                     f.write(report)
-                                await self.send_document("report.txt", "📄 v19 AriaX")
+                                await self.send_document("report.txt", "📄 v19.3 AriaX")
                             elif d == "cmd_rej":
                                 decs = await self.engine.db.get_recent_decisions(12)
                                 msg = "🚫\n"
@@ -825,37 +889,23 @@ class QuantEngine:
                 s["ok_1h" if success else "fail_1h"] += 1
 
     def _parse_wallet(self, data) -> tuple:
-        """استخراج total/free از پاسخ‌های مختلف wallet"""
-        if not isinstance(data, dict):
+        """FIX 6: استخراج total/free از پاسخ دوکیفی AriaX v2.1"""
+        if not isinstance(data, dict) or not data.get("ok"):
             return 0.0, 0.0
-        # اشکال رایج
-        total = float(
-            data.get("balance")
-            or data.get("equity")
-            or data.get("total")
-            or data.get("wallet")
-            or (data.get("USDT") or {}).get("total")
-            or 0
-        )
-        free = float(
-            data.get("free")
-            or data.get("available")
-            or data.get("free_margin")
-            or data.get("availableMargin")
-            or data.get("margin_free")
-            or (data.get("USDT") or {}).get("free")
-            or total
-        )
+        # total = equity کل (اسپات + فیوچرز + مارجین + PnL شناور)
+        total = float(data.get("equity") or data.get("balance") or 0)
+        # free = مارجین آزاد کیف فیوچرز (ربات فقط فیوچرز معامله می‌کند)
+        free = float(data.get("free_margin") or 0)
         if free <= 0 and total > 0:
             free = total
         return total, free
 
     def _parse_positions(self, data) -> Dict[str, dict]:
-        """نرمال‌سازی لیست پوزیشن‌ها"""
+        """نرمال‌سازی لیست پوزیشن‌ها (فرمت AriaX: {ok, data:[{symbol,size,entry,...}]})"""
         out = {}
         rows = data
         if isinstance(data, dict):
-            rows = data.get("positions") or data.get("data") or data.get("items") or []
+            rows = data.get("data") or data.get("positions") or data.get("items") or []
             if not rows and data.get("symbol"):
                 rows = [data]
         if not isinstance(rows, list):
@@ -866,7 +916,6 @@ class QuantEngine:
             sym = str(p.get("symbol") or p.get("pair") or "").upper().replace("/", "").replace(":", "")
             if not sym:
                 continue
-            # qty / size
             qty = float(p.get("qty") or p.get("size") or p.get("quantity") or p.get("contracts") or 0)
             if abs(qty) < 1e-12:
                 continue
@@ -878,7 +927,7 @@ class QuantEngine:
                 side = "buy"
                 qty = abs(qty)
             else:
-                side = "buy" if qty > 0 else "sell"
+                side = "buy" if qty > 0 else "sell"   # AriaX: size علامت‌دار است
                 qty = abs(qty)
             entry = float(p.get("entry") or p.get("entryPrice") or p.get("avgPrice") or p.get("price") or 0)
             out[sym] = {"symbol": sym, "side": side, "qty": qty, "entry": entry, "raw": p}
@@ -887,7 +936,6 @@ class QuantEngine:
     def _parse_markets_price(self, data, symbol: str) -> float:
         if not data:
             return 0.0
-        # dict of symbol -> price or list
         if isinstance(data, dict):
             if symbol in data:
                 item = data[symbol]
@@ -895,7 +943,6 @@ class QuantEngine:
                     return float(item)
                 if isinstance(item, dict):
                     return float(item.get("price") or item.get("last") or item.get("mark") or item.get("close") or 0)
-            # nested
             markets = data.get("markets") or data.get("data") or data.get("prices") or data
             if isinstance(markets, dict) and symbol in markets:
                 item = markets[symbol]
@@ -915,10 +962,18 @@ class QuantEngine:
 
     async def fetch_ohlcv_public(self, ariax_sym: str, timeframe: str, limit: int = 100):
         pub_sym = SYMBOL_MAP.get(ariax_sym)
-        if not pub_sym or not self.pub_sources:
+        if not pub_sym:
             self._record_fetch(ariax_sym, timeframe, False)
             return []
         actual = 50 if timeframe == "1h" else limit
+        # FIX 5: اول خود AriaX (همان داده صرافی، بدون ریسک بن)
+        try:
+            candles = await self.ariax.fetch_ariax_klines(ariax_sym, timeframe, actual)
+            if candles and len(candles) >= 30 and candles[-1][4] > 0:
+                self._record_fetch(ariax_sym, timeframe, True)
+                return candles
+        except Exception as e:
+            log.warning(f"ariax ohlcv {ariax_sym}: {str(e)[:80]}")
         last_err = ""
         for ex in self.pub_sources:
             try:
@@ -948,7 +1003,6 @@ class QuantEngine:
                 return px
         except Exception as e:
             self._record_error(f"markets price: {e}")
-        # fallback public ticker
         pub_sym = SYMBOL_MAP.get(symbol)
         if pub_sym:
             for ex in self.pub_sources:
@@ -964,7 +1018,7 @@ class QuantEngine:
 
     async def start(self):
         await self.db.init()
-        log.info(f"v19.2 AriaX Testnet starting | base={ARIAX_BASE}")
+        log.info(f"v19.3 AriaX Testnet starting | base={ARIAX_BASE}")
         if not ARIAX_KEY or not ARIAX_SECRET:
             log.error("ARIAX_KEY / ARIAX_SECRET missing!")
         for ex in self.pub_sources:
@@ -974,8 +1028,6 @@ class QuantEngine:
                 break
             except Exception as e:
                 log.warning(f"public markets {ex.id}: {e}")
-        # گرم‌کردن بدون بلاک کردن کل ربات
-        log.info("Warming AriaX in background (cold-start OK)...")
 
         async def _warmup():
             for name, fn in (
@@ -998,9 +1050,10 @@ class QuantEngine:
                 except Exception as e:
                     log.warning(f"AriaX warmup {name}: {e}")
                     await asyncio.sleep(3)
+            # FIX 4: اگر کیف فیوچرز خالی بود، خودمان شارژ کن
+            await self.ariax.ensure_futures_margin(min_free=60.0)
 
         asyncio.create_task(_warmup())
-        # کمی صبر برای اولین پاسخ؛ لوپ‌ها حتی بدون AriaX هم بالا می‌آیند
         await asyncio.sleep(2)
         try:
             await asyncio.wait_for(self.smart_sync(startup=True), timeout=40)
@@ -1022,7 +1075,10 @@ class QuantEngine:
                     SHARED_STATE["peak_balance"] = total
                 if SHARED_STATE["day_start_balance"] <= 0 and total > 0:
                     SHARED_STATE["day_start_balance"] = total
-            log.info(f"Wallet total=${total:.2f} free=${free:.2f} raw_keys={list(data.keys())[:8] if isinstance(data, dict) else '-'}")
+            log.info(f"Wallet total=${total:.2f} free=${free:.2f}")
+            # FIX 4: شارژ خودکار کیف فیوچرز اگر خالی شد (هر 15 ثانیه چک می‌شود)
+            if free < 20 and self.ariax.spot_avail > 40:
+                await self.ariax.ensure_futures_margin(min_free=60.0)
         except Exception as e:
             self._record_error(f"Wallet: {e}")
             log.error(f"Wallet: {e}")
@@ -1156,7 +1212,6 @@ class QuantEngine:
             resp = await self.ariax.place_order(sym, sig["action"], qty, lev=LEVERAGE, order_type="market")
             log.info(f"ORDER RESP {sym}: {str(resp)[:200]}")
 
-            # استخراج fill از پاسخ
             fill = price
             filled = qty
             if isinstance(resp, dict):
@@ -1397,12 +1452,12 @@ def api_status():
 @app.route("/")
 def dashboard():
     return render_template_string("""
-<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8"><title>v19 AriaX</title>
+<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8"><title>v19.3 AriaX</title>
 <style>body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:20px}
 h1{color:#7ee787}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
 .card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:12px}
 .value{font-size:1.2rem;font-weight:700;color:#7ee787}</style></head><body>
-<h1>🚀 Quant v19.2 AriaX Testnet</h1>
+<h1>🚀 Quant v19.3 AriaX Testnet (FIXED)</h1>
 <div class="grid">
 <div class="card">Total<div class="value" id="bal">0</div></div>
 <div class="card">Free<div class="value" id="free">0</div></div>
@@ -1431,7 +1486,7 @@ if __name__ == "__main__":
             traceback.print_exc()
 
     try:
-        print("=== Master Quant v19.2 AriaX Testnet starting ===", flush=True)
+        print("=== Master Quant v19.3 AriaX Testnet (FIXED) starting ===", flush=True)
         print(f"ARIAX_BASE={ARIAX_BASE}", flush=True)
         Thread(target=run_web, daemon=True).start()
         time.sleep(1)
