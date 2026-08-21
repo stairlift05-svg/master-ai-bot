@@ -1,0 +1,199 @@
+{
+  "baseline": {
+    "initial_balance": 500.0,
+    "final_equity": 450.01,
+    "total_return_pct": -10.0,
+    "max_dd_pct": 10.09,
+    "sharpe": -19.88,
+    "n_trades": 452,
+    "win_rate": 31.4,
+    "profit_factor": 0.55,
+    "net_pnl": -49.99,
+    "decisions": 26598,
+    "exposure_pct": 60.0,
+    "halted_bars": 2619,
+    "per_strategy": {
+      "Volume_Surge": {
+        "n": 49,
+        "pnl": -5.85,
+        "wins": 15,
+        "win_rate": 30.6
+      },
+      "SuperTrend_Pullback": {
+        "n": 184,
+        "pnl": -12.16,
+        "wins": 70,
+        "win_rate": 38.0
+      },
+      "Breakout_Momentum": {
+        "n": 203,
+        "pnl": -28.2,
+        "wins": 54,
+        "win_rate": 26.6
+      },
+      "RSI_Extreme_Bounce": {
+        "n": 14,
+        "pnl": -3.84,
+        "wins": 2,
+        "win_rate": 14.3
+      },
+      "RSI_Divergence": {
+        "n": 2,
+        "pnl": 0.06,
+        "wins": 1,
+        "win_rate": 50.0
+      }
+    }
+  },
+  "scenarios": {
+    "flash_crash": {
+      "initial_balance": 500.0,
+      "final_equity": 450.08,
+      "total_return_pct": -9.98,
+      "max_dd_pct": 10.04,
+      "sharpe": -20.71,
+      "n_trades": 413,
+      "win_rate": 32.0,
+      "profit_factor": 0.52,
+      "net_pnl": -49.92,
+      "decisions": 26709,
+      "exposure_pct": 59.9,
+      "halted_bars": 2718,
+      "per_strategy": {
+        "SuperTrend_Pullback": {
+          "n": 183,
+          "pnl": -22.75,
+          "wins": 58,
+          "win_rate": 31.7
+        },
+        "Volume_Surge": {
+          "n": 38,
+          "pnl": -3.87,
+          "wins": 16,
+          "win_rate": 42.1
+        },
+        "Breakout_Momentum": {
+          "n": 189,
+          "pnl": -23.28,
+          "wins": 57,
+          "win_rate": 30.2
+        },
+        "RSI_Extreme_Bounce": {
+          "n": 3,
+          "pnl": -0.01,
+          "wins": 1,
+          "win_rate": 33.3
+        }
+      }
+    },
+    "gap_shock": {
+      "initial_balance": 500.0,
+      "final_equity": 450.18,
+      "total_return_pct": -9.96,
+      "max_dd_pct": 10.0,
+      "sharpe": -18.72,
+      "n_trades": 504,
+      "win_rate": 34.1,
+      "profit_factor": 0.57,
+      "net_pnl": -49.82,
+      "decisions": 24957,
+      "exposure_pct": 70.8,
+      "halted_bars": 1805,
+      "per_strategy": {
+        "SuperTrend_Pullback": {
+          "n": 205,
+          "pnl": -25.83,
+          "wins": 62,
+          "win_rate": 30.2
+        },
+        "Breakout_Momentum": {
+          "n": 236,
+          "pnl": -17.96,
+          "wins": 86,
+          "win_rate": 36.4
+        },
+        "Volume_Surge": {
+          "n": 58,
+          "pnl": -6.98,
+          "wins": 20,
+          "win_rate": 34.5
+        },
+        "RSI_Extreme_Bounce": {
+          "n": 4,
+          "pnl": 0.53,
+          "wins": 3,
+          "win_rate": 75.0
+        },
+        "RSI_Divergence": {
+          "n": 1,
+          "pnl": 0.41,
+          "wins": 1,
+          "win_rate": 100.0
+        }
+      }
+    },
+    "volume_drought": {
+      "initial_balance": 500.0,
+      "final_equity": 449.61,
+      "total_return_pct": -10.08,
+      "max_dd_pct": 10.08,
+      "sharpe": -23.88,
+      "n_trades": 311,
+      "win_rate": 29.3,
+      "profit_factor": 0.42,
+      "net_pnl": -50.39,
+      "decisions": 29091,
+      "exposure_pct": 41.6,
+      "halted_bars": 4480,
+      "per_strategy": {
+        "Volume_Surge": {
+          "n": 34,
+          "pnl": -5.37,
+          "wins": 9,
+          "win_rate": 26.5
+        },
+        "Breakout_Momentum": {
+          "n": 126,
+          "pnl": -14.73,
+          "wins": 43,
+          "win_rate": 34.1
+        },
+        "SuperTrend_Pullback": {
+          "n": 145,
+          "pnl": -28.58,
+          "wins": 38,
+          "win_rate": 26.2
+        },
+        "RSI_Divergence": {
+          "n": 1,
+          "pnl": -0.35,
+          "wins": 0,
+          "win_rate": 0.0
+        },
+        "RSI_Extreme_Bounce": {
+          "n": 5,
+          "pnl": -1.35,
+          "wins": 1,
+          "win_rate": 20.0
+        }
+      }
+    }
+  },
+  "assertions": {
+    "funding_gate_blocks_long": true,
+    "funding_gate_allows_small": true,
+    "funding_gate_long_ok_when_negative": true,
+    "data_stall_triggers_close": true,
+    "sizer_ok_with_enough_margin": true,
+    "sizer_notional_capped": true,
+    "sizer_refuses_tiny_balance": true,
+    "sizer_refuses_tight_stop_overflow": true,
+    "rsi_bounds": true,
+    "rsi_tail_computed": true,
+    "supertrend_direction_valid": true,
+    "supertrend_bands_sane": true,
+    "remote_parse_shape_a": true,
+    "remote_parse_signed_size": true,
+    "adaptive_risk_shrinks_on_dd": true
+  }
+}

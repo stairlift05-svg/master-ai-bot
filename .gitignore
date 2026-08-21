@@ -6,3 +6,7 @@ __pycache__/
 .venv/
 venv/
 quant_report.txt
+bot.db
+*.sqlite3
+report.txt
+.DS_Store
