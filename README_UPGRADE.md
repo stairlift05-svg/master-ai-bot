@@ -219,5 +219,35 @@ caps, stops) demonstrably contains losses in every scenario.
 
 ---
 
+
+---
+
+## v20.1 addendum — strategy overhaul (think-tank cycle, real data)
+
+Following the real-data backtest of v20.0 (which lost money — see
+`analysis/THINK_TANK_REPORT.md`), a full strategy cycle was executed:
+
+1. **Think tank** (6 specialist agents) designed a new multi-timeframe
+   strategy family (5m/15m/1h confluence) — `app/strategy/signals.py`.
+2. **Systematic screening** of 26 candidates (6 families x 3-5 parameter
+   sets) on real OKX 60-day data, in-sample/out-of-sample split, costs
+   included: **0/26 passed the a-priori bar** — the screen is deliberately
+   strict.
+3. **Round 2** (long-only variants + relaxed mean reversion): still 0/26.
+4. **Final validation** of the top candidates under the full production risk
+   overlay on all 8 symbols: **HTF_Breakout (long-only) was the only
+   net-positive configuration** (+0.70%, PF 1.19, WR 53.5%, maxDD 1.1%).
+5. **Integration**: HTF_Breakout (long-only, sl_m=2.0/tp_m=4.0/trend_min=0.02)
+   is now the default enabled strategy; the other five families are retained
+   in code but disabled (`ENABLED_STRATEGIES` env to re-enable). Anti-churn
+   controls added: daily entry budget, 1h per-symbol cooldown, signal
+   decimation, O(n) indicators.
+
+**Honest status:** the surviving edge is marginal — its bootstrap confidence
+interval still touches zero, so this is a *conditional* acceptance for
+testnet/paper trading, not a license to deploy real capital. Re-run the
+screen (`python analysis/screen_strategies.py`) on fresh data before any
+live funding. Full details: `analysis/STRATEGY_SCREENING_REPORT.md`.
+
 *Files: `PROCESS_LOG.md` (full review process, bug reports, iteration loop),
 `tests/` (unit + smoke), `reports/backtest_report.txt` (latest run).*

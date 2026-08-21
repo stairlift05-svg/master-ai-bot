@@ -38,8 +38,7 @@ class EngineState:
             "loss_streak": 0,
             "active_positions": {},          # pid -> Position
             "trend_strengths": deque(maxlen=60),
-            "fetch_stats": defaultdict(lambda: {"ok_5m": 0, "fail_5m": 0,
-                                                "ok_1h": 0, "fail_1h": 0}),
+            "fetch_stats": defaultdict(lambda: defaultdict(int)),
             "recent_errors": deque(maxlen=25),
             "signal_but_not_executed": deque(maxlen=20),
         }

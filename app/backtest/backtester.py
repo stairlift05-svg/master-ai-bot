@@ -26,10 +26,12 @@ from app.risk.position_sizer import PositionSizer
 from app.risk.risk_manager import RiskManager
 from app.state import EngineState
 from app.strategy.engine import StrategyEngine
-from app.backtest.synthetic import resample_1h
+from app.backtest.synthetic import resample
 
-MIN_BARS = 55
-BARS_PER_HOUR = 12
+MIN_BARS = 260
+RESAMPLE_N = {"15m": 3, "1h": 12}   # 5m bars per higher-TF bar
+WIN = {"5m": 400, "15m": 300, "1h": 300}   # max bars passed to the engine
+SIGNAL_EVERY_N = 3                  # evaluate signals every 3 bars (15m cadence)
 
 
 @dataclass
@@ -158,14 +160,24 @@ class Backtester:
     # ------------------------------------------------------------------
     def run(self, market_5m: Dict[str, List[Candle]],
             market_1h: Optional[Dict[str, List[Candle]]] = None) -> BacktestReport:
-        """Run the simulation over the given per-symbol 5m series."""
+        """Run the simulation over the given per-symbol 5m series.
+
+        The 15m and 1h series are derived from the 5m data by resampling and
+        accumulated incrementally (only *complete* higher-TF bars enter the
+        ready list), mirroring how the live feed supplies closed candles.
+        """
         symbols = list(market_5m.keys())
         n_bars = min(len(market_5m[s]) for s in symbols)
-        htf: Dict[str, List[Candle]] = market_1h or {
-            s: resample_1h(market_5m[s]) for s in symbols
+        htf_15: Dict[str, List[Candle]] = {
+            s: resample(market_5m[s], RESAMPLE_N["15m"]) for s in symbols
         }
-        htf_ready: Dict[str, List[Candle]] = {s: [] for s in symbols}
-        htf_idx: Dict[str, int] = {s: 0 for s in symbols}
+        htf_1: Dict[str, List[Candle]] = market_1h or {
+            s: resample(market_5m[s], RESAMPLE_N["1h"]) for s in symbols
+        }
+        ready_15: Dict[str, List[Candle]] = {s: [] for s in symbols}
+        ready_1: Dict[str, List[Candle]] = {s: [] for s in symbols}
+        idx_15: Dict[str, int] = {s: 0 for s in symbols}
+        idx_1: Dict[str, int] = {s: 0 for s in symbols}
 
         for i in range(n_bars):
             self._sim_clock[0] = float(i * 300.0)
@@ -199,7 +211,8 @@ class Backtester:
                 self.exposed_bars += 1
 
             # ---- 4) signal generation on closed bars ---------------------
-            self._generate_signals(market_5m, htf, htf_ready, htf_idx, symbols, i)
+            self._generate_signals(market_5m, htf_15, htf_1, ready_15, ready_1,
+                                   idx_15, idx_1, symbols, i)
 
         # ---- close everything at the final price --------------------------
         final_price = {s: market_5m[s][-1].c for s in symbols}
@@ -225,6 +238,9 @@ class Backtester:
             if sym in open_symbols:
                 self.pending.pop(sym, None)
                 continue
+            if self.risk.daily_entries_left() <= 0:
+                self.pending.clear()
+                return
             signal = self.pending.pop(sym)
             bar = market[sym][i]
             fill = bar.o * (1.0 + self.slippage if signal.side == "buy" else 1.0 - self.slippage)
@@ -243,6 +259,7 @@ class Backtester:
             if margin > free:
                 continue
             self.risk.mark_entry(sym)
+            self.risk.mark_daily_entry()
             self.positions.append(BacktestPosition(
                 symbol=sym, side=signal.side, strategy=signal.strategy,
                 entry=fill, qty=size.qty, sl=signal.sl, tp1=signal.tp1,
@@ -340,14 +357,20 @@ class Backtester:
         ))
         self.positions.remove(pos)
 
-    def _generate_signals(self, market, htf, htf_ready, htf_idx, symbols, i) -> None:
-        # Maintain the ready 1h series (complete bars only).
+    def _generate_signals(self, market, htf_15, htf_1, ready_15, ready_1,
+                          idx_15, idx_1, symbols, i) -> None:
+        # Maintain ready 15m and 1h series (complete bars only).
         for sym in symbols:
-            if (i + 1) % BARS_PER_HOUR == 0:
-                htf_ready[sym].append(htf[sym][htf_idx[sym]])
-                htf_idx[sym] += 1
+            if (i + 1) % RESAMPLE_N["15m"] == 0:
+                ready_15[sym].append(htf_15[sym][idx_15[sym]])
+                idx_15[sym] += 1
+            if (i + 1) % RESAMPLE_N["1h"] == 0:
+                ready_1[sym].append(htf_1[sym][idx_1[sym]])
+                idx_1[sym] += 1
 
         if i < MIN_BARS or self.pending or len(self.positions) >= self.settings.max_positions:
+            return
+        if i % SIGNAL_EVERY_N != 0:
             return
         for sym in symbols:
             if sym in {p.symbol for p in self.positions}:
@@ -355,11 +378,15 @@ class Backtester:
             allowed, _ = self.risk.can_enter_symbol(sym)
             if not allowed:
                 continue
-            window5 = CandleSeries(market[sym][max(0, i - 99):i + 1])
-            window1 = CandleSeries(htf_ready[sym]) if len(htf_ready[sym]) > 30 \
+            if i % SIGNAL_EVERY_N != 0:
+                continue
+            window5 = CandleSeries(market[sym][max(0, i - WIN["5m"] + 1):i + 1])
+            window15 = CandleSeries(ready_15[sym][-WIN["15m"]:]) if len(ready_15[sym]) > 30 \
                 else window5
-            result = self.strategy.analyze(window5, window1, symbol=sym,
-                                           drop_forming=False)
+            window1 = CandleSeries(ready_1[sym][-WIN["1h"]:]) if len(ready_1[sym]) > 30 \
+                else window5
+            result = self.strategy.analyze(window5, window15, window1,
+                                           symbol=sym, drop_forming=False)
             self.decision_count += 1
             if result.signal is not None:
                 self.pending[sym] = result.signal

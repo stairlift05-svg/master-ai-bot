@@ -252,6 +252,7 @@ class QuantEngine:
         try:
             candles5 = await self.feed.fetch(sym, self.settings.timeframe,
                                              self.settings.candle_limit_5m)
+            candles15 = await self.feed.fetch(sym, "15m", 160)
             candles1 = await self.feed.fetch(sym, self.settings.htf_timeframe,
                                              self.settings.candle_limit_1h)
         except DataUnavailableError:
@@ -259,13 +260,15 @@ class QuantEngine:
             return
 
         df5 = CandleSeries(candles5)
+        df15 = CandleSeries(candles15) if len(candles15) > 30 else df5
         df1 = CandleSeries(candles1) if len(candles1) > 30 else df5
         last_close = candles5[-1].c if candles5 else 0.0
         if last_close > 0:
             self.prices[sym] = last_close
             self.last_price_ts[sym] = time.time()
 
-        result = self.strategy.analyze(df5, df1, symbol=sym, drop_forming=True)
+        result = self.strategy.analyze(df5, df15, df1, symbol=sym,
+                                       drop_forming=True)
         await self.db.log_decision(
             sym, result.action, result.strategy, result.reason,
             self.prices.get(sym, 0.0), result.rsi, result.atr, result.htf,

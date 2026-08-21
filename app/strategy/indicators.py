@@ -91,24 +91,30 @@ def atr_wilder(highs: List[float], lows: List[float], closes: List[float],
     return out
 
 
-def rolling_max(values: List[float], period: int) -> List[Optional[float]]:
+def _sliding_extreme(values: List[float], period: int, is_max: bool):
+    """O(n) sliding-window extreme using a monotonic deque (amortized O(1)/item)."""
+    from collections import deque
     out: List[Optional[float]] = [None] * len(values)
-    if period <= 0:
+    if period <= 0 or not values:
         return out
-    for i in range(len(values)):
-        start = max(0, i - period + 1)
-        out[i] = max(values[start:i + 1]) if values[start:i + 1] else None
+    dq: deque = deque()
+    for i, v in enumerate(values):
+        while dq and ((v >= values[dq[-1]]) if is_max else (v <= values[dq[-1]])):
+            dq.pop()
+        dq.append(i)
+        if dq[0] <= i - period:
+            dq.popleft()
+        if i >= period - 1:
+            out[i] = values[dq[0]]
     return out
+
+
+def rolling_max(values: List[float], period: int) -> List[Optional[float]]:
+    return _sliding_extreme(values, period, True)
 
 
 def rolling_min(values: List[float], period: int) -> List[Optional[float]]:
-    out: List[Optional[float]] = [None] * len(values)
-    if period <= 0:
-        return out
-    for i in range(len(values)):
-        start = max(0, i - period + 1)
-        out[i] = min(values[start:i + 1]) if values[start:i + 1] else None
-    return out
+    return _sliding_extreme(values, period, False)
 
 
 def supertrend(highs: List[float], lows: List[float], closes: List[float],
@@ -211,3 +217,31 @@ def quantize(value: float, step: float, decimals: int = 8) -> float:
         return max(round(value, decimals), 0.0)
     qty = (math.floor(value / step + 1e-12)) * step
     return max(round(qty, decimals), 0.0)
+
+
+def bollinger(values: List[float], period: int = 20, num_std: float = 2.0):
+    """Bollinger bands via running sums (O(n)).
+
+    Returns (mid, upper, lower) lists aligned to the input; ``None`` before
+    ``period`` samples exist.
+    """
+    n = len(values)
+    mid = sma(values, period)
+    upper: List[Optional[float]] = [None] * n
+    lower: List[Optional[float]] = [None] * n
+    if n < period:
+        return mid, upper, lower
+    sum_x = sum(values[:period])
+    sum_x2 = sum(v * v for v in values[:period])
+    for i in range(period - 1, n):
+        if i > period - 1:
+            add = values[i]
+            drop = values[i - period]
+            sum_x += add - drop
+            sum_x2 += add * add - drop * drop
+        mean = sum_x / period
+        var = max(0.0, sum_x2 / period - mean * mean)
+        sd = math.sqrt(var)
+        upper[i] = mean + num_std * sd
+        lower[i] = mean - num_std * sd
+    return mid, upper, lower

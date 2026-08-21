@@ -10,3 +10,6 @@ bot.db
 *.sqlite3
 report.txt
 .DS_Store
+
+# downloaded OHLCV data (regenerate with analysis/fetch_real_data.py)
+analysis/data/

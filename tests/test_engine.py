@@ -24,7 +24,6 @@ from app.risk.position_sizer import PositionSizer  # noqa: E402
 from app.risk.risk_manager import RiskManager  # noqa: E402
 from app.state import EngineState  # noqa: E402
 from app.strategy import indicators as ind  # noqa: E402
-from app.strategy.signals import MarketContext, RSIExtremeBounce  # noqa: E402
 
 S = Settings()
 
@@ -105,22 +104,63 @@ class TestRiskGates(unittest.TestCase):
         self.assertEqual(AdaptiveRisk(S, state).profile().factor, 1.0)
 
 
-class TestSignalConsistency(unittest.TestCase):
-    def test_buy_signal_structure(self):
-        ctx = MarketContext(
-            symbol="ETHUSD", price=1800.0, atr=2.0, rsi=20.0, ema20=1790.0,
-            vol_cur=100, vol_sma=80, h12=1820.0, l12=1780.0,
-            htf_trend="bullish", trend_strength=0.5, candle_bull=True,
-            candle_bear=False, st_direction=1, st_upper=None, st_lower=None,
-            divergence=None, closes=[], highs=[], lows=[], min_stop_pct=0.003,
+class TestSignalConsistencyV2(unittest.TestCase):
+    @staticmethod
+    def _mk_context(trend: str = "bullish", strength: float = 0.1,
+                    rsi15: float = 35.0, price: float = 1800.0,
+                    bb_lower_factor: float = 0.98):
+        from app.strategy.signals import HtfContext, TFContext
+
+        def tf(label, closes):
+            n = len(closes)
+            return TFContext(
+                label=label, closes=closes,
+                highs=[c * 1.01 for c in closes],
+                lows=[c * 0.99 for c in closes],
+                volumes=[100.0] * n,
+                atr=2.0 if label != "1h" else 6.0,
+                rsi=rsi15 if label == "15m" else 50.0,
+                ema20=closes[-1] * 0.995, ema50=closes[-1] * 0.99,
+                ema200=closes[-1] * 0.95 if label == "1h" else None,
+                hh=max(closes), ll=min(closes), trend=trend,
+                strength=strength, mid=closes[-1],
+                bb_upper=closes[-1] * 1.02, bb_lower=closes[-1] * bb_lower_factor,
+            )
+
+        closes = [1000.0 + i * 0.5 for i in range(300)]
+        return HtfContext(
+            symbol="ETHUSD", price=price, tf5=tf("5m", closes),
+            tf15=tf("15m", closes[::3]), tf1=tf("1h", closes[::12]),
+            candle_bull_5m=True, candle_bear_5m=False,
+            min_stop_pct=0.003,
         )
-        sig = RSIExtremeBounce({"sl_m": 1.5, "tp_m": 3.2, "tp1_m": 1.7}).evaluate(ctx)
+
+    def test_buy_signal_structure(self):
+        from app.strategy.signals import build_strategy
+        strat = build_strategy("TrendPullback_HTF", {"sl_m": 2.0, "tp_m": 3.0})
+        sig = strat.evaluate(self._mk_context())
         self.assertIsNotNone(sig)
-        # Stop distance respects the floor; targets respect the RR ratio.
-        sl_dist = 1800.0 - sig.sl
-        self.assertGreaterEqual(sl_dist, 1800.0 * 0.003 - 1e-9)
-        self.assertGreaterEqual(sig.tp - sig.sl, sl_dist * (3.2 / 1.5) - 1e-9)
+        self.assertEqual(sig.side, "buy")
+        sl_dist = sig.entry - sig.sl
+        self.assertGreaterEqual(sl_dist, sig.entry * 0.003 - 1e-9)
+        self.assertGreater(sig.tp - sig.sl, sl_dist * 1.5)
         self.assertGreater(sig.tp1, sig.sl)
+
+    def test_mean_reversion_requires_sideways(self):
+        from app.strategy.signals import build_strategy
+        strat = build_strategy("MeanReversion_BB")
+        # Trending 1h -> mean reversion must NOT fire.
+        self.assertIsNone(strat.evaluate(self._mk_context(trend="bullish")))
+        # Sideways + oversold 15m RSI + price touching the lower band -> fires.
+        ctx = self._mk_context(trend="sideways", strength=0.05, rsi15=25.0,
+                               bb_lower_factor=1.0)
+        sig = strat.evaluate(ctx)
+        self.assertIsNotNone(sig)
+
+    def test_unknown_strategy_raises(self):
+        from app.strategy.signals import build_strategy
+        with self.assertRaises(KeyError):
+            build_strategy("Does_Not_Exist")
 
 
 class TestParsing(unittest.TestCase):

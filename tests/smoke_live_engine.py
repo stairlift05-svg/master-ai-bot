@@ -77,7 +77,13 @@ class FakeAriaX:
 
     async def fetch_klines(self, sym: str, timeframe: str,
                            limit: int = 100) -> List[Candle]:
-        src = self._candles1(sym) if timeframe == "1h" else self._candles5(sym)
+        if timeframe == "1h":
+            src = self._candles1(sym)
+        elif timeframe == "15m":
+            from app.backtest.synthetic import resample
+            src = resample(self._candles5(sym), 3)
+        else:
+            src = self._candles5(sym)
         return src[-limit:]
 
     async def place_order(self, symbol: str, side: str, qty: float, lev: int,

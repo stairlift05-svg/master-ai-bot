@@ -179,4 +179,38 @@ offline, then re-validate out-of-sample.
 - [x] Verification: unit tests, integration smoke test, backtest + stress
 - [x] `README_UPGRADE.md` explaining the technical upgrades per module
 
+
+---
+
+## Addendum 2026-08-21 (PM) — Strategy overhaul cycle (v20.1)
+
+**Mandate:** replace all bot strategies, backtest every candidate on real
+data, add only successful strategies.
+
+**Process executed:**
+1. Designed a multi-timeframe strategy family (6 families, agents A-F):
+   TrendPullback_HTF, HTF_Breakout, MomentumRetrace_RSI, MeanReversion_BB,
+   VolatilityExpansion, SwingPullback_1h.
+2. Built `analysis/screen_strategies.py`: 26 candidates, real OKX 5m 60d,
+   3-symbol screen, IS/OOS split, a-priori pass gates, 2-worker parallel.
+3. Screening result: **0/26 passed** — every family was net-negative after
+   costs in-sample. Two rounds run; the panel refused to lower the bar.
+4. `analysis/validate_final.py`: top candidates under full production risk
+   overlay on 8 symbols → **HTF_Breakout long-only** the only positive
+   config (+0.70%, PF 1.19, WR 53.5%, maxDD 1.13%, 0 halts).
+5. Integrated: default `ENABLED_STRATEGIES=("HTF_Breakout",)`, `SIDES=long`,
+   validated params, daily budget + cooldowns. Rejected families remain
+   disabled in code for research.
+6. Verification: 18 unit tests, live-engine smoke test, synthetic stress
+   (15/15 assertions) — all green.
+
+**Engineering changes in this cycle:** multi-TF engine (5m/15m/1h contexts,
+one-pass feature computation), O(n) rolling max/min and Bollinger, breakout
+references exclude the forming bar (fixed a real bug where breakouts could
+never fire), signal decimation to 15m cadence, daily entry budget, entry
+cooldown 3600s, `sides` filter, config-driven strategy enablement.
+
+**Honest caveat:** HTF_Breakout's edge is marginal (bootstrap CI touches 0)
+and unstable IS/OOS — conditional acceptance for testnet only.
+
 Signed off by the Chief Development Manager — 2026-08-21.

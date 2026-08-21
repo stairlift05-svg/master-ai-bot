@@ -1,0 +1,1451 @@
+[
+ {
+  "name": "TrendPullback_HTF",
+  "variant": 1,
+  "params": {
+   "sl_m": 2.0,
+   "tp_m": 3.0,
+   "trend_min": 0.05
+  },
+  "sides": "both",
+  "is": {
+   "n": 283,
+   "pnl": -15.881330584453632,
+   "ret_pct": -1.7241713382910584,
+   "wr": 46.28975265017668,
+   "pf": 0.77,
+   "maxdd": 2.29,
+   "per_symbol": {
+    "XRPUSD": -6.94,
+    "SOLUSD": -4.27,
+    "ETHUSD": -4.67
+   },
+   "boot_ci": [
+    -33.14,
+    1.23
+   ]
+  },
+  "oos": {
+   "n": 118,
+   "pnl": -10.230027719412766,
+   "ret_pct": -0.9025255794572695,
+   "wr": 28.8135593220339,
+   "pf": 0.62,
+   "maxdd": 1.37,
+   "per_symbol": {
+    "XRPUSD": -6.94,
+    "ETHUSD": -1.08,
+    "SOLUSD": -2.21
+   }
+  },
+  "total_pnl": -26.11,
+  "gross_edge": 2.06,
+  "fees": 28.17,
+  "entries_total": 401,
+  "final_eq": 973.8886416961342,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": false,
+   "oos_n": true,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "TrendPullback_HTF",
+  "variant": 2,
+  "params": {
+   "sl_m": 2.5,
+   "tp_m": 4.0,
+   "trend_min": 0.05
+  },
+  "sides": "both",
+  "is": {
+   "n": 298,
+   "pnl": -24.579067464152995,
+   "ret_pct": -2.7892624283985423,
+   "wr": 47.651006711409394,
+   "pf": 0.68,
+   "maxdd": 3.29,
+   "per_symbol": {
+    "XRPUSD": -8.3,
+    "SOLUSD": -8.18,
+    "ETHUSD": -8.1
+   },
+   "boot_ci": [
+    -43.29,
+    -6.73
+   ]
+  },
+  "oos": {
+   "n": 118,
+   "pnl": -14.953803552034824,
+   "ret_pct": -1.1974239701275868,
+   "wr": 28.8135593220339,
+   "pf": 0.46,
+   "maxdd": 1.51,
+   "per_symbol": {
+    "XRPUSD": -8.34,
+    "ETHUSD": -3.86,
+    "SOLUSD": -2.75
+   }
+  },
+  "total_pnl": -39.53,
+  "gross_edge": -11.38,
+  "fees": 28.15,
+  "entries_total": 416,
+  "final_eq": 960.4671289838127,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": false,
+   "oos_n": true,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "TrendPullback_HTF",
+  "variant": 3,
+  "params": {
+   "sl_m": 1.5,
+   "tp_m": 2.2,
+   "trend_min": 0.1
+  },
+  "sides": "both",
+  "is": {
+   "n": 269,
+   "pnl": -5.714847520008857,
+   "ret_pct": -0.6830588377843227,
+   "wr": 43.12267657992565,
+   "pf": 0.91,
+   "maxdd": 2.22,
+   "per_symbol": {
+    "XRPUSD": -6.67,
+    "SOLUSD": 3.48,
+    "ETHUSD": -2.52
+   },
+   "boot_ci": [
+    -23.0,
+    12.07
+   ]
+  },
+  "oos": {
+   "n": 119,
+   "pnl": -11.496598770290456,
+   "ret_pct": -1.0452252949978313,
+   "wr": 26.05042016806723,
+   "pf": 0.57,
+   "maxdd": 1.23,
+   "per_symbol": {
+    "XRPUSD": -7.5,
+    "ETHUSD": 0.03,
+    "SOLUSD": -4.03
+   }
+  },
+  "total_pnl": -17.21,
+  "gross_edge": 11.03,
+  "fees": 28.24,
+  "entries_total": 388,
+  "final_eq": 982.7885537097009,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": false,
+   "oos_n": true,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "HTF_Breakout",
+  "variant": 1,
+  "params": {
+   "sl_m": 1.5,
+   "tp_m": 3.0,
+   "trend_min": 0.05
+  },
+  "sides": "both",
+  "is": {
+   "n": 66,
+   "pnl": -10.730479578460736,
+   "ret_pct": -1.4632652642143973,
+   "wr": 48.484848484848484,
+   "pf": 0.58,
+   "maxdd": 1.64,
+   "per_symbol": {
+    "SOLUSD": -2.11,
+    "ETHUSD": -2.66,
+    "XRPUSD": -5.95
+   },
+   "boot_ci": [
+    -21.51,
+    0.06
+   ]
+  },
+  "oos": {
+   "n": 34,
+   "pnl": -5.395045575173453,
+   "ret_pct": -0.1515041588797894,
+   "wr": 38.23529411764706,
+   "pf": 0.61,
+   "maxdd": 0.73,
+   "per_symbol": {
+    "SOLUSD": -0.02,
+    "XRPUSD": -3.88,
+    "ETHUSD": -1.5
+   }
+  },
+  "total_pnl": -16.13,
+  "gross_edge": -9.32,
+  "fees": 6.81,
+  "entries_total": 100,
+  "final_eq": 983.8744748463654,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": false,
+   "oos_n": true,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "HTF_Breakout",
+  "variant": 2,
+  "params": {
+   "sl_m": 2.0,
+   "tp_m": 4.0,
+   "trend_min": 0.05
+  },
+  "sides": "both",
+  "is": {
+   "n": 62,
+   "pnl": -6.023882229397511,
+   "ret_pct": -1.1235226574849544,
+   "wr": 50.0,
+   "pf": 0.73,
+   "maxdd": 1.25,
+   "per_symbol": {
+    "SOLUSD": 1.97,
+    "ETHUSD": 0.28,
+    "XRPUSD": -8.28
+   },
+   "boot_ci": [
+    -17.36,
+    5.0
+   ]
+  },
+  "oos": {
+   "n": 32,
+   "pnl": 1.9664111413178182,
+   "ret_pct": 0.7259315541658928,
+   "wr": 40.625,
+   "pf": 1.25,
+   "maxdd": 0.67,
+   "per_symbol": {
+    "XRPUSD": 4.19,
+    "SOLUSD": -0.99,
+    "ETHUSD": -1.23
+   }
+  },
+  "total_pnl": -4.06,
+  "gross_edge": 2.35,
+  "fees": 6.41,
+  "entries_total": 94,
+  "final_eq": 995.9425289119205,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": true,
+   "oos_n": true,
+   "symbols": true
+  },
+  "passed": false
+ },
+ {
+  "name": "HTF_Breakout",
+  "variant": 3,
+  "params": {
+   "sl_m": 1.5,
+   "tp_m": 3.5,
+   "trend_min": 0.02
+  },
+  "sides": "both",
+  "is": {
+   "n": 69,
+   "pnl": -10.968483363287817,
+   "ret_pct": -1.5936010287781799,
+   "wr": 46.3768115942029,
+   "pf": 0.6,
+   "maxdd": 1.73,
+   "per_symbol": {
+    "SOLUSD": -2.87,
+    "ETHUSD": -3.1,
+    "XRPUSD": -5.0
+   },
+   "boot_ci": [
+    -22.45,
+    0.51
+   ]
+  },
+  "oos": {
+   "n": 33,
+   "pnl": -5.5910075705947335,
+   "ret_pct": -0.06335773411274559,
+   "wr": 36.36363636363637,
+   "pf": 0.55,
+   "maxdd": 0.74,
+   "per_symbol": {
+    "SOLUSD": -1.26,
+    "XRPUSD": -2.83,
+    "ETHUSD": -1.5
+   }
+  },
+  "total_pnl": -16.56,
+  "gross_edge": -9.67,
+  "fees": 6.89,
+  "entries_total": 102,
+  "final_eq": 983.4405090661171,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": false,
+   "oos_n": true,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "MomentumRetrace_RSI",
+  "variant": 1,
+  "params": {
+   "sl_m": 2.0,
+   "tp_m": 2.2,
+   "trend_min": 0.03,
+   "rsi15_low": 32,
+   "rsi15_high": 68
+  },
+  "sides": "both",
+  "is": {
+   "n": 12,
+   "pnl": -0.252487283937752,
+   "ret_pct": -0.025248728393789666,
+   "wr": 33.33333333333333,
+   "pf": 0.89,
+   "maxdd": 0.12,
+   "per_symbol": {
+    "SOLUSD": -1.18,
+    "ETHUSD": 0.84,
+    "XRPUSD": 0.09
+   },
+   "boot_ci": [
+    -3.13,
+    2.8
+   ]
+  },
+  "oos": {
+   "n": 18,
+   "pnl": 0.7983205472259391,
+   "ret_pct": 0.07985221639179585,
+   "wr": 50.0,
+   "pf": 1.37,
+   "maxdd": 0.16,
+   "per_symbol": {
+    "XRPUSD": -0.67,
+    "ETHUSD": 0.15,
+    "SOLUSD": 1.32
+   }
+  },
+  "total_pnl": 0.55,
+  "gross_edge": 2.95,
+  "fees": 2.4,
+  "entries_total": 30,
+  "final_eq": 1000.5458332632878,
+  "checks": {
+   "is_ret": false,
+   "is_n": false,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": true,
+   "oos_n": true,
+   "symbols": true
+  },
+  "passed": false
+ },
+ {
+  "name": "MomentumRetrace_RSI",
+  "variant": 2,
+  "params": {
+   "sl_m": 1.8,
+   "tp_m": 1.6,
+   "trend_min": 0.03,
+   "rsi15_low": 28,
+   "rsi15_high": 72
+  },
+  "sides": "both",
+  "is": {
+   "n": 4,
+   "pnl": -0.6162197831103673,
+   "ret_pct": -0.06162197831104388,
+   "wr": 25.0,
+   "pf": 0.3,
+   "maxdd": 0.08,
+   "per_symbol": {
+    "SOLUSD": -0.54,
+    "XRPUSD": -0.08
+   },
+   "boot_ci": [
+    -1.5,
+    0.46
+   ]
+  },
+  "oos": {
+   "n": 3,
+   "pnl": 0.49004111528394334,
+   "ret_pct": 0.049034327451025206,
+   "wr": 100.0,
+   "pf": 0.0,
+   "maxdd": 0.05,
+   "per_symbol": {
+    "SOLUSD": 0.03,
+    "ETHUSD": 0.45,
+    "XRPUSD": 0.01
+   }
+  },
+  "total_pnl": -0.13,
+  "gross_edge": 0.43,
+  "fees": 0.56,
+  "entries_total": 7,
+  "final_eq": 999.8738213321735,
+  "checks": {
+   "is_ret": false,
+   "is_n": false,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": true,
+   "oos_n": false,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "MomentumRetrace_RSI",
+  "variant": 3,
+  "params": {
+   "sl_m": 2.5,
+   "tp_m": 2.5,
+   "trend_min": 0.03,
+   "rsi15_low": 35,
+   "rsi15_high": 65
+  },
+  "sides": "both",
+  "is": {
+   "n": 34,
+   "pnl": -0.7230121136789291,
+   "ret_pct": -0.16041892931456525,
+   "wr": 55.88235294117647,
+   "pf": 0.9,
+   "maxdd": 0.25,
+   "per_symbol": {
+    "SOLUSD": -2.11,
+    "XRPUSD": -0.09,
+    "ETHUSD": 1.48
+   },
+   "boot_ci": [
+    -6.03,
+    4.32
+   ]
+  },
+  "oos": {
+   "n": 33,
+   "pnl": -2.653001892587036,
+   "ret_pct": -0.17746716223355774,
+   "wr": 39.39393939393939,
+   "pf": 0.6,
+   "maxdd": 0.35,
+   "per_symbol": {
+    "XRPUSD": -2.55,
+    "ETHUSD": -1.3,
+    "SOLUSD": 1.2
+   }
+  },
+  "total_pnl": -3.38,
+  "gross_edge": 1.51,
+  "fees": 4.88,
+  "entries_total": 67,
+  "final_eq": 996.6239859937342,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": false,
+   "oos_n": true,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "MeanReversion_BB",
+  "variant": 1,
+  "params": {
+   "sl_m": 1.0,
+   "rsi_low": 30,
+   "rsi_high": 70,
+   "max_trend": 0.15,
+   "max_bbw": 0.08
+  },
+  "sides": "both",
+  "is": {
+   "n": 9,
+   "pnl": -0.31993317251649905,
+   "ret_pct": -0.031993317251644005,
+   "wr": 33.33333333333333,
+   "pf": 0.86,
+   "maxdd": 0.17,
+   "per_symbol": {
+    "SOLUSD": 1.34,
+    "XRPUSD": -0.72,
+    "ETHUSD": -0.94
+   },
+   "boot_ci": [
+    -3.15,
+    3.0
+   ]
+  },
+  "oos": {
+   "n": 6,
+   "pnl": -0.47890347295258706,
+   "ret_pct": -0.04790567390948741,
+   "wr": 33.33333333333333,
+   "pf": 0.55,
+   "maxdd": 0.13,
+   "per_symbol": {
+    "SOLUSD": -0.37,
+    "XRPUSD": -0.1
+   }
+  },
+  "total_pnl": -0.8,
+  "gross_edge": 0.4,
+  "fees": 1.2,
+  "entries_total": 15,
+  "final_eq": 999.201163354531,
+  "checks": {
+   "is_ret": false,
+   "is_n": false,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": false,
+   "oos_n": false,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "MeanReversion_BB",
+  "variant": 2,
+  "params": {
+   "sl_m": 0.8,
+   "rsi_low": 25,
+   "rsi_high": 75,
+   "max_trend": 0.12,
+   "max_bbw": 0.08
+  },
+  "sides": "both",
+  "is": {
+   "n": 4,
+   "pnl": -0.3159324427025233,
+   "ret_pct": -0.0315932442702449,
+   "wr": 25.0,
+   "pf": 0.74,
+   "maxdd": 0.07,
+   "per_symbol": {
+    "ETHUSD": -0.85,
+    "SOLUSD": 0.88,
+    "XRPUSD": -0.35
+   },
+   "boot_ci": [
+    -1.85,
+    2.3
+   ]
+  },
+  "oos": {
+   "n": 2,
+   "pnl": -0.7039635615074145,
+   "ret_pct": -0.07041860367220654,
+   "wr": 0.0,
+   "pf": 0.0,
+   "maxdd": 0.07,
+   "per_symbol": {
+    "SOLUSD": -0.7
+   }
+  },
+  "total_pnl": -1.02,
+  "gross_edge": -0.54,
+  "fees": 0.48,
+  "entries_total": 6,
+  "final_eq": 998.9801039957902,
+  "checks": {
+   "is_ret": false,
+   "is_n": false,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": false,
+   "oos_n": false,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "MeanReversion_BB",
+  "variant": 3,
+  "params": {
+   "sl_m": 1.5,
+   "rsi_low": 32,
+   "rsi_high": 68,
+   "max_trend": 0.2,
+   "max_bbw": 0.08
+  },
+  "sides": "both",
+  "is": {
+   "n": 20,
+   "pnl": 3.170797322917924,
+   "ret_pct": 0.2810956150546051,
+   "wr": 70.0,
+   "pf": 2.53,
+   "maxdd": 0.09,
+   "per_symbol": {
+    "SOLUSD": 1.83,
+    "XRPUSD": 1.19,
+    "ETHUSD": 0.16
+   },
+   "boot_ci": [
+    -0.34,
+    6.69
+   ]
+  },
+  "oos": {
+   "n": 14,
+   "pnl": 0.5693884261333809,
+   "ret_pct": 0.0926624896553152,
+   "wr": 50.0,
+   "pf": 1.28,
+   "maxdd": 0.15,
+   "per_symbol": {
+    "SOLUSD": -0.08,
+    "ETHUSD": 0.69,
+    "XRPUSD": -0.05
+   }
+  },
+  "total_pnl": 3.74,
+  "gross_edge": 6.14,
+  "fees": 2.4,
+  "entries_total": 34,
+  "final_eq": 1003.7401857490513,
+  "checks": {
+   "is_ret": false,
+   "is_n": false,
+   "is_pf": true,
+   "is_dd": true,
+   "oos_ret": true,
+   "oos_n": true,
+   "symbols": true
+  },
+  "passed": false
+ },
+ {
+  "name": "VolatilityExpansion",
+  "variant": 1,
+  "params": {
+   "sl_m": 1.8,
+   "tp_m": 2.5,
+   "trend_min": 0.03,
+   "atr_mult": 1.5,
+   "vol_mult": 1.3
+  },
+  "sides": "both",
+  "is": {
+   "n": 40,
+   "pnl": -5.26890022112169,
+   "ret_pct": -0.8115794848927438,
+   "wr": 45.0,
+   "pf": 0.63,
+   "maxdd": 1.24,
+   "per_symbol": {
+    "ETHUSD": -5.1,
+    "XRPUSD": 0.35,
+    "SOLUSD": -0.52
+   },
+   "boot_ci": [
+    -13.49,
+    2.61
+   ]
+  },
+  "oos": {
+   "n": 24,
+   "pnl": 0.8053968187509677,
+   "ret_pct": 0.3682175225282469,
+   "wr": 58.333333333333336,
+   "pf": 1.1,
+   "maxdd": 0.37,
+   "per_symbol": {
+    "SOLUSD": -0.52,
+    "ETHUSD": 0.15,
+    "XRPUSD": 1.17
+   }
+  },
+  "total_pnl": -4.46,
+  "gross_edge": -0.22,
+  "fees": 4.24,
+  "entries_total": 64,
+  "final_eq": 995.5364965976289,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": true,
+   "oos_n": true,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "VolatilityExpansion",
+  "variant": 2,
+  "params": {
+   "sl_m": 1.8,
+   "tp_m": 3.5,
+   "trend_min": 0.03,
+   "atr_mult": 2.0,
+   "vol_mult": 1.5
+  },
+  "sides": "both",
+  "is": {
+   "n": 3,
+   "pnl": -1.1785831757920315,
+   "ret_pct": -0.14931140296267076,
+   "wr": 33.33333333333333,
+   "pf": 0.21,
+   "maxdd": 0.25,
+   "per_symbol": {
+    "ETHUSD": -1.07,
+    "XRPUSD": -0.1
+   },
+   "boot_ci": [
+    -4.17,
+    0.94
+   ]
+  },
+  "oos": {
+   "n": 8,
+   "pnl": -1.5364130585989286,
+   "ret_pct": -0.12237093423514978,
+   "wr": 37.5,
+   "pf": 0.61,
+   "maxdd": 0.35,
+   "per_symbol": {
+    "SOLUSD": -1.91,
+    "ETHUSD": -0.86,
+    "XRPUSD": 1.23
+   }
+  },
+  "total_pnl": -2.71,
+  "gross_edge": -1.91,
+  "fees": 0.8,
+  "entries_total": 11,
+  "final_eq": 997.2850037656091,
+  "checks": {
+   "is_ret": false,
+   "is_n": false,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": false,
+   "oos_n": true,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "VolatilityExpansion",
+  "variant": 3,
+  "params": {
+   "sl_m": 1.5,
+   "tp_m": 2.0,
+   "trend_min": 0.03,
+   "atr_mult": 1.3,
+   "vol_mult": 1.2
+  },
+  "sides": "both",
+  "is": {
+   "n": 62,
+   "pnl": -11.013213535693714,
+   "ret_pct": -1.3303334350273421,
+   "wr": 35.483870967741936,
+   "pf": 0.49,
+   "maxdd": 1.49,
+   "per_symbol": {
+    "SOLUSD": -4.65,
+    "ETHUSD": -5.11,
+    "XRPUSD": -1.25
+   },
+   "boot_ci": [
+    -19.54,
+    -2.38
+   ]
+  },
+  "oos": {
+   "n": 39,
+   "pnl": 4.804343547174974,
+   "ret_pct": 0.7190116890770648,
+   "wr": 56.41025641025641,
+   "pf": 1.62,
+   "maxdd": 0.41,
+   "per_symbol": {
+    "SOLUSD": 0.33,
+    "ETHUSD": 0.95,
+    "XRPUSD": 3.52
+   }
+  },
+  "total_pnl": -6.21,
+  "gross_edge": 1.08,
+  "fees": 7.28,
+  "entries_total": 101,
+  "final_eq": 993.7911300114818,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": true,
+   "oos_n": true,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "SwingPullback_1h",
+  "variant": 1,
+  "params": {
+   "sl_m": 1.2,
+   "tp_m": 3.0,
+   "trend_min": 0.05
+  },
+  "sides": "both",
+  "is": {
+   "n": 280,
+   "pnl": -46.845117411078334,
+   "ret_pct": -4.855553383446387,
+   "wr": 40.35714285714286,
+   "pf": 0.48,
+   "maxdd": 5.45,
+   "per_symbol": {
+    "ETHUSD": -10.22,
+    "SOLUSD": -14.67,
+    "XRPUSD": -21.95
+   },
+   "boot_ci": [
+    -65.16,
+    -28.34
+   ]
+  },
+  "oos": {
+   "n": 113,
+   "pnl": -12.770933289338052,
+   "ret_pct": -1.162497366822357,
+   "wr": 37.16814159292036,
+   "pf": 0.53,
+   "maxdd": 1.66,
+   "per_symbol": {
+    "ETHUSD": -3.55,
+    "SOLUSD": -1.89,
+    "XRPUSD": -7.33
+   }
+  },
+  "total_pnl": -59.62,
+  "gross_edge": -32.33,
+  "fees": 27.29,
+  "entries_total": 393,
+  "final_eq": 940.3839492995847,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": false,
+   "oos_n": true,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "SwingPullback_1h",
+  "variant": 2,
+  "params": {
+   "sl_m": 1.5,
+   "tp_m": 4.0,
+   "trend_min": 0.05
+  },
+  "sides": "both",
+  "is": {
+   "n": 284,
+   "pnl": -39.142874757971505,
+   "ret_pct": -4.584287688183597,
+   "wr": 44.36619718309859,
+   "pf": 0.57,
+   "maxdd": 4.87,
+   "per_symbol": {
+    "SOLUSD": -12.05,
+    "ETHUSD": -6.01,
+    "XRPUSD": -21.08
+   },
+   "boot_ci": [
+    -58.79,
+    -19.08
+   ]
+  },
+  "oos": {
+   "n": 113,
+   "pnl": -12.07540098815518,
+   "ret_pct": -0.5633662144368112,
+   "wr": 38.93805309734513,
+   "pf": 0.52,
+   "maxdd": 1.1,
+   "per_symbol": {
+    "ETHUSD": -3.65,
+    "SOLUSD": -3.1,
+    "XRPUSD": -5.32
+   }
+  },
+  "total_pnl": -51.22,
+  "gross_edge": -24.09,
+  "fees": 27.13,
+  "entries_total": 397,
+  "final_eq": 948.781724253874,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": false,
+   "oos_n": true,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "SwingPullback_1h",
+  "variant": 3,
+  "params": {
+   "sl_m": 1.0,
+   "tp_m": 2.5,
+   "trend_min": 0.1
+  },
+  "sides": "both",
+  "is": {
+   "n": 271,
+   "pnl": -33.45881512136388,
+   "ret_pct": -3.345881512136406,
+   "wr": 39.48339483394834,
+   "pf": 0.58,
+   "maxdd": 3.6,
+   "per_symbol": {
+    "ETHUSD": -8.94,
+    "SOLUSD": -9.43,
+    "XRPUSD": -15.1
+   },
+   "boot_ci": [
+    -50.66,
+    -16.32
+   ]
+  },
+  "oos": {
+   "n": 113,
+   "pnl": -9.900002268873033,
+   "ret_pct": -1.0242711250960213,
+   "wr": 37.16814159292036,
+   "pf": 0.63,
+   "maxdd": 1.56,
+   "per_symbol": {
+    "ETHUSD": -2.46,
+    "SOLUSD": -1.22,
+    "XRPUSD": -6.23
+   }
+  },
+  "total_pnl": -43.36,
+  "gross_edge": -16.07,
+  "fees": 27.29,
+  "entries_total": 384,
+  "final_eq": 956.6411826097631,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": false,
+   "oos_n": true,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "MeanReversion_BB",
+  "variant": 4,
+  "params": {
+   "sl_m": 0.7,
+   "rsi_low": 42,
+   "rsi_high": 58,
+   "max_trend": 0.2,
+   "max_bbw": 0.12
+  },
+  "sides": "both",
+  "is": {
+   "n": 49,
+   "pnl": -3.164190831950935,
+   "ret_pct": -0.31641908319504086,
+   "wr": 38.775510204081634,
+   "pf": 0.7,
+   "maxdd": 0.41,
+   "per_symbol": {
+    "SOLUSD": -0.0,
+    "ETHUSD": -1.28,
+    "XRPUSD": -1.88
+   },
+   "boot_ci": [
+    -8.22,
+    2.16
+   ]
+  },
+  "oos": {
+   "n": 34,
+   "pnl": -3.3408459252503624,
+   "ret_pct": -0.33514505543682516,
+   "wr": 38.23529411764706,
+   "pf": 0.48,
+   "maxdd": 0.39,
+   "per_symbol": {
+    "SOLUSD": -3.76,
+    "ETHUSD": 0.85,
+    "XRPUSD": -0.43
+   }
+  },
+  "total_pnl": -6.51,
+  "gross_edge": 0.14,
+  "fees": 6.64,
+  "entries_total": 83,
+  "final_eq": 993.4949632427991,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": false,
+   "oos_n": true,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "MeanReversion_BB",
+  "variant": 5,
+  "params": {
+   "sl_m": 1.2,
+   "rsi_low": 40,
+   "rsi_high": 60,
+   "max_trend": 0.15,
+   "max_bbw": 0.1
+  },
+  "sides": "both",
+  "is": {
+   "n": 33,
+   "pnl": -1.642064221339686,
+   "ret_pct": -0.1920336039013315,
+   "wr": 39.39393939393939,
+   "pf": 0.78,
+   "maxdd": 0.37,
+   "per_symbol": {
+    "SOLUSD": 1.91,
+    "ETHUSD": -1.83,
+    "XRPUSD": -1.72
+   },
+   "boot_ci": [
+    -6.34,
+    3.28
+   ]
+  },
+  "oos": {
+   "n": 23,
+   "pnl": -1.717696238707405,
+   "ret_pct": -0.14421939179897203,
+   "wr": 39.130434782608695,
+   "pf": 0.57,
+   "maxdd": 0.23,
+   "per_symbol": {
+    "SOLUSD": -2.45,
+    "ETHUSD": 0.78,
+    "XRPUSD": -0.05
+   }
+  },
+  "total_pnl": -3.36,
+  "gross_edge": 0.96,
+  "fees": 4.32,
+  "entries_total": 56,
+  "final_eq": 996.6402395399529,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": false,
+   "oos_n": true,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "TrendPullback_HTF",
+  "variant": 4,
+  "params": {
+   "sl_m": 2.5,
+   "tp_m": 4.0,
+   "trend_min": 0.05
+  },
+  "sides": "long",
+  "is": {
+   "n": 209,
+   "pnl": -5.511561776053873,
+   "ret_pct": -0.7563032432618133,
+   "wr": 54.066985645933016,
+   "pf": 0.89,
+   "maxdd": 2.2,
+   "per_symbol": {
+    "SOLUSD": 5.91,
+    "XRPUSD": -3.8,
+    "ETHUSD": -7.62
+   },
+   "boot_ci": [
+    -20.62,
+    9.71
+   ]
+  },
+  "oos": {
+   "n": 104,
+   "pnl": -10.43970712204568,
+   "ret_pct": -0.8452160428929489,
+   "wr": 35.57692307692308,
+   "pf": 0.57,
+   "maxdd": 1.4,
+   "per_symbol": {
+    "XRPUSD": -2.87,
+    "SOLUSD": -3.5,
+    "ETHUSD": -4.08
+   }
+  },
+  "total_pnl": -15.95,
+  "gross_edge": 5.72,
+  "fees": 21.67,
+  "entries_total": 313,
+  "final_eq": 984.048731101902,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": false,
+   "oos_n": true,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "TrendPullback_HTF",
+  "variant": 5,
+  "params": {
+   "sl_m": 2.0,
+   "tp_m": 4.0,
+   "trend_min": 0.1
+  },
+  "sides": "long",
+  "is": {
+   "n": 206,
+   "pnl": -3.7248745266537227,
+   "ret_pct": -0.5514310482141571,
+   "wr": 51.45631067961165,
+   "pf": 0.92,
+   "maxdd": 1.76,
+   "per_symbol": {
+    "SOLUSD": 5.89,
+    "XRPUSD": -3.99,
+    "ETHUSD": -5.62
+   },
+   "boot_ci": [
+    -17.5,
+    10.32
+   ]
+  },
+  "oos": {
+   "n": 104,
+   "pnl": -8.217732239268416,
+   "ret_pct": -0.6463940458405371,
+   "wr": 36.53846153846153,
+   "pf": 0.64,
+   "maxdd": 1.26,
+   "per_symbol": {
+    "XRPUSD": -2.13,
+    "SOLUSD": -2.85,
+    "ETHUSD": -3.23
+   }
+  },
+  "total_pnl": -11.94,
+  "gross_edge": 9.98,
+  "fees": 21.92,
+  "entries_total": 310,
+  "final_eq": 988.0573932340787,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": false,
+   "oos_n": true,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "HTF_Breakout",
+  "variant": 4,
+  "params": {
+   "sl_m": 2.0,
+   "tp_m": 4.0,
+   "trend_min": 0.02
+  },
+  "sides": "long",
+  "is": {
+   "n": 39,
+   "pnl": 2.0214984600333974,
+   "ret_pct": -0.31898458854188183,
+   "wr": 58.97435897435898,
+   "pf": 1.2,
+   "maxdd": 0.64,
+   "per_symbol": {
+    "XRPUSD": -1.37,
+    "ETHUSD": 1.77,
+    "SOLUSD": 1.62
+   },
+   "boot_ci": [
+    -6.19,
+    9.82
+   ]
+  },
+  "oos": {
+   "n": 23,
+   "pnl": 6.453845821438537,
+   "ret_pct": 1.170251940024869,
+   "wr": 52.17391304347826,
+   "pf": 3.0,
+   "maxdd": 0.27,
+   "per_symbol": {
+    "ETHUSD": -0.32,
+    "SOLUSD": 0.88,
+    "XRPUSD": 5.9
+   }
+  },
+  "total_pnl": 8.48,
+  "gross_edge": 12.48,
+  "fees": 4.01,
+  "entries_total": 62,
+  "final_eq": 1008.475344281472,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": true,
+   "is_dd": true,
+   "oos_ret": true,
+   "oos_n": true,
+   "symbols": true
+  },
+  "passed": false
+ },
+ {
+  "name": "MomentumRetrace_RSI",
+  "variant": 4,
+  "params": {
+   "sl_m": 2.0,
+   "tp_m": 2.5,
+   "trend_min": 0.03,
+   "rsi15_low": 48,
+   "rsi15_high": 52
+  },
+  "sides": "long",
+  "is": {
+   "n": 166,
+   "pnl": -4.0878497751012635,
+   "ret_pct": -0.5591634314328742,
+   "wr": 53.01204819277109,
+   "pf": 0.9,
+   "maxdd": 1.38,
+   "per_symbol": {
+    "SOLUSD": 7.17,
+    "XRPUSD": -5.01,
+    "ETHUSD": -6.24
+   },
+   "boot_ci": [
+    -18.53,
+    10.74
+   ]
+  },
+  "oos": {
+   "n": 87,
+   "pnl": -4.440072688754409,
+   "ret_pct": -0.29527991224228556,
+   "wr": 45.97701149425287,
+   "pf": 0.74,
+   "maxdd": 0.91,
+   "per_symbol": {
+    "XRPUSD": -0.18,
+    "SOLUSD": -3.45,
+    "ETHUSD": -0.81
+   }
+  },
+  "total_pnl": -8.53,
+  "gross_edge": 9.96,
+  "fees": 18.48,
+  "entries_total": 253,
+  "final_eq": 991.4720775361446,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": false,
+   "oos_n": true,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "VolatilityExpansion",
+  "variant": 4,
+  "params": {
+   "sl_m": 1.8,
+   "tp_m": 3.5,
+   "trend_min": 0.03,
+   "atr_mult": 2.0,
+   "vol_mult": 1.5
+  },
+  "sides": "long",
+  "is": {
+   "n": 1,
+   "pnl": 0.3145308538345562,
+   "ret_pct": 0.0,
+   "wr": 100.0,
+   "pf": 0.0,
+   "maxdd": 0.0,
+   "per_symbol": {
+    "ETHUSD": 0.31
+   },
+   "boot_ci": [
+    0.31,
+    0.31
+   ]
+  },
+  "oos": {
+   "n": 5,
+   "pnl": 0.06653831367758323,
+   "ret_pct": 0.038106916751212694,
+   "wr": 60.0,
+   "pf": 1.03,
+   "maxdd": 0.21,
+   "per_symbol": {
+    "ETHUSD": -0.35,
+    "SOLUSD": -0.81,
+    "XRPUSD": 1.23
+   }
+  },
+  "total_pnl": 0.38,
+  "gross_edge": 0.78,
+  "fees": 0.4,
+  "entries_total": 6,
+  "final_eq": 1000.3810691675122,
+  "checks": {
+   "is_ret": false,
+   "is_n": false,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": true,
+   "oos_n": false,
+   "symbols": false
+  },
+  "passed": false
+ },
+ {
+  "name": "SwingPullback_1h",
+  "variant": 4,
+  "params": {
+   "sl_m": 1.5,
+   "tp_m": 4.0,
+   "trend_min": 0.05
+  },
+  "sides": "long",
+  "is": {
+   "n": 193,
+   "pnl": -14.673523079372188,
+   "ret_pct": -1.8908665597727303,
+   "wr": 48.18652849740933,
+   "pf": 0.72,
+   "maxdd": 2.41,
+   "per_symbol": {
+    "SOLUSD": 0.75,
+    "XRPUSD": -11.55,
+    "ETHUSD": -3.88
+   },
+   "boot_ci": [
+    -30.55,
+    1.1
+   ]
+  },
+  "oos": {
+   "n": 93,
+   "pnl": -11.363388524910096,
+   "ret_pct": -0.7265629362527504,
+   "wr": 38.70967741935484,
+   "pf": 0.51,
+   "maxdd": 1.34,
+   "per_symbol": {
+    "XRPUSD": -1.31,
+    "SOLUSD": -6.02,
+    "ETHUSD": -4.04
+   }
+  },
+  "total_pnl": -26.04,
+  "gross_edge": -6.36,
+  "fees": 19.68,
+  "entries_total": 286,
+  "final_eq": 973.9630883957182,
+  "checks": {
+   "is_ret": false,
+   "is_n": true,
+   "is_pf": false,
+   "is_dd": true,
+   "oos_ret": false,
+   "oos_n": true,
+   "symbols": false
+  },
+  "passed": false
+ }
+]

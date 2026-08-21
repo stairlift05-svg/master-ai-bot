@@ -1,0 +1,275 @@
+[
+ {
+  "name": "A_HTFBreakout_long",
+  "net": 7.02,
+  "final_eq": 1007.0179079794244,
+  "ret_pct": 0.7017907979424365,
+  "max_dd": 1.1323477189084732,
+  "n": 114,
+  "wr": 53.5,
+  "pf": 1.19,
+  "halted_frac": 0.0,
+  "is": {
+   "n": 64,
+   "pnl": 7.1138650939410235,
+   "ret_pct": -0.6036814354923314,
+   "wr": 60.9375,
+   "pf": 1.36,
+   "maxdd": 1.13,
+   "per_symbol": {
+    "AVAXUSD": -0.13,
+    "XRPUSD": -1.78,
+    "ETHUSD": 0.83,
+    "SOLUSD": 0.11,
+    "ADAUSD": 7.07,
+    "DOGEUSD": -2.13,
+    "LINKUSD": 3.33,
+    "DOTUSD": -0.17
+   },
+   "boot_ci": [
+    -6.07,
+    20.16
+   ]
+  },
+  "oos": {
+   "n": 50,
+   "pnl": -0.09595711451632125,
+   "ret_pct": 1.3134009913933875,
+   "wr": 44.0,
+   "pf": 0.99,
+   "maxdd": 0.97,
+   "per_symbol": {
+    "ADAUSD": 0.55,
+    "DOTUSD": 1.35,
+    "AVAXUSD": -1.57,
+    "ETHUSD": -1.18,
+    "SOLUSD": -1.73,
+    "LINKUSD": 1.67,
+    "DOGEUSD": 2.53,
+    "XRPUSD": -1.72
+   }
+  },
+  "per_symbol": {
+   "HTF_Breakout": {
+    "n": 114,
+    "pnl": 7.02,
+    "wins": 61,
+    "win_rate": 53.5
+   }
+  },
+  "secs": 101
+ },
+ {
+  "name": "B_MeanRev_v3",
+  "net": -6.46,
+  "final_eq": 993.5357850862464,
+  "ret_pct": -0.6464214913753596,
+  "max_dd": 0.7438089116138883,
+  "n": 47,
+  "wr": 29.8,
+  "pf": 0.48,
+  "halted_frac": 0.0,
+  "is": {
+   "n": 29,
+   "pnl": -3.8061384317032836,
+   "ret_pct": -0.38061384317031877,
+   "wr": 27.586206896551722,
+   "pf": 0.53,
+   "maxdd": 0.5,
+   "per_symbol": {
+    "SOLUSD": 1.34,
+    "ADAUSD": -1.58,
+    "XRPUSD": -0.72,
+    "AVAXUSD": -1.19,
+    "DOTUSD": 0.24,
+    "DOGEUSD": -0.78,
+    "LINKUSD": -0.78,
+    "ETHUSD": -0.35
+   },
+   "boot_ci": [
+    -8.27,
+    1.21
+   ]
+  },
+  "oos": {
+   "n": 18,
+   "pnl": -2.658076482050121,
+   "ret_pct": -0.26682321429544187,
+   "wr": 33.33333333333333,
+   "pf": 0.38,
+   "maxdd": 0.28,
+   "per_symbol": {
+    "AVAXUSD": -1.05,
+    "SOLUSD": -0.37,
+    "LINKUSD": -0.36,
+    "DOGEUSD": -0.36,
+    "DOTUSD": -0.51
+   }
+  },
+  "per_symbol": {
+   "MeanReversion_BB": {
+    "n": 47,
+    "pnl": -6.46,
+    "wins": 14,
+    "win_rate": 29.8
+   }
+  },
+  "secs": 98
+ },
+ {
+  "name": "C_Combined",
+  "net": -15.23,
+  "final_eq": 984.7737335920796,
+  "ret_pct": -1.5226266407920463,
+  "max_dd": 2.769811440728613,
+  "n": 215,
+  "wr": 45.6,
+  "pf": 0.8,
+  "halted_frac": 0.0,
+  "is": {
+   "n": 134,
+   "pnl": -6.6698878493641285,
+   "ret_pct": -2.0296251958774048,
+   "wr": 48.507462686567166,
+   "pf": 0.86,
+   "maxdd": 2.13,
+   "per_symbol": {
+    "SOLUSD": 0.23,
+    "ETHUSD": -0.59,
+    "XRPUSD": -7.04,
+    "AVAXUSD": -0.29,
+    "ADAUSD": 3.07,
+    "DOTUSD": -2.12,
+    "DOGEUSD": -1.65,
+    "LINKUSD": 1.72
+   },
+   "boot_ci": [
+    -24.53,
+    11.13
+   ]
+  },
+  "oos": {
+   "n": 81,
+   "pnl": -8.556378558555854,
+   "ret_pct": 0.5175019041205431,
+   "wr": 40.74074074074074,
+   "pf": 0.7,
+   "maxdd": 1.0,
+   "per_symbol": {
+    "AVAXUSD": -2.86,
+    "SOLUSD": -3.1,
+    "XRPUSD": -3.42,
+    "ETHUSD": -2.09,
+    "DOGEUSD": 0.78,
+    "ADAUSD": 0.44,
+    "DOTUSD": 0.48,
+    "LINKUSD": 1.21
+   }
+  },
+  "per_symbol": {
+   "HTF_Breakout": {
+    "n": 186,
+    "pnl": -14.01,
+    "wins": 86,
+    "win_rate": 46.2
+   },
+   "MeanReversion_BB": {
+    "n": 29,
+    "pnl": -1.22,
+    "wins": 12,
+    "win_rate": 41.4
+   }
+  },
+  "secs": 95
+ },
+ {
+  "name": "D_AllDefaults",
+  "net": -7.04,
+  "final_eq": 992.9568436505789,
+  "ret_pct": -0.7043156349421098,
+  "max_dd": 3.4307871592386228,
+  "n": 580,
+  "wr": 48.8,
+  "pf": 0.95,
+  "halted_frac": 0.0,
+  "is": {
+   "n": 420,
+   "pnl": 6.443531609578532,
+   "ret_pct": -0.5724085519077327,
+   "wr": 52.38095238095239,
+   "pf": 1.06,
+   "maxdd": 2.59,
+   "per_symbol": {
+    "ADAUSD": 3.99,
+    "DOGEUSD": 2.5,
+    "SOLUSD": -3.33,
+    "ETHUSD": 1.08,
+    "XRPUSD": -0.55,
+    "AVAXUSD": 0.39,
+    "DOTUSD": 2.51,
+    "LINKUSD": -0.14
+   },
+   "boot_ci": [
+    -19.57,
+    31.79
+   ]
+  },
+  "oos": {
+   "n": 160,
+   "pnl": -13.486687958999129,
+   "ret_pct": -0.1326664772959396,
+   "wr": 39.375,
+   "pf": 0.69,
+   "maxdd": 1.13,
+   "per_symbol": {
+    "XRPUSD": 0.91,
+    "DOGEUSD": -8.48,
+    "ETHUSD": -2.98,
+    "SOLUSD": 1.46,
+    "ADAUSD": -3.0,
+    "DOTUSD": 1.5,
+    "LINKUSD": 0.26,
+    "AVAXUSD": -3.17
+   }
+  },
+  "per_symbol": {
+   "SwingPullback_1h": {
+    "n": 127,
+    "pnl": 3.74,
+    "wins": 73,
+    "win_rate": 57.5
+   },
+   "HTF_Breakout": {
+    "n": 38,
+    "pnl": 0.44,
+    "wins": 19,
+    "win_rate": 50.0
+   },
+   "TrendPullback_HTF": {
+    "n": 311,
+    "pnl": -6.53,
+    "wins": 139,
+    "win_rate": 44.7
+   },
+   "MomentumRetrace_RSI": {
+    "n": 96,
+    "pnl": -2.65,
+    "wins": 49,
+    "win_rate": 51.0
+   },
+   "VolatilityExpansion": {
+    "n": 5,
+    "pnl": -1.88,
+    "wins": 2,
+    "win_rate": 40.0
+   },
+   "MeanReversion_BB": {
+    "n": 3,
+    "pnl": -0.16,
+    "wins": 1,
+    "win_rate": 33.3
+   }
+  },
+  "secs": 94
+ }
+]

@@ -119,6 +119,11 @@ class OrderExecutor:
             return None
         self._validator.validate(symbol, signal.side, size.qty, price, size.notional)
 
+        # 4b) Daily trade budget.
+        if self._risk.daily_entries_left() <= 0:
+            self._state.record_missed_signal(f"{symbol} {signal.strategy} -> daily budget reached")
+            return None
+
         # 5) Place the order.
         client_oid = uuid.uuid4().hex[:24] if self._settings.send_client_oid else ""
         try:
@@ -149,6 +154,7 @@ class OrderExecutor:
         )
         self._state.add_position(position)
         self._risk.mark_entry(symbol)
+        self._risk.mark_daily_entry()
         self._failure_count.pop(symbol, None)
         await self._db.insert_trade(position)
         await self._tg.send(

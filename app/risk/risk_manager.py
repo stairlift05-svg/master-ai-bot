@@ -32,6 +32,8 @@ class RiskManager:
         self._clock = clock
         self._entry_cooldown: Dict[str, float] = {}       # symbol -> ts
         self._post_close_cooldown: Dict[str, float] = {}  # symbol -> ts
+        self._day = -1
+        self._entries_today = 0
 
     # ------------------------------------------------------------------
     # Halts
@@ -84,6 +86,21 @@ class RiskManager:
         self._post_close_cooldown[symbol] = (
             self._clock() + self._settings.post_close_cooldown_s
         )
+
+    def daily_entries_left(self) -> int:
+        """How many more entries are allowed today (daily trade budget)."""
+        day = int(self._clock() // 86400)
+        if day != self._day:
+            self._day = day
+            self._entries_today = 0
+        return max(0, self._settings.max_daily_entries - self._entries_today)
+
+    def mark_daily_entry(self) -> None:
+        day = int(self._clock() // 86400)
+        if day != self._day:
+            self._day = day
+            self._entries_today = 0
+        self._entries_today += 1
 
     def mark_failure(self, symbol: str, failure_count: int) -> None:
         """Exponential per-symbol failure cooldown (backoff on API errors)."""

@@ -92,3 +92,19 @@ def build_market(symbols: List[str], days: int, seed: int,
             days, base_price=base_prices.get(sym, 1800.0), seed=seed + idx * 7,
         )
     return market
+
+
+def resample(candles_5m: List[Candle], n: int = 3) -> List[Candle]:
+    """Aggregate 5m candles into ``n``-bar candles (15m -> n=3, 1h -> n=12)."""
+    out: List[Candle] = []
+    for i in range(0, len(candles_5m) - n + 1, n):
+        group = candles_5m[i:i + n]
+        out.append(Candle(
+            ts=group[0].ts,
+            o=group[0].o,
+            h=max(c.h for c in group),
+            l=min(c.l for c in group),
+            c=group[-1].c,
+            v=sum(c.v for c in group),
+        ))
+    return out
