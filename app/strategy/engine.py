@@ -24,7 +24,7 @@ from app.strategy.signals import (
 
 log = logging.getLogger("quant.strategy")
 
-MIN_BARS_5M = 260          # enough for a warm 1h EMA50 + 15m indicators
+MIN_BARS_5M = 120          # کافی برای EMA50 روی 5m؛ نیاز ۲۶۰ خیلی سخت‌گیر بود
 LOOKBACKS = {"15m": 24, "1h": 48}
 
 

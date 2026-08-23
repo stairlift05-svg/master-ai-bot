@@ -138,13 +138,13 @@ class TrendPullbackHTF(BaseStrategyV2):
     def evaluate(self, ctx: HtfContext) -> Optional[Signal]:
         p = self.params
         t1, t15 = ctx.tf1, ctx.tf15
-        trend_min = p.get("trend_min", 0.05)
+        trend_min = p.get("trend_min", 0.03)
         if t1.trend == "bullish" and t1.strength >= trend_min:
             # Pullback: 15m dips toward EMA20, then a bullish 5m/15m close.
-            pullback = t15.lows[-1] <= t15.ema20 * 1.012
-            bounce = ctx.candle_bull_5m and t15.closes[-1] > t15.ema20 * 0.998
-            if pullback and bounce and ctx.price > t1.ema20 * 0.985 \
-                    and 30 < t15.rsi < 60:
+            pullback = t15.lows[-1] <= t15.ema20 * 1.02
+            bounce = ctx.candle_bull_5m and t15.closes[-1] > t15.ema20 * 0.995
+            if pullback and bounce and ctx.price > t1.ema20 * 0.98 \
+                    and 28 < t15.rsi < 62:
                 return self._build(
                     ctx, "buy", "1h trend + 15m EMA20 pullback bounce",
                     sl_dist=t15.atr * p.get("sl_m", 2.0),
@@ -152,10 +152,10 @@ class TrendPullbackHTF(BaseStrategyV2):
                     confidence=0.6,
                 )
         if t1.trend == "bearish" and t1.strength >= trend_min:
-            pullback = t15.highs[-1] >= t15.ema20 * 0.988
-            bounce = ctx.candle_bear_5m and t15.closes[-1] < t15.ema20 * 1.002
-            if pullback and bounce and ctx.price < t1.ema20 * 1.015 \
-                    and 40 < t15.rsi < 70:
+            pullback = t15.highs[-1] >= t15.ema20 * 0.98
+            bounce = ctx.candle_bear_5m and t15.closes[-1] < t15.ema20 * 1.005
+            if pullback and bounce and ctx.price < t1.ema20 * 1.02 \
+                    and 38 < t15.rsi < 72:
                 return self._build(
                     ctx, "sell", "1h downtrend + 15m EMA20 pullback rejection",
                     sl_dist=t15.atr * p.get("sl_m", 2.0),
@@ -169,7 +169,11 @@ class TrendPullbackHTF(BaseStrategyV2):
 # Agent B — HTFBreakout
 # ---------------------------------------------------------------------------
 class HTFBreakout(BaseStrategyV2):
-    """1h Donchian breakout in the direction of the 1h trend."""
+    """1h Donchian breakout in the direction of the 1h trend.
+
+    v20.3.1: کمی نرم‌تر — نزدیک سقف/کف (۰.۲٪) هم پذیرفته می‌شود تا
+    سیگنال در بازارهای واقعی از بین نرود.
+    """
 
     name = "HTF_Breakout"
     priority = 2
@@ -177,10 +181,13 @@ class HTFBreakout(BaseStrategyV2):
     def evaluate(self, ctx: HtfContext) -> Optional[Signal]:
         p = self.params
         t1, t15 = ctx.tf1, ctx.tf15
-        trend_min = p.get("trend_min", 0.05)
+        trend_min = p.get("trend_min", 0.02)
+        tol = p.get("break_tol", 0.002)  # 0.2%
         if t1.trend == "bullish" and t1.strength >= trend_min:
-            if t1.closes[-1] > t1.hh * (1.0 - 1e-9) and t15.closes[-1] > t15.hh * 0.999 \
-                    and ctx.price > t1.ema20:
+            near_1h_high = t1.closes[-1] >= t1.hh * (1.0 - tol)
+            near_15_high = t15.closes[-1] >= t15.hh * (1.0 - tol)
+            if near_1h_high and near_15_high and ctx.price > t1.ema20 \
+                    and ctx.candle_bull_5m:
                 return self._build(
                     ctx, "buy", "1h Donchian breakout (bullish)",
                     sl_dist=max(t1.atr * p.get("sl_m", 1.5), t15.atr * 2.0),
@@ -188,8 +195,10 @@ class HTFBreakout(BaseStrategyV2):
                     confidence=0.65,
                 )
         if t1.trend == "bearish" and t1.strength >= trend_min:
-            if t1.closes[-1] < t1.ll * (1.0 + 1e-9) and t15.closes[-1] < t15.ll * 1.001 \
-                    and ctx.price < t1.ema20:
+            near_1h_low = t1.closes[-1] <= t1.ll * (1.0 + tol)
+            near_15_low = t15.closes[-1] <= t15.ll * (1.0 + tol)
+            if near_1h_low and near_15_low and ctx.price < t1.ema20 \
+                    and ctx.candle_bear_5m:
                 return self._build(
                     ctx, "sell", "1h Donchian breakdown (bearish)",
                     sl_dist=max(t1.atr * p.get("sl_m", 1.5), t15.atr * 2.0),
@@ -357,15 +366,15 @@ _STRATEGY_CLASSES: Dict[str, type] = {
 }
 
 DEFAULT_V2_PARAMS: Dict[str, Dict[str, float]] = {
-    "TrendPullback_HTF": {"sl_m": 2.0, "tp_m": 3.0, "trend_min": 0.05},
-    "HTF_Breakout": {"sl_m": 2.0, "tp_m": 4.0, "trend_min": 0.02},
-    "MomentumRetrace_RSI": {"sl_m": 2.0, "tp_m": 2.2, "trend_min": 0.03,
-                            "rsi15_low": 45, "rsi15_high": 55},
+    "TrendPullback_HTF": {"sl_m": 2.0, "tp_m": 3.0, "trend_min": 0.03},
+    "HTF_Breakout": {"sl_m": 2.0, "tp_m": 4.0, "trend_min": 0.015, "break_tol": 0.002},
+    "MomentumRetrace_RSI": {"sl_m": 2.0, "tp_m": 2.2, "trend_min": 0.02,
+                            "rsi15_low": 48, "rsi15_high": 52},
     "MeanReversion_BB": {"sl_m": 1.0, "rsi_low": 35, "rsi_high": 65,
-                         "max_trend": 0.12, "max_bbw": 0.08},
-    "VolatilityExpansion": {"sl_m": 1.8, "tp_m": 2.5, "trend_min": 0.03,
-                            "atr_mult": 1.5, "vol_mult": 1.3},
-    "SwingPullback_1h": {"sl_m": 1.2, "tp_m": 3.0, "trend_min": 0.05},
+                         "max_trend": 0.15, "max_bbw": 0.10},
+    "VolatilityExpansion": {"sl_m": 1.8, "tp_m": 2.5, "trend_min": 0.02,
+                            "atr_mult": 1.35, "vol_mult": 1.2},
+    "SwingPullback_1h": {"sl_m": 1.2, "tp_m": 3.0, "trend_min": 0.03},
 }
 
 

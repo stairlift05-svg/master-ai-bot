@@ -43,11 +43,15 @@ TF_V5: Dict[str, str] = {"1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "2
 DEFAULT_STRATEGY_PARAMS: Dict[str, Dict[str, float]] = {
     k: dict(v) for k, v in _V2_DEFAULTS.items()
 }
-# Strategy names enabled in the live engine (post-screening selection).
-# Think-tank real-data screening: only HTF_Breakout (long-only) was
-# net-positive after costs with the production risk overlay; the rest
-# remain available via the ENABLED_STRATEGIES env var for research.
-DEFAULT_ENABLED_STRATEGIES: tuple = ("HTF_Breakout",)
+# Strategy names enabled in the live engine.
+# v20.3.1: فقط HTF_Breakout خیلی کم سیگنال می‌داد → چند استراتژی
+# باکیفیت فعال شد تا ربات عملاً معامله کند (قابل کنترل با ENABLED_STRATEGIES).
+DEFAULT_ENABLED_STRATEGIES: tuple = (
+    "TrendPullback_HTF",
+    "HTF_Breakout",
+    "MomentumRetrace_RSI",
+    "SwingPullback_1h",
+)
 
 
 def _env_str(name: str, default: str = "") -> str:
@@ -136,8 +140,8 @@ class Settings:
         default_factory=lambda: {k: dict(v) for k, v in DEFAULT_STRATEGY_PARAMS.items()}
     )
     enabled_strategies: Tuple[str, ...] = DEFAULT_ENABLED_STRATEGIES
-    max_daily_entries: int = 8
-    sides: str = "long"          # validated long-only; "both"/"short" via SIDES
+    max_daily_entries: int = 12
+    sides: str = "both"          # long+short؛ برای فقط long: SIDES=long
 
     # ---- Position management (trailing / partial) -------------------------
     partial_tp: bool = True
@@ -156,8 +160,8 @@ class Settings:
     ohlcv_pause_s: float = 1.2
     sync_interval_s: float = 60.0
     price_interval_s: float = 15.0
-    entry_cooldown_s: float = 3600.0
-    post_close_cooldown_s: float = 1200.0
+    entry_cooldown_s: float = 900.0   # 15m (قبلاً 1h — مانع معاملات پشت‌سرهم)
+    post_close_cooldown_s: float = 600.0
     error_cooldown_base_s: float = 120.0
     error_cooldown_max_s: float = 1800.0
     ghost_miss_limit: int = 3
@@ -267,15 +271,15 @@ class Settings:
             ohlcv_pause_s=_env_float("OHLCV_PAUSE", 1.2, 0, 30),
             sync_interval_s=_env_float("SYNC_INTERVAL", 60, 10, 3600),
             price_interval_s=_env_float("PRICE_INTERVAL", 15, 3, 300),
-            entry_cooldown_s=_env_float("ENTRY_COOLDOWN", 3600, 60, 86400),
-            max_daily_entries=_env_int("MAX_DAILY_ENTRIES", 8, 1, 200),
-            sides=_env_str("SIDES", "long").lower(),
+            entry_cooldown_s=_env_float("ENTRY_COOLDOWN", 900, 60, 86400),
+            max_daily_entries=_env_int("MAX_DAILY_ENTRIES", 12, 1, 200),
+            sides=_env_str("SIDES", "both").lower(),
             enabled_strategies=tuple(
                 s.strip() for s in _env_str(
                     "ENABLED_STRATEGIES", ",".join(DEFAULT_ENABLED_STRATEGIES)
                 ).split(",") if s.strip()
             ),
-            post_close_cooldown_s=_env_float("POST_CLOSE_COOLDOWN", 1200, 0, 86400),
+            post_close_cooldown_s=_env_float("POST_CLOSE_COOLDOWN", 600, 0, 86400),
             error_cooldown_base_s=_env_float("ERROR_COOLDOWN_BASE", 120, 5, 3600),
             error_cooldown_max_s=_env_float("ERROR_COOLDOWN_MAX", 1800, 60, 86400),
             ghost_miss_limit=_env_int("GHOST_MISS_LIMIT", 3, 1, 20),
