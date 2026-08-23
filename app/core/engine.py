@@ -273,6 +273,11 @@ class QuantEngine:
             sym, result.action, result.strategy, result.reason,
             self.prices.get(sym, 0.0), result.rsi, result.atr, result.htf,
         )
+        log.info(
+            "SCAN %s action=%s strategy=%s reason=%s bars=%d/%d/%d",
+            sym, result.action, result.strategy or "-", result.reason,
+            len(candles5), len(candles15), len(candles1),
+        )
         if result.signal is not None:
             await self.executor.try_open(sym, result.signal)
 

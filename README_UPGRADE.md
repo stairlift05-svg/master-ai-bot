@@ -290,3 +290,22 @@ trading evidence passes pre-registered acceptance thresholds.
   lookups for all 5m/1h success/failure counters.
 - Added a regression test that generates a complete report from a
   success-only counter. Suite total: **22 passing tests**.
+
+### v20.3 critical trading-liveness fix — 2026-08-23
+
+Root cause of "engine runs but never trades": live configuration fetched only
+100 primary candles while `StrategyEngine` requires 260 closed candles and
+removes the forming candle. Every analysis therefore returned `insufficient
+data`; no strategy could ever emit a signal.
+
+- Raised primary history to 300 bars and 1h history to 220 bars.
+- Added `CANDLE_LIMIT_5M` / `CANDLE_LIMIT_1H` environment controls with safe
+  lower bounds.
+- Added startup configuration validation rejecting an impossible primary
+  limit below 261.
+- Added per-symbol `SCAN` diagnostics with action, strategy, reason, and bar
+  counts, making signal inactivity observable.
+- Added two cross-module regression tests. Suite total: **24 passing tests**.
+
+This fix makes signal generation reachable; it does not force trades when the
+validated strategy has no market setup or a risk gate blocks entry.

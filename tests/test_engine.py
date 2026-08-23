@@ -31,6 +31,22 @@ from app.strategy import indicators as ind  # noqa: E402
 S = Settings()
 
 
+class TestConfiguration(unittest.TestCase):
+    """Cross-module configuration invariants."""
+
+    def test_live_candle_limit_can_satisfy_strategy_warmup(self):
+        from app.strategy.engine import MIN_BARS_5M
+
+        self.assertGreaterEqual(S.candle_limit_5m - 1, MIN_BARS_5M)
+
+    def test_rejects_impossible_candle_limit(self):
+        from dataclasses import replace
+        from app.errors import ConfigError
+
+        with self.assertRaises(ConfigError):
+            replace(S, candle_limit_5m=100).validate()
+
+
 class TestIndicators(unittest.TestCase):
     def test_rsi_bounds_and_tail(self):
         closes = [100.0 + i * 0.1 for i in range(80)]

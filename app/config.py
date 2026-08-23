@@ -163,8 +163,10 @@ class Settings:
     ghost_miss_limit: int = 3
 
     # ---- Data feed (#06) --------------------------------------------------
-    candle_limit_5m: int = 100
-    candle_limit_1h: int = 50
+    # StrategyEngine drops the forming bar and requires 260 closed 5m bars.
+    # Fetch at least 300 so the strategy can ever leave warm-up.
+    candle_limit_5m: int = 300
+    candle_limit_1h: int = 220
     close_on_data_stall: bool = True
     data_stall_grace_s: float = 600.0
 
@@ -215,6 +217,12 @@ class Settings:
                 raise ConfigError(f"Unknown symbol {sym!r}; allowed: {sorted(SYMBOL_MAP)}")
         if self.timeframe not in TF_V5 or self.htf_timeframe not in TF_V5:
             raise ConfigError(f"Unsupported timeframes {self.timeframe}/{self.htf_timeframe}")
+        # StrategyEngine needs 260 closed primary bars and drops the forming
+        # candle in live mode. A lower fetch limit makes trading impossible.
+        if self.candle_limit_5m < 261:
+            raise ConfigError("CANDLE_LIMIT_5M must be >= 261 for strategy warm-up")
+        if self.candle_limit_1h < 50:
+            raise ConfigError("CANDLE_LIMIT_1H must be >= 50")
 
     # ------------------------------------------------------------------
     @classmethod
@@ -271,6 +279,8 @@ class Settings:
             error_cooldown_base_s=_env_float("ERROR_COOLDOWN_BASE", 120, 5, 3600),
             error_cooldown_max_s=_env_float("ERROR_COOLDOWN_MAX", 1800, 60, 86400),
             ghost_miss_limit=_env_int("GHOST_MISS_LIMIT", 3, 1, 20),
+            candle_limit_5m=_env_int("CANDLE_LIMIT_5M", 300, 261, 1000),
+            candle_limit_1h=_env_int("CANDLE_LIMIT_1H", 220, 50, 1000),
             close_on_data_stall=_env_bool("CLOSE_ON_DATA_STALL", True),
             data_stall_grace_s=_env_float("DATA_STALL_GRACE", 600, 60, 86400),
             adapt_enabled=_env_bool("ADAPTIVE_RISK", True),
