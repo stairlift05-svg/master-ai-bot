@@ -228,7 +228,8 @@ class Position:
         return (self.entry - price) * self.qty
 
     def pnl_pct(self, price: float) -> float:
-        if self.entry <= 0:
+        """Return unrealized PnL as notional percentage, safely for zero qty."""
+        if self.entry <= 0 or self.qty <= 0:
             return 0.0
         return (self.unrealized_pnl(price) / (self.entry * self.qty)) * 100.0
 

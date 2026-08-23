@@ -22,6 +22,8 @@ from app.models import Candle, CandleSeries, Position  # noqa: E402
 from app.optimization.optimizer import AdaptiveRisk, PortfolioLimits  # noqa: E402
 from app.risk.position_sizer import PositionSizer  # noqa: E402
 from app.risk.risk_manager import RiskManager  # noqa: E402
+from app.security.validation import OrderValidator  # noqa: E402
+from app.errors import OrderRejectedError  # noqa: E402
 from app.state import EngineState  # noqa: E402
 from app.strategy import indicators as ind  # noqa: E402
 
@@ -78,6 +80,23 @@ class TestPositionSizer(unittest.TestCase):
         size = sizer.compute("ETHUSD", 1800.0, 1790.0, 5000.0)
         self.assertTrue(size.ok)
         self.assertLessEqual(size.notional, S.max_notional_usd + 1e-6)
+
+
+class TestOrderValidation(unittest.TestCase):
+    """Verify that malformed financial values cannot bypass hard limits."""
+
+    def test_rejects_non_finite_values(self):
+        validator = OrderValidator(S)
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value), self.assertRaises(OrderRejectedError):
+                validator.validate("ETHUSD", "buy", value, 100.0, 100.0)
+
+    def test_rejects_inconsistent_notional(self):
+        with self.assertRaises(OrderRejectedError):
+            OrderValidator(S).validate("ETHUSD", "buy", 2.0, 100.0, 100.0)
+
+    def test_accepts_consistent_order(self):
+        OrderValidator(S).validate("ETHUSD", "buy", 0.1, 100.0, 10.0)
 
 
 class TestRiskGates(unittest.TestCase):

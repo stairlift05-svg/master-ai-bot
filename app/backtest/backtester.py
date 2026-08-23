@@ -57,7 +57,8 @@ class BacktestPosition:
         return (self.entry - price) * self.qty
 
     def pnl_pct(self, price: float) -> float:
-        if self.entry <= 0:
+        """Return unrealized PnL percentage without division-by-zero risk."""
+        if self.entry <= 0 or self.qty <= 0:
             return 0.0
         return self.unrealized(price) / (self.entry * self.qty) * 100.0
 

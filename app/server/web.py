@@ -62,6 +62,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 <div id="positions"></div>
 <div style="margin-top:16px" id="errors"></div>
 <script>
+const esc = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({
+  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+}[c]));
 async function refresh(){
   try{
     const d = await (await fetch('/api/status')).json();
@@ -84,13 +87,14 @@ async function refresh(){
     let html = '<table><tr><th>Symbol</th><th>Side</th><th>Strategy</th><th>Entry</th><th>Qty</th><th>PnL</th></tr>';
     for(const p of Object.values(ps)){
       const cls = p.upnl>=0?'pos':'neg';
-      html += `<tr><td>${p.symbol}</td><td>${p.side.toUpperCase()}</td>
-        <td>${p.strategy||''}</td><td class="mono">${(+p.entry).toFixed(4)}</td>
+      html += `<tr><td>${esc(p.symbol)}</td><td>${esc(String(p.side||'').toUpperCase())}</td>
+        <td>${esc(p.strategy)}</td><td class="mono">${(+p.entry).toFixed(4)}</td>
         <td>${(+p.qty).toFixed(4)}</td><td class="${cls}">$${(+p.upnl).toFixed(2)}</td></tr>`;
     }
     document.getElementById('positions').innerHTML =
       html+'</table>' + (Object.keys(ps).length===0? '<div class="sub">(flat)</div>':'');
-    const errs = (d.recent_errors||[]).slice(-6).map(e=>'<div class="err">'+e+'</div>').join('');
+    const errs = (d.recent_errors||[]).slice(-6)
+      .map(e=>'<div class="err">'+esc(e)+'</div>').join('');
     document.getElementById('errors').innerHTML = errs;
   }catch(e){ /* transient */ }
 }

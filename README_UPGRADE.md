@@ -251,3 +251,34 @@ live funding. Full details: `analysis/STRATEGY_SCREENING_REPORT.md`.
 
 *Files: `PROCESS_LOG.md` (full review process, bug reports, iteration loop),
 `tests/` (unit + smoke), `reports/backtest_report.txt` (latest run).*
+
+---
+
+## v20.2 independent hardening audit — 2026-08-23
+
+A repository-level review identified and corrected additional defects that were
+not covered by the original upgrade cycle:
+
+1. **Security / order validation:** `NaN` and infinity could bypass ordinary
+   numeric comparisons in the pre-trade gate. All quantity, price, and
+   notional values must now be finite; the validator independently recomputes
+   `qty * price` and rejects inconsistent caller-supplied notionals.
+2. **Dashboard security:** dynamic strategy names, symbols, and error messages
+   are HTML-escaped before insertion, preventing stored/reflected DOM XSS.
+3. **Mathematical safety:** live and backtest position-return helpers now
+   handle zero quantity without division by zero.
+4. **Secret hygiene:** the accidentally tracked `.env` file was removed from
+   the repository. `.env.example` remains the only committed environment
+   template; runtime `.env` is ignored.
+5. **Regression coverage:** tests were added for non-finite order inputs,
+   inconsistent notionals, and valid-order acceptance. The suite now contains
+   21 passing unit tests.
+
+### Validation outcome
+
+Engineering tests validate deterministic invariants, not profitability. The
+existing real-data evidence does **not** establish a deployable edge: the
+selected candidate's out-of-sample profit factor is approximately `0.99`, and
+its reported bootstrap interval crosses zero. Consequently, live-capital mode
+must remain disabled until fresh, leakage-controlled walk-forward and paper
+trading evidence passes pre-registered acceptance thresholds.
