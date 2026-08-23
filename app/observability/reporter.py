@@ -65,9 +65,14 @@ async def build_txt_report(state: EngineState, db: Database, settings: Settings,
     lines += ["└────────────────────────────────────────────────────────────────────────", "",
               "┌─ 3. DATA (candles: AriaX -> Bybit -> OKX -> Binance) ───────────────"]
     for sym in settings.symbols:
-        s = st["fetch_stats"].get(sym, {"ok_5m": 0, "fail_5m": 0, "ok_1h": 0, "fail_1h": 0})
-        lines.append(f"│  {sym:<12} 5m {s['ok_5m']}/{s['fail_5m']}  "
-                     f"1h {s['ok_1h']}/{s['fail_1h']}")
+        # A symbol may have only successes (or only failures) so its sparse
+        # counter need not contain every key. Never index health counters
+        # directly: Telegram report generation must remain total.
+        s = st["fetch_stats"].get(sym, {})
+        lines.append(
+            f"│  {sym:<12} 5m {s.get('ok_5m', 0)}/{s.get('fail_5m', 0)}  "
+            f"1h {s.get('ok_1h', 0)}/{s.get('fail_1h', 0)}"
+        )
     lines += ["└────────────────────────────────────────────────────────────────────────", "",
               "┌─ 4. CLOSED ────────────────────────────────────────────────────────────"]
     if not closed:

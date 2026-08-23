@@ -282,3 +282,11 @@ selected candidate's out-of-sample profit factor is approximately `0.99`, and
 its reported bootstrap interval crosses zero. Consequently, live-capital mode
 must remain disabled until fresh, leakage-controlled walk-forward and paper
 trading evidence passes pre-registered acceptance thresholds.
+
+### v20.2.1 hotfix — Telegram report (`cmd_txt`)
+
+- Fixed `KeyError: 'fail_5m'` when a symbol's sparse feed-health counter had
+  recorded successes but no failures. Report rendering now uses zero-defaulted
+  lookups for all 5m/1h success/failure counters.
+- Added a regression test that generates a complete report from a
+  success-only counter. Suite total: **22 passing tests**.

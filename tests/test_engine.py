@@ -20,6 +20,7 @@ from app.config import Settings  # noqa: E402
 from app.execution.watchdog import PositionWatchdog  # noqa: E402
 from app.models import Candle, CandleSeries, Position  # noqa: E402
 from app.optimization.optimizer import AdaptiveRisk, PortfolioLimits  # noqa: E402
+from app.observability.reporter import build_txt_report  # noqa: E402
 from app.risk.position_sizer import PositionSizer  # noqa: E402
 from app.risk.risk_manager import RiskManager  # noqa: E402
 from app.security.validation import OrderValidator  # noqa: E402
@@ -244,6 +245,33 @@ class TestDataStall(unittest.TestCase):
         reason = asyncio.run(watchdog._evaluate(  # noqa: SLF001
             pos, lambda s: (0.0, 99999.0), lambda s: 0.0))
         self.assertEqual(reason, "DataStall")
+
+
+class TestReporter(unittest.TestCase):
+    """Regression tests for sparse feed-health counters."""
+
+    def test_report_accepts_success_only_counter(self):
+        from types import SimpleNamespace
+
+        class FakeDatabase:
+            async def get_recent_decisions(self, limit):
+                return []
+
+            async def get_closed_trades(self, limit):
+                return []
+
+            async def compute_metrics(self):
+                return SimpleNamespace(
+                    total_trades=0, win_rate=0.0, profit_factor=0.0,
+                    expectancy=0.0, total_pnl=0.0, max_dd_pct=0.0,
+                    sharpe=0.0,
+                )
+
+        state = EngineState()
+        state.record_fetch("ETHUSD", "5m", True)
+        report = asyncio.run(build_txt_report(state, FakeDatabase(), S, {}, {}))
+        self.assertIn("5m 1/0", report)
+        self.assertIn("1h 0/0", report)
 
 
 class TestCandleSeries(unittest.TestCase):
