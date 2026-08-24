@@ -121,7 +121,11 @@ class RiskManager:
             return False, "engine paused"
         if len(positions) >= s.max_positions:
             return False, f"max positions {s.max_positions} reached"
-        agg = sum(p.qty * price for p in positions.values()) + proposed_notional
+        open_notional = sum(
+            max(0.0, p.qty) * (p.entry if p.entry > 0 else price)
+            for p in positions.values()
+        )
+        agg = open_notional + proposed_notional
         if agg > s.max_agg_notional_usd:
             return False, (f"aggregate notional ${agg:.2f} would exceed "
                            f"${s.max_agg_notional_usd:.2f}")
@@ -132,8 +136,12 @@ class RiskManager:
     # ------------------------------------------------------------------
     @staticmethod
     def funding_blocked(side: str, funding_pct: float,
-                        threshold: float = 0.30) -> Tuple[bool, str]:
-        """Block entries that *pay* heavy funding (funding drag protection)."""
+                        threshold: float = 1.0) -> Tuple[bool, str]:
+        """Block entries that *pay* heavy funding (funding drag protection).
+
+        Default threshold 1.0% (was 0.30%) — AriaX testnet often reports
+        \~0.75% which was blocking almost every long entry.
+        """
         if abs(funding_pct) < threshold:
             return False, ""
         pays = (side == "buy" and funding_pct > 0) or (side == "sell" and funding_pct < 0)
