@@ -85,19 +85,46 @@ class PositionSizer:
         step = meta.step if meta else 0.0
         min_qty = meta.min_qty if meta else 0.0
         qty = quantize(raw_qty, step)
-        if min_qty > 0 and 0 < qty < min_qty:
-            qty = min_qty
-        elif qty < 1e-12:
+        if qty < 1e-12:
             return SizeOutcome(False, reason="qty quantized to 0")
+
+        # اگر min_qty بزرگ‌تر از بودجه ریسک باشد، معامله را رد کن
+        # (قبلاً qty=min_qty می‌شد و notional منفجر می‌شد → $40k+)
+        if min_qty > 0 and qty < min_qty:
+            min_notional = min_qty * price
+            if min_notional > s.max_notional_usd * 1.05:
+                return SizeOutcome(
+                    False, reason=f"min_qty notional ${min_notional:.2f} > max ${s.max_notional_usd:.2f}",
+                )
+            if min_notional / s.leverage > free_balance * s.margin_util_cap:
+                return SizeOutcome(
+                    False, reason=f"min_qty margin exceeds free ${free_balance:.2f}",
+                )
+            qty = min_qty
 
         notional = qty * price
         margin = notional / s.leverage
+
+        # سقف سخت بعد از quantize (جلوگیری از notionalهای عجیب)
+        if notional > s.max_notional_usd * 1.05:
+            qty = quantize(s.max_notional_usd / price, step)
+            if min_qty > 0 and 0 < qty < min_qty:
+                return SizeOutcome(
+                    False, reason=f"cannot fit max notional with min_qty={min_qty}",
+                )
+            notional = qty * price
+            margin = notional / s.leverage
 
         # ---- refuse rather than over-risk -----------------------------
         if notional < s.min_order_usd:
             return SizeOutcome(
                 False, qty=qty, notional=notional, margin=margin, risk_usd=risk_usd,
                 reason=f"notional ${notional:.2f} < min ${s.min_order_usd:.2f}",
+            )
+        if notional > s.max_notional_usd * 1.05:
+            return SizeOutcome(
+                False, qty=qty, notional=notional, margin=margin, risk_usd=risk_usd,
+                reason=f"notional ${notional:.2f} > max ${s.max_notional_usd:.2f}",
             )
         if margin > free_balance * s.margin_util_cap:
             return SizeOutcome(
