@@ -217,30 +217,14 @@ class Database:
             ) as cur:
                 equity_rows = [r[0] for r in await cur.fetchall()]
 
-        metrics = Metrics()
         if not rows:
-            return metrics
+            return Metrics()
         pnls = [r["pnl"] for r in rows]
         holds = [r["hold_seconds"] or 0 for r in rows]
         wins = [p for p in pnls if p > 0]
         losses = [p for p in pnls if p <= 0]
         gross_profit = sum(wins)
         gross_loss = abs(sum(losses))
-
-        metrics.total_trades = len(pnls)
-        metrics.wins = len(wins)
-        metrics.losses = len(losses)
-        metrics.win_rate = round(len(wins) / len(pnls) * 100.0, 1)
-        metrics.total_pnl = round(sum(pnls), 2)
-        metrics.gross_profit = round(gross_profit, 2)
-        metrics.gross_loss = round(gross_loss, 2)
-        metrics.profit_factor = (
-            round(gross_profit / gross_loss, 2) if gross_loss > 0 else 0.0
-        )
-        metrics.expectancy = round(sum(pnls) / len(pnls), 4)
-        metrics.avg_win = round(gross_profit / len(wins), 4) if wins else 0.0
-        metrics.avg_loss = round(-gross_loss / len(losses), 4) if losses else 0.0
-        metrics.avg_hold_s = round(statistics.fmean(holds), 1) if holds else 0.0
 
         # Max drawdown from the equity curve (point-in-time peak tracking).
         peak: float = 0.0
@@ -251,9 +235,9 @@ class Database:
             peak = max(peak, bal)
             if peak > 0:
                 max_dd = max(max_dd, (peak - bal) / peak * 100.0)
-        metrics.max_dd_pct = round(max_dd, 2)
 
         # Simple Sharpe proxy from per-sample equity returns (annualised 365d).
+        sharpe = 0.0
         if len(equity_rows) > 2:
             returns = [
                 (equity_rows[i] / equity_rows[i - 1]) - 1.0
@@ -261,11 +245,30 @@ class Database:
                 if equity_rows[i - 1] not in (None, 0)
             ]
             if len(returns) > 2 and statistics.stdev(returns) > 1e-12:
-                metrics.sharpe = round(
+                sharpe = round(
                     statistics.fmean(returns) / statistics.stdev(returns)
                     * (365.0 * 24.0 * 60.0) ** 0.5, 2,
                 )
-        return metrics
+
+        # Metrics is frozen — build once with kwargs (no field assignment).
+        return Metrics(
+            total_trades=len(pnls),
+            wins=len(wins),
+            losses=len(losses),
+            win_rate=round(len(wins) / len(pnls) * 100.0, 1),
+            total_pnl=round(sum(pnls), 2),
+            gross_profit=round(gross_profit, 2),
+            gross_loss=round(gross_loss, 2),
+            profit_factor=(
+                round(gross_profit / gross_loss, 2) if gross_loss > 0 else 0.0
+            ),
+            expectancy=round(sum(pnls) / len(pnls), 4),
+            avg_win=round(gross_profit / len(wins), 4) if wins else 0.0,
+            avg_loss=round(-gross_loss / len(losses), 4) if losses else 0.0,
+            max_dd_pct=round(max_dd, 2),
+            sharpe=sharpe,
+            avg_hold_s=round(statistics.fmean(holds), 1) if holds else 0.0,
+        )
 
     async def update_analytics(self, state: EngineState) -> Metrics:
         """Compute metrics and publish them to shared state."""
