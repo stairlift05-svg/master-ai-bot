@@ -309,3 +309,31 @@ data`; no strategy could ever emit a signal.
 
 This fix makes signal generation reachable; it does not force trades when the
 validated strategy has no market setup or a risk gate blocks entry.
+
+### v20.4 live incident audit — 2026-08-24
+
+The submitted production report exposed two independent liveness/accounting
+failures:
+
+1. **Truncated candle batches:** the feed considered any 30-bar response
+   successful. AriaX could return only 100 bars for a 300-bar request; after
+   dropping the forming candle, the manually changed 120-bar strategy warm-up
+   still returned `insufficient data` forever. Feed acceptance now requires at
+   least 80% of the requested history and validates ordered/sane tail candles,
+   causing automatic fallback to a complete source.
+2. **False near-total losses:** close-order acknowledgements without a
+   top-level fill price were interpreted as price `0.0`. Long-position PnL was
+   consequently recorded near `-100%` of notional (the repeated ~$35-$79
+   losses in the report). Fill/order fields are now extracted recursively from
+   nested API envelopes; if still absent, the current live price is used. A
+   close with no trustworthy price is not persisted as a fabricated loss.
+
+The manually loosened funding threshold was also restored to 0.30 percentage
+points. Increasing frequency by accepting known funding drag is not a valid
+strategy improvement. Four regression tests cover truncated history, complete
+history, nested fills, and missing fills. Full suite: **28 passing tests**.
+
+Historical rows created by the zero-fill defect remain analytically corrupt
+and should be archived/reset before evaluating strategy performance. The
+reported PF, expectancy, win rate, net PnL, and Sharpe must not be used for
+strategy decisions until a clean post-fix run is collected.

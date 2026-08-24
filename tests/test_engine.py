@@ -18,6 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.capital.margin import MarginManager  # noqa: E402
 from app.config import Settings  # noqa: E402
 from app.execution.watchdog import PositionWatchdog  # noqa: E402
+from app.execution.executor import OrderExecutor  # noqa: E402
+from app.data.feed import CandleFeed  # noqa: E402
 from app.models import Candle, CandleSeries, Position  # noqa: E402
 from app.optimization.optimizer import AdaptiveRisk, PortfolioLimits  # noqa: E402
 from app.observability.reporter import build_txt_report  # noqa: E402
@@ -288,6 +290,36 @@ class TestReporter(unittest.TestCase):
         report = asyncio.run(build_txt_report(state, FakeDatabase(), S, {}, {}))
         self.assertIn("5m 1/0", report)
         self.assertIn("1h 0/0", report)
+
+
+class TestLiveDataCompleteness(unittest.TestCase):
+    """Prevent truncated API history from trapping strategies in warm-up."""
+
+    @staticmethod
+    def _candles(count):
+        return [Candle(1_700_000_000_000 + i * 300_000, 100, 101, 99, 100, 10)
+                for i in range(count)]
+
+    def test_rejects_truncated_primary_history(self):
+        self.assertFalse(CandleFeed._good(self._candles(100), 300))
+
+    def test_accepts_complete_history(self):
+        self.assertTrue(CandleFeed._good(self._candles(300), 300))
+
+
+class TestExecutionResponseParsing(unittest.TestCase):
+    """AriaX may return order fields below data/result envelopes."""
+
+    def test_nested_fill_is_parsed(self):
+        response = {"ok": True, "data": {"result": {
+            "orderId": "abc", "avgPrice": "123.45", "executedQty": "2.5"
+        }}}
+        self.assertEqual(OrderExecutor._fill_price(response, "ETHUSD", 2.5), 123.45)
+        self.assertEqual(OrderExecutor._fill_qty(response, 1.0), 2.5)
+        self.assertEqual(OrderExecutor._order_id(response), "abc")
+
+    def test_missing_fill_is_not_zero_price(self):
+        self.assertEqual(OrderExecutor._fill_price({"ok": True}, "ETHUSD", 1), 0.0)
 
 
 class TestCandleSeries(unittest.TestCase):

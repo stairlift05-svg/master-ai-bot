@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from typing import Dict, List
 
@@ -109,11 +110,20 @@ class CandleFeed:
     # ------------------------------------------------------------------
     @staticmethod
     def _good(candles: List[Candle], limit: int) -> bool:
-        """Accept a candle batch only if it is complete and sane."""
-        if not candles or len(candles) < min(30, limit):
+        """Accept only sufficiently complete, ordered, sane candle batches.
+
+        The former 30-bar threshold accepted AriaX's truncated 100-bar reply
+        for a 300-bar request. StrategyEngine then received fewer bars than
+        its warm-up requirement and permanently returned ``insufficient
+        data`` instead of trying a complete fallback source.
+        """
+        required = max(30, math.ceil(limit * 0.80))
+        if not candles or len(candles) < required:
             return False
-        last = candles[-1]
-        return last.c > 0 and last.h >= last.l >= 0
+        tail = candles[-min(len(candles), 10):]
+        if any(c.ts <= 0 or c.c <= 0 or c.h < c.l or c.l < 0 for c in tail):
+            return False
+        return all(a.ts < b.ts for a, b in zip(tail, tail[1:]))
 
     # ------------------------------------------------------------------
     def last_price_hint(self) -> Dict[str, float]:

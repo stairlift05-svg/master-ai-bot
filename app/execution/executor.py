@@ -166,7 +166,7 @@ class OrderExecutor:
         await self._tg.send(
             f"🎯 <b>{signal.side.upper()}</b> {signal.strategy}\n"
             f"{symbol} @ {result.avg_price:.4f}\n"
-            f"Qty {result.qty} | \~${result.notional:.1f}\n🧪 AriaX Testnet",
+            f"Qty {result.qty} | ~${result.notional:.1f}\n🧪 AriaX Testnet",
             self._tg.menu(),
         )
         log.info("TRADE OPENED %s %s @ %.4f qty=%s", signal.side.upper(),
@@ -192,6 +192,17 @@ class OrderExecutor:
             return None
 
         fill = self._fill_price(resp, position.symbol, position.qty)
+        if fill <= 0:
+            # Some AriaX responses wrap fills in an envelope or acknowledge a
+            # market close without returning a fill price. Never interpret a
+            # missing price as zero: that records a near-100% notional loss.
+            fill = await self._price(position.symbol)
+        if fill <= 0:
+            self._state.record_error(
+                f"close {position.symbol}: exchange returned no fill price"
+            )
+            log.error("CLOSE %s acknowledged without a usable fill price", position.symbol)
+            return None
         raw_pnl = position.unrealized_pnl(fill)
         fees = abs(fill * position.qty) * self._settings.taker_fee * 2 \
             * self._settings.fee_buffer
@@ -283,15 +294,36 @@ class OrderExecutor:
     # -- parsing --------------------------------------------------------
     @staticmethod
     def _order_id(resp: Any) -> str:
-        if isinstance(resp, dict):
-            return str(resp.get("orderId") or resp.get("id") or resp.get("oid") or "")
+        """Extract an order identifier from flat or nested API responses."""
+        for item in OrderExecutor._response_dicts(resp):
+            value = item.get("orderId") or item.get("order_id") or item.get("oid")
+            if value:
+                return str(value)
         return ""
 
     @staticmethod
+    def _response_dicts(resp: Any):
+        """Yield nested response dictionaries without trusting one envelope shape."""
+        queue = [resp]
+        seen: set[int] = set()
+        while queue:
+            item = queue.pop(0)
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
+            if isinstance(item, dict):
+                yield item
+                queue.extend(item.values())
+            elif isinstance(item, list):
+                queue.extend(item)
+
+    @staticmethod
     def _fill_price(resp: Any, symbol: str, qty: float) -> float:
-        if isinstance(resp, dict):
-            for key in ("avgPrice", "fill_price", "price", "entry", "entryPrice"):
-                val = resp.get(key)
+        """Extract a positive fill price from flat or nested API responses."""
+        for item in OrderExecutor._response_dicts(resp):
+            for key in ("avgPrice", "avg_price", "fillPrice", "fill_price",
+                        "price", "entry", "entryPrice", "execPrice"):
+                val = item.get(key)
                 try:
                     if val is not None and float(val) > 0:
                         return float(val)
@@ -301,9 +333,11 @@ class OrderExecutor:
 
     @staticmethod
     def _fill_qty(resp: Any, fallback: float) -> float:
-        if isinstance(resp, dict):
-            for key in ("qty", "filled", "size", "executedQty"):
-                val = resp.get(key)
+        """Extract executed quantity from flat or nested API responses."""
+        for item in OrderExecutor._response_dicts(resp):
+            for key in ("qty", "filled", "filledQty", "size", "executedQty",
+                        "execQty", "cumExecQty"):
+                val = item.get(key)
                 try:
                     if val is not None and float(val) > 0:
                         return float(val)

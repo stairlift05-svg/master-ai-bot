@@ -136,11 +136,12 @@ class RiskManager:
     # ------------------------------------------------------------------
     @staticmethod
     def funding_blocked(side: str, funding_pct: float,
-                        threshold: float = 1.0) -> Tuple[bool, str]:
-        """Block entries that *pay* heavy funding (funding drag protection).
+                        threshold: float = 0.30) -> Tuple[bool, str]:
+        """Block entries that pay funding above the risk-approved threshold.
 
-        Default threshold 1.0% (was 0.30%) — AriaX testnet often reports
-        \~0.75% which was blocking almost every long entry.
+        Loosening this gate merely to increase trade frequency converts a
+        known carrying cost into systematic loss. The caller must normalize
+        the exchange value to percentage points before invoking this method.
         """
         if abs(funding_pct) < threshold:
             return False, ""
