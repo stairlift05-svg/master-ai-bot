@@ -126,7 +126,9 @@ class Settings:
     max_daily_loss_pct: float = 5.0
     risk_pct: float = 0.40
     max_notional_usd: float = 80.0
-    max_agg_notional_usd: float = 240.0
+    # Five $80 slots require $400 aggregate capacity. The old $240 default
+    # silently limited MAX_POS=5 to only three fully-sized positions.
+    max_agg_notional_usd: float = 400.0
     min_order_usd: float = 8.0
     min_free_margin: float = 15.0
     margin_util_cap: float = 0.85
@@ -249,7 +251,7 @@ class Settings:
             max_daily_loss_pct=_env_float("MAX_DAILY_LOSS", 5.0, 0.5, 100),
             risk_pct=_env_float("RISK_PCT", 0.40, 0.01, 10),
             max_notional_usd=_env_float("MAX_NOTIONAL_USD", 80.0, 5, 1e6),
-            max_agg_notional_usd=_env_float("MAX_AGG_NOTIONAL_USD", 240.0, 5, 1e7),
+            max_agg_notional_usd=_env_float("MAX_AGG_NOTIONAL_USD", 400.0, 5, 1e7),
             min_order_usd=_env_float("MIN_ORDER_USD", 8.0, 1, 1e5),
             min_free_margin=_env_float("MIN_FREE_MARGIN", 15.0, 1, 1e6),
             margin_util_cap=_env_float("MARGIN_UTIL_CAP", 0.85, 0.1, 0.99),

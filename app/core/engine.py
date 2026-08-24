@@ -166,9 +166,14 @@ class QuantEngine:
         peak = await self.db.load_meta("peak_balance", 0.0)
 
         if stored_day != today or stored_balance <= 0:
+            day_start = float(self.state.get("balance", 0.0) or 0.0)
+            # Persist and publish atomically from the engine's perspective.
+            # Previously only SQLite was updated, leaving the dashboard at
+            # day_start_balance=0 and weakening daily-PnL observability.
+            self.state.set("day_start_balance", day_start)
             await self.db.save_meta("day_start_date", today)
-            await self.db.save_meta("day_start_balance", self.state.get("balance", 0.0))
-            log.info("New trading day: day_start=$%.2f", self.state.get("balance", 0.0))
+            await self.db.save_meta("day_start_balance", day_start)
+            log.info("New trading day: day_start=$%.2f", day_start)
         else:
             self.state.set("day_start_balance", float(stored_balance))
             log.info("Restored day_start=$%.2f (date %s)", stored_balance, stored_day)

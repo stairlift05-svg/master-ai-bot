@@ -48,6 +48,12 @@ class TestConfiguration(unittest.TestCase):
         with self.assertRaises(ConfigError):
             replace(S, candle_limit_5m=100).validate()
 
+    def test_default_aggregate_cap_fits_all_position_slots(self):
+        self.assertGreaterEqual(
+            S.max_agg_notional_usd,
+            S.max_positions * S.max_notional_usd,
+        )
+
 
 class TestIndicators(unittest.TestCase):
     def test_rsi_bounds_and_tail(self):

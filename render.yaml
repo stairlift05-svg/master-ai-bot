@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: master-ai-bot
+    runtime: python
+    plan: free
+    autoDeploy: true
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python bot.py
+    healthCheckPath: /health
+    envVars:
+      # Secrets are entered in Render and never committed.
+      - key: ARIAX_KEY
+        sync: false
+      - key: ARIAX_SECRET
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      # This is the only non-secret deployment override. Trading/risk values
+      # use validated code defaults to prevent dashboard configuration drift.
+      - key: ARIAX_BASE
+        value: https://dryclean-app-1.onrender.com
