@@ -108,11 +108,17 @@ class OrderExecutor:
             return None
 
         # 4) Portfolio caps + validation.
+        # مهم: open_notional باید با entry هر پوزیشن محاسبه شود،
+        # نه با price نماد فعلی (باگ قبلی: qtyِ DOGE × قیمت SOL → $43k جعلی).
         open_positions = self._state.positions()
+        open_notional = sum(
+            max(0.0, p.qty) * (p.entry if p.entry > 0 else price)
+            for p in open_positions.values()
+        )
         cap_err = self._limits.would_exceed(
             {p.symbol for p in open_positions.values()}, len(open_positions),
             symbol, price, size.notional,
-            open_notional=sum(p.qty * price for p in open_positions.values()),
+            open_notional=open_notional,
         )
         if cap_err:
             self._state.record_missed_signal(f"{symbol} {signal.strategy} -> {cap_err}")
@@ -160,7 +166,7 @@ class OrderExecutor:
         await self._tg.send(
             f"🎯 <b>{signal.side.upper()}</b> {signal.strategy}\n"
             f"{symbol} @ {result.avg_price:.4f}\n"
-            f"Qty {result.qty} | ~${result.notional:.1f}\n🧪 AriaX Testnet",
+            f"Qty {result.qty} | \~${result.notional:.1f}\n🧪 AriaX Testnet",
             self._tg.menu(),
         )
         log.info("TRADE OPENED %s %s @ %.4f qty=%s", signal.side.upper(),
