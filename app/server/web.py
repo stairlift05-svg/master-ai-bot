@@ -45,6 +45,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   .tag{display:inline-block;padding:1px 8px;border-radius:8px;font-size:.72rem}
   .tag.good{background:#23863633;color:#7ee787}
   .tag.bad{background:#da363322;color:#f85149}
+  .tag.warn{background:#d2992233;color:#d29922}
   .err{color:#f85149;font-size:.8rem}
   .mono{font-family:ui-monospace,Menlo,monospace;font-size:.78rem}
   .halo{color:#d29922;font-weight:600}
@@ -81,6 +82,7 @@ async function refresh(){
     let st='';
     st += d.dd_halted? '<span class="halo">⛔ DRAW DOWN HALT</span> ' : '';
     st += d.daily_halted? '<span class="halo">⛔ DAILY LOSS HALT</span> ' : '';
+    st += d.paper_mode? '<span class="tag warn">📝 PAPER — no real orders</span> ' : '<span class="tag bad">💵 LIVE MONEY</span> ';
     st += d.is_active? '<span class="tag good">ACTIVE</span>' : '<span class="tag bad">PAUSED</span>';
     st += ' <span class="mono">loss streak: '+d.loss_streak+'</span>';
     document.getElementById('status').innerHTML = st;
@@ -142,7 +144,13 @@ def create_app(state: EngineState, db: Database, settings=None) -> Flask:
 
     @app.route("/api/status")
     def api_status():
-        return jsonify(state.snapshot())
+        snap = state.snapshot()
+        # Surface the trading mode so the dashboard can never be mistaken for
+        # a live-money session (or vice versa).
+        snap["paper_mode"] = bool(getattr(settings, "paper_mode", False))
+        snap["enabled_strategies"] = list(
+            getattr(settings, "enabled_strategies", ()) or ())
+        return jsonify(snap)
 
     @app.route("/api/positions")
     def api_positions():

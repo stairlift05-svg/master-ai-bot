@@ -78,6 +78,21 @@ class HtfContext:
     candle_bull_5m: bool
     candle_bear_5m: bool
     min_stop_pct: float = 0.003
+    # Round-trip friction as a fraction of price (2 x taker fee + 2 x
+    # slippage, scaled by the fee buffer). Signals whose take-profit target
+    # does not clear friction by ``min_edge_ratio`` are refused outright —
+    # the single defect the think-tank blamed for every losing version:
+    # edge per trade (+$0.02) smaller than cost per trade (~$0.14).
+    round_trip_cost_pct: float = 0.0
+    min_edge_ratio: float = 0.0
+
+
+class _SignalTooSmall(Exception):
+    """Raised by ``_build`` when a signal's target cannot clear trading costs.
+
+    Caught by :meth:`BaseStrategyV2.propose`, which converts it into "no
+    signal" so an unprofitable setup is simply skipped.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +110,18 @@ class BaseStrategyV2(ABC):
     @abstractmethod
     def evaluate(self, ctx: HtfContext) -> Optional[Signal]: ...
 
+    # -- public entry point used by the engine -------------------------
+    def propose(self, ctx: HtfContext) -> Optional[Signal]:
+        """Evaluate the strategy, dropping signals that cannot pay for costs.
+
+        Strategies keep expressing their edge in :meth:`evaluate`; the cost
+        gate lives here so every family inherits it consistently.
+        """
+        try:
+            return self.evaluate(ctx)
+        except _SignalTooSmall:
+            return None
+
     # -- shared signal builder -----------------------------------------
     def _build(self, ctx: HtfContext, side: str, reason: str,
                sl_dist: float, tp_dist: float, tp1_dist: Optional[float] = None,
@@ -111,6 +138,22 @@ class BaseStrategyV2(ABC):
         if tp1_dist is None:
             tp1_dist = sl_dist * 1.2
         tp1_dist = max(tp1_dist, sl_dist * 1.1)
+        # ---- Cost gate ------------------------------------------------
+        # A target that barely clears fees + slippage is a negative-expectancy
+        # trade no matter how good the entry looks. Widen the target to the
+        # profitable minimum; if the strategy's own risk model cannot support
+        # that target (it would need a > 2x stretch), refuse the signal.
+        cost_dist = price * ctx.round_trip_cost_pct
+        if cost_dist > 0 and ctx.min_edge_ratio > 0:
+            required = cost_dist * ctx.min_edge_ratio
+            if tp_dist < required:
+                if required > tp_dist * 2.0:
+                    raise _SignalTooSmall(
+                        f"target {tp_dist / price * 100:.2f}% below "
+                        f"cost floor {required / price * 100:.2f}%"
+                    )
+                tp_dist = required
+            tp1_dist = max(tp1_dist, cost_dist * 1.5)
         if side == "buy":
             return Signal(
                 side="buy", strategy=self.name, reason=reason, entry=price,

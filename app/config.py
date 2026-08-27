@@ -44,14 +44,21 @@ DEFAULT_STRATEGY_PARAMS: Dict[str, Dict[str, float]] = {
     k: dict(v) for k, v in _V2_DEFAULTS.items()
 }
 # Strategy names enabled in the live engine.
-# v20.4 (2026-08-27 audit): the think-tank's own 60-day real-data screen
-# (analysis/STRATEGY_SCREENING_REPORT.md) rejected every family except
-# HTF_Breakout (production config A: long-only, PF 1.19, maxDD 1.13%).
-# v20.3.1 had re-enabled three REJECTED families (TrendPullback_HTF,
-# MomentumRetrace_RSI, SwingPullback_1h — PF 0.77/0.89/0.57), which is how
-# earlier versions bled money. Ship the validated config; re-enable others
-# consciously via ENABLED_STRATEGIES after fresh validation.
-DEFAULT_ENABLED_STRATEGIES: tuple = ("HTF_Breakout",)
+# v20.5 (2026-08-27 audit) — CORRECTION. The v20.4 comment above claimed
+# HTF_Breakout was "validated (PF 1.19)". That claim is not supported by the
+# repo's own evidence:
+#   * analysis/STRATEGY_SCREENING_REPORT.md says, verbatim, "**None passed.**"
+#     Every HTF_Breakout variant is listed with a NEGATIVE in-sample return
+#     (-0.32%, -1.12%, -1.46%, -1.59%) and a ❌ verdict.
+#   * A fresh 5-seed hold-out re-run (never used for tuning) puts
+#     HTF_Breakout/long LAST of every candidate: -1.25% average, 0/5 seeds
+#     positive. It was the single worst configuration measured.
+# So v20.4 shipped the worst family as the only enabled one, which is why the
+# bot lost money whenever it did trade. Defaults now use the least-bad,
+# lowest-drawdown families found on hold-out data, and real capital must not
+# be used (PAPER_MODE, below, defaults to on) because NO family has yet
+# demonstrated a positive post-cost edge on hold-out data.
+DEFAULT_ENABLED_STRATEGIES: tuple = ("MeanReversion_BB", "VolatilityExpansion")
 
 
 def _env_str(name: str, default: str = "") -> str:
@@ -136,6 +143,14 @@ class Settings:
     min_stop_pct: float = 0.003
     taker_fee: float = 0.0005
     fee_buffer: float = 1.2
+    # Expected slippage per side (fraction of price). Used by the strategy
+    # cost gate and by the backtester so both price friction identically.
+    slippage_pct: float = 0.0002
+    # A signal's take-profit must be at least this multiple of the modelled
+    # round-trip cost, otherwise it is discarded. Every losing version of this
+    # bot took trades whose target barely covered fees; 3.0 is the think-tank
+    # floor (target >= 3x friction).
+    min_edge_ratio: float = 3.0
 
     # ---- Strategy (#02) ---------------------------------------------------
     strategy_params: Dict[str, Dict[str, float]] = field(
@@ -166,15 +181,21 @@ class Settings:
     dash_token: str = ""                   # optional shared secret for the dashboard
 
     # ---- Position management (trailing / partial) -------------------------
-    partial_tp: bool = True
-    trail_act_pct: float = 3.2
+    # v20.5 audit: the old exit policy was the second-largest source of loss.
+    # Measured over the strategy's own trades (analysis/EXIT_POLICY.md):
+    # a 4h time stop closed 55 of 85 trades before the 1h-ATR target could be
+    # reached (MaxHold PnL ≈ 0 gross, pure fee burn), while partial TP halved
+    # every winner but never halved a loser. Both are now off/relaxed by
+    # default, and the trail activates only well beyond the noise band.
+    partial_tp: bool = False
+    trail_act_pct: float = 6.0
     trail_step_pct: float = 1.0
     use_atr_trail: bool = True
-    atr_trail_mult: float = 0.8
+    atr_trail_mult: float = 2.0
     min_hold_partial_s: float = 720.0
     min_hold_trail_s: float = 1080.0
     min_profit_be_pct: float = 0.75
-    max_hold_s: float = 4 * 3600.0
+    max_hold_s: float = 48 * 3600.0
 
     # ---- Timing / cooldowns (#10) ----------------------------------------
     scan_interval_s: float = 70.0
@@ -204,6 +225,16 @@ class Settings:
     loss_streak_shrink_at: int = 3
     loss_streak_factor: float = 0.6
     auto_resume_dd_ratio: float = 0.5
+
+    # ---- Paper mode (v20.5 safety gate) -----------------------------------
+    # When True the engine runs the FULL pipeline — scans, signals, sizing,
+    # risk gates, position lifecycle, dashboard, Telegram — but never sends
+    # an order to the exchange; fills are simulated at the live price plus
+    # modelled slippage. This exists because no strategy in this repo has
+    # demonstrated a positive post-cost edge yet (see the screening report and
+    # analysis/AUDIT_v20.5.md). Set PAPER_MODE=false only after a live paper
+    # run shows a positive expectancy over a meaningful sample.
+    paper_mode: bool = True
 
     # ---- Test / misc ------------------------------------------------------
     test_symbol: str = "ETHUSD"
@@ -286,15 +317,17 @@ class Settings:
             min_stop_pct=_env_float("MIN_STOP_PCT", 0.003, 0.0005, 0.05),
             taker_fee=_env_float("TAKER_FEE", 0.0005, 0, 0.01),
             fee_buffer=_env_float("FEE_BUFFER", 1.2, 1.0, 5.0),
-            partial_tp=_env_bool("PARTIAL_TP", True),
-            trail_act_pct=_env_float("TRAIL_ACT", 3.2, 0.5, 20),
+            slippage_pct=_env_float("SLIPPAGE_PCT", 0.0002, 0, 0.01),
+            min_edge_ratio=_env_float("MIN_EDGE_RATIO", 3.0, 0, 20),
+            partial_tp=_env_bool("PARTIAL_TP", False),
+            trail_act_pct=_env_float("TRAIL_ACT", 6.0, 0.5, 50),
             trail_step_pct=_env_float("TRAIL_STEP", 1.0, 0.1, 10),
             use_atr_trail=_env_bool("USE_ATR_TRAIL", True),
-            atr_trail_mult=_env_float("ATR_TRAIL_MULT", 0.8, 0.1, 5),
+            atr_trail_mult=_env_float("ATR_TRAIL_MULT", 2.0, 0.1, 10),
             min_hold_partial_s=_env_float("MIN_HOLD_FOR_PARTIAL", 720, 60, 86400),
             min_hold_trail_s=_env_float("MIN_HOLD_FOR_TRAIL", 1080, 60, 86400),
             min_profit_be_pct=_env_float("MIN_PROFIT_FOR_BE", 0.75, 0.1, 10),
-            max_hold_s=_env_float("MAX_HOLD_SECONDS", 4 * 3600, 300, 7 * 86400),
+            max_hold_s=_env_float("MAX_HOLD_SECONDS", 48 * 3600, 300, 14 * 86400),
             scan_interval_s=_env_float("SCAN_INTERVAL", 70, 10, 3600),
             symbol_delay_s=_env_float("SYMBOL_DELAY", 2.0, 0, 60),
             ohlcv_pause_s=_env_float("OHLCV_PAUSE", 1.2, 0, 30),
@@ -327,6 +360,7 @@ class Settings:
             loss_streak_shrink_at=_env_int("LOSS_STREAK_SHRINK_AT", 3, 1, 20),
             loss_streak_factor=_env_float("LOSS_STREAK_FACTOR", 0.6, 0.1, 1.0),
             auto_resume_dd_ratio=_env_float("AUTO_RESUME_DD_RATIO", 0.5, 0.1, 0.9),
+            paper_mode=_env_bool("PAPER_MODE", True),
             test_symbol=_env_str("TEST_SYMBOL", "ETHUSD"),
             test_usd=_env_float("TEST_USD", 15.0, 1, 1e5),
             send_client_oid=_env_bool("SEND_CLIENT_OID", False),

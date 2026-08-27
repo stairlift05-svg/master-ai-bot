@@ -142,12 +142,16 @@ def run_logic_assertions(settings: Settings) -> Dict[str, bool]:
     checks: Dict[str, bool] = {}
     state = EngineState()
 
-    # 1) Funding-drag gate.
-    blocked, why = RiskManager.funding_blocked("buy", 0.50)
+    # 1) Funding-drag gate. ``funding_blocked`` is an *instance* method; the
+    # old static-style call raised TypeError and aborted every simulate.py run.
+    # The gate is exercised with an explicit threshold so the check is
+    # independent of FUNDING_MAX_PCT (0 = gate disabled on the testnet).
+    risk_probe = RiskManager(settings, EngineState())
+    blocked, why = risk_probe.funding_blocked("buy", 0.50, threshold=0.30)
     checks["funding_gate_blocks_long"] = blocked and "funding" in why
-    blocked2, _ = RiskManager.funding_blocked("buy", 0.10)
+    blocked2, _ = risk_probe.funding_blocked("buy", 0.10, threshold=0.30)
     checks["funding_gate_allows_small"] = not blocked2
-    blocked3, _ = RiskManager.funding_blocked("buy", -0.50)
+    blocked3, _ = risk_probe.funding_blocked("buy", -0.50, threshold=0.30)
     checks["funding_gate_long_ok_when_negative"] = not blocked3
 
     # 2) Data-stall defensive close.

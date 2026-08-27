@@ -131,10 +131,13 @@ class Backtester:
     """Event-driven simulation of the full decision pipeline."""
 
     def __init__(self, settings: Settings, initial_balance: float = 500.0,
-                 slippage_bps: float = 2.0) -> None:
+                 slippage_bps: Optional[float] = None) -> None:
         self.settings = settings
         self.initial_balance = float(initial_balance)
-        self.slippage = slippage_bps / 10000.0
+        # Default to the same slippage the strategy cost gate assumes, so the
+        # backtest can never be optimistic relative to the live cost model.
+        self.slippage = (slippage_bps / 10000.0) if slippage_bps is not None \
+            else settings.slippage_pct
         self.state = EngineState()
         self.state.set_many(
             balance=self.initial_balance, peak_balance=self.initial_balance,

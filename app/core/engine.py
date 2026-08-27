@@ -305,6 +305,12 @@ class QuantEngine:
 
     async def smart_sync(self, startup: bool = False) -> None:
         """Reconcile local positions against the exchange truth."""
+        if self.settings.paper_mode:
+            # Paper mode has no exchange-side positions to reconcile against;
+            # the simulated book IS the local book. Running the ghost/recovery
+            # machinery here would delete every open paper position.
+            self.state.set("last_sync", time.strftime("%H:%M:%S"))
+            return
         try:
             data = await self.client.get_positions()
         except AriaXAPIError as exc:

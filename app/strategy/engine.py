@@ -67,7 +67,7 @@ class StrategyEngine:
 
         for strategy in self._strategies:
             try:
-                signal = strategy.evaluate(ctx)
+                signal = strategy.propose(ctx)
             except Exception as exc:  # noqa: BLE001 - a strategy must not kill a scan
                 log.exception("strategy %s crashed: %s", strategy.name, exc)
                 self._state.record_error(f"strategy {strategy.name}: {exc}")
@@ -100,11 +100,17 @@ class StrategyEngine:
         tf1 = self._tf_context("1h", df1, lookback=LOOKBACKS["1h"])
         closes = tf5.closes
         price = closes[-1]
+        s = self._settings
+        # Round-trip friction: entry fee + exit fee + entry/exit slippage,
+        # inflated by the configured fee buffer (conservative).
+        round_trip = (2.0 * s.taker_fee + 2.0 * s.slippage_pct) * s.fee_buffer
         return HtfContext(
             symbol=symbol, price=price, tf5=tf5, tf15=tf15, tf1=tf1,
             candle_bull_5m=len(closes) >= 2 and closes[-1] > closes[-2],
             candle_bear_5m=len(closes) >= 2 and closes[-1] < closes[-2],
-            min_stop_pct=self._settings.min_stop_pct,
+            min_stop_pct=s.min_stop_pct,
+            round_trip_cost_pct=round_trip,
+            min_edge_ratio=s.min_edge_ratio,
         )
 
     # ------------------------------------------------------------------
