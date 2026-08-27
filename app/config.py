@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Tuple
 
 from app.errors import ConfigError
-from app.strategy.signals import DEFAULT_V2_PARAMS as _V2_DEFAULTS
+from app.strategy.signals import DEFAULT_V2_PARAMS as _V2_DEFAULTS, _STRATEGY_CLASSES
 
 # ---------------------------------------------------------------------------
 # Symbol universe
@@ -44,14 +44,14 @@ DEFAULT_STRATEGY_PARAMS: Dict[str, Dict[str, float]] = {
     k: dict(v) for k, v in _V2_DEFAULTS.items()
 }
 # Strategy names enabled in the live engine.
-# v20.3.1: فقط HTF_Breakout خیلی کم سیگنال می‌داد → چند استراتژی
-# باکیفیت فعال شد تا ربات عملاً معامله کند (قابل کنترل با ENABLED_STRATEGIES).
-DEFAULT_ENABLED_STRATEGIES: tuple = (
-    "TrendPullback_HTF",
-    "HTF_Breakout",
-    "MomentumRetrace_RSI",
-    "SwingPullback_1h",
-)
+# v20.4 (2026-08-27 audit): the think-tank's own 60-day real-data screen
+# (analysis/STRATEGY_SCREENING_REPORT.md) rejected every family except
+# HTF_Breakout (production config A: long-only, PF 1.19, maxDD 1.13%).
+# v20.3.1 had re-enabled three REJECTED families (TrendPullback_HTF,
+# MomentumRetrace_RSI, SwingPullback_1h — PF 0.77/0.89/0.57), which is how
+# earlier versions bled money. Ship the validated config; re-enable others
+# consciously via ENABLED_STRATEGIES after fresh validation.
+DEFAULT_ENABLED_STRATEGIES: tuple = ("HTF_Breakout",)
 
 
 def _env_str(name: str, default: str = "") -> str:
@@ -143,7 +143,27 @@ class Settings:
     )
     enabled_strategies: Tuple[str, ...] = DEFAULT_ENABLED_STRATEGIES
     max_daily_entries: int = 12
-    sides: str = "both"          # long+short؛ برای فقط long: SIDES=long
+    # Matches the think-tank's validated "config A": HTF_Breakout, long-only.
+    # Set SIDES=both to also allow the bearish breakdown variant.
+    sides: str = "long"
+
+    # ---- Funding gate ------------------------------------------------------
+    # The AriaX testnet reports a STATIC placeholder funding rate (0.75) for
+    # most USD perp symbols (BTC 0.033, ETH -0.038, LINK/ADA/DOT/AVAX 0.75…).
+    # The old hard-coded 0.30 threshold therefore blocked every long entry on
+    # those symbols ("funding drag +0.75%") while the market was bullish —
+    # the #1 reason v20.3.1 stopped trading. 0 disables the gate (testnet
+    # placeholder data); set e.g. 0.10 (% per interval) on a real exchange.
+    funding_max_pct: float = 0.0
+
+    # ---- Stuck-position recovery (v20.4) -----------------------------------
+    # A remote position the exchange keeps reporting after a close was
+    # confirmed caused an infinite recover→close→recover loop (one phantom
+    # "TP" close + ~$2 fake PnL every sync). These knobs hard-stop that loop.
+    recover_cooldown_s: float = 1800.0     # min gap between recoveries of a symbol
+    max_recover_cycles: int = 3            # then the symbol is marked stuck
+    close_verify_recheck_s: float = 3600.0 # re-try an auto-close of a stuck position at most hourly
+    dash_token: str = ""                   # optional shared secret for the dashboard
 
     # ---- Position management (trailing / partial) -------------------------
     partial_tp: bool = True
@@ -223,6 +243,13 @@ class Settings:
                 raise ConfigError(f"Unknown symbol {sym!r}; allowed: {sorted(SYMBOL_MAP)}")
         if self.timeframe not in TF_V5 or self.htf_timeframe not in TF_V5:
             raise ConfigError(f"Unsupported timeframes {self.timeframe}/{self.htf_timeframe}")
+        if self.sides not in ("both", "long", "short"):
+            raise ConfigError("SIDES must be one of: both, long, short")
+        if self.enabled_strategies:
+            known = set(_STRATEGY_CLASSES)
+            unknown = [s for s in self.enabled_strategies if s not in known]
+            if unknown:
+                raise ConfigError(f"Unknown strategies in ENABLED_STRATEGIES: {unknown}")
         # StrategyEngine needs 260 closed primary bars and drops the forming
         # candle in live mode. A lower fetch limit makes trading impossible.
         if self.candle_limit_5m < 261:
@@ -275,7 +302,12 @@ class Settings:
             price_interval_s=_env_float("PRICE_INTERVAL", 15, 3, 300),
             entry_cooldown_s=_env_float("ENTRY_COOLDOWN", 900, 60, 86400),
             max_daily_entries=_env_int("MAX_DAILY_ENTRIES", 12, 1, 200),
-            sides=_env_str("SIDES", "both").lower(),
+            sides=_env_str("SIDES", "long").lower(),
+            funding_max_pct=_env_float("FUNDING_MAX_PCT", 0.0, 0, 100),
+            recover_cooldown_s=_env_float("RECOVER_COOLDOWN", 1800, 60, 86400),
+            max_recover_cycles=_env_int("MAX_RECOVER_CYCLES", 3, 1, 50),
+            close_verify_recheck_s=_env_float("CLOSE_VERIFY_RECHECK", 3600, 60, 86400),
+            dash_token=_env_str("DASH_TOKEN"),
             enabled_strategies=tuple(
                 s.strip() for s in _env_str(
                     "ENABLED_STRATEGIES", ",".join(DEFAULT_ENABLED_STRATEGIES)

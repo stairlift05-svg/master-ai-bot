@@ -189,29 +189,56 @@ class AriaXClient:
         """Fetch candles from AriaX's public ``/v5/market/kline`` endpoint.
 
         Returns candles ordered oldest -> newest.  Empty list on any failure.
+
+        v20.4: the upstream proxy sometimes has (or serves from a cold worker
+        cache) far less history than requested — e.g. 51 one-hour bars for a
+        220-bar request — which used to fail the feed's completeness gate and
+        drop the whole symbol. When the first page is short we page backwards
+        with ``end`` up to three extra requests to assemble the full window.
         """
         v5 = V5_SYMBOL.get(arlax_sym)
         interval = TF_V5.get(timeframe)
         if not v5 or not interval:
             return []
-        path = (f"/v5/market/kline?category=linear&symbol={v5}"
-                f"&interval={interval}&limit={min(limit, 1000)}")
-        try:
-            data = await self.request("GET", path)
-        except AriaXAPIError as exc:
-            log.warning("ariax klines %s: %s", arlax_sym, exc)
-            return []
-        rows = ((data or {}).get("result") or {}).get("list") or []
-        if not isinstance(rows, list):
-            return []
+
+        collected: Dict[int, List] = {}
+        end_ms: Optional[int] = None
+        for _page in range(4):
+            path = (f"/v5/market/kline?category=linear&symbol={v5}"
+                    f"&interval={interval}&limit={min(limit, 1000)}")
+            if end_ms is not None:
+                path += f"&end={end_ms}"
+            try:
+                data = await self.request("GET", path)
+            except AriaXAPIError as exc:
+                log.warning("ariax klines %s: %s", arlax_sym, exc)
+                break
+            rows = ((data or {}).get("result") or {}).get("list") or []
+            if not isinstance(rows, list) or not rows:
+                break
+            new_rows = [r for r in rows if int(r[0]) not in collected]
+            for row in new_rows:
+                try:
+                    collected[int(row[0])] = row
+                except (ValueError, TypeError, IndexError):
+                    continue
+            oldest = min(int(r[0]) for r in rows)
+            if len(collected) >= limit or oldest <= 0:
+                break
+            end_ms = oldest - 1  # page backwards past the oldest bar we have
+
         # Bybit v5 returns newest-first rows [ts, o, h, l, c, volume, ...].
         candles: List[Candle] = []
-        for row in reversed(rows):
+        for ts in sorted(collected):
+            row = collected[ts]
             try:
                 candles.append(Candle.from_row([row[0], row[1], row[2], row[3],
                                                 row[4], row[5]]))
             except (ValueError, TypeError, IndexError):
                 continue
+        if len(candles) < limit and limit >= 100:
+            log.info("klines %s %s: assembled %d/%d bars via pagination",
+                     arlax_sym, timeframe, len(candles), limit)
         return candles
 
     # ------------------------------------------------------------------

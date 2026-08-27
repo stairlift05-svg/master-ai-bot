@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, render_template_string, request
 
 from app.persistence.database import Database
 from app.state import EngineState
@@ -103,8 +104,8 @@ refresh(); setInterval(refresh, 5000);
 """
 
 
-def create_app(state: EngineState, db: Database) -> Flask:
-    """Flask application factory."""
+def create_app(state: EngineState, db: Database, settings=None) -> Flask:
+    """Flask application factory (settings optional, for the DASH_TOKEN gate)."""
     # The schema is created idempotently so the dashboard works even if the
     # engine is still starting up (or for standalone dashboard runs).
     try:
@@ -112,6 +113,24 @@ def create_app(state: EngineState, db: Database) -> Flask:
     except Exception as exc:  # noqa: BLE001
         log.warning("db init failed at app creation: %s", exc)
     app = Flask(__name__)
+
+    # Optional shared-secret gate (DASH_TOKEN). The dashboard is on a public
+    # URL; with a token set, every route except /health requires ?token=…
+    # (or X-Dash-Token) to match. Constant-time compare; default: disabled.
+    dash_token = (getattr(settings, "dash_token", "") or "").strip()
+
+    def _authed() -> bool:
+        if not dash_token:
+            return True
+        supplied = request.args.get("token", "") or \
+            request.headers.get("X-Dash-Token", "")
+        return secrets.compare_digest(supplied, dash_token)
+
+    @app.before_request
+    def _gate():
+        if request.path == "/health" or _authed():
+            return None
+        return jsonify({"error": "unauthorized"}), 401
 
     @app.route("/")
     def dashboard():

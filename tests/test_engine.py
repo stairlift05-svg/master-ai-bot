@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -126,10 +127,15 @@ class TestOrderValidation(unittest.TestCase):
 
 class TestRiskGates(unittest.TestCase):
     def test_funding_gate(self):
-        self.assertTrue(RiskManager.funding_blocked("buy", 0.5)[0])
-        self.assertFalse(RiskManager.funding_blocked("buy", 0.1)[0])
-        self.assertFalse(RiskManager.funding_blocked("buy", -0.5)[0])
-        self.assertTrue(RiskManager.funding_blocked("sell", -0.5)[0])
+        rm = RiskManager(S, EngineState())
+        # Default: FUNDING_MAX_PCT=0 → gate disabled (testnet placeholder data).
+        self.assertFalse(rm.funding_blocked("buy", 0.75)[0])
+        self.assertFalse(rm.funding_blocked("sell", -0.75)[0])
+        # Explicitly enabled gate behaves as before.
+        self.assertTrue(rm.funding_blocked("buy", 0.5, threshold=0.30)[0])
+        self.assertFalse(rm.funding_blocked("buy", 0.1, threshold=0.30)[0])
+        self.assertFalse(rm.funding_blocked("buy", -0.5, threshold=0.30)[0])
+        self.assertTrue(rm.funding_blocked("sell", -0.5, threshold=0.30)[0])
 
     def test_portfolio_limits(self):
         limits = PortfolioLimits(S)
@@ -341,3 +347,151 @@ class TestCandleSeries(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# =========================================================================
+# v20.4 regression tests: phantom-close loop, error envelopes, pagination
+# =========================================================================
+class TestV204Regressions(unittest.TestCase):
+    """Guards against the v20.3.1 production bugs found in the live audit."""
+
+    def _executor(self):
+        from app.execution.executor import OrderExecutor
+        st = EngineState()
+        rm = RiskManager(S, st)
+        sizer = PositionSizer(S)
+
+        class FakeTG:
+            menu = lambda self: ""  # noqa: E731
+            async def send(self, *a, **k):
+                return None
+
+        class FakeDB:
+            async def close_trade(self, *a, **k):
+                return None
+
+            async def update_analytics(self, *a, **k):
+                return None
+
+            async def insert_trade(self, *a, **k):
+                return None
+
+        class FakeClient:
+            symbol_meta = {}
+
+            async def place_order(self, *a, **k):
+                return {"ok": True, "data": {"price": 100.0, "qty": 1}}
+
+            async def get_positions(self):
+                return {"ok": True, "data": [
+                    {"symbol": "SOLUSD", "side": "buy", "qty": 0.31,
+                     "entryPrice": 98.0},
+                ]}
+
+        class FakeMargin:
+            async def refresh(self):
+                return None
+
+        return OrderExecutor(S, FakeClient(), st, rm, sizer, FakeMargin(),
+                             FakeDB(), FakeTG(), lambda s: 100.0), st
+
+    def _position(self):
+        return Position(id="p1", symbol="SOLUSD", side="buy", strategy="X",
+                        entry=98.0, qty=0.31, sl=95.0, tp1=101.0, tp=102.0,
+                        opened_at=time.time() - 60)
+
+    def test_error_envelope_detected(self):
+        """HTTP-200 business rejections must never be parsed as fills."""
+        ex, _ = self._executor()
+        bad = {"ok": False, "error": "insufficient balance",
+               "data": {"price": 104.3}}
+        self.assertNotEqual(ex._error_message(bad), "")
+        ok = {"ok": True, "retCode": 0, "result": {"price": 104.3}}
+        self.assertEqual(ex._error_message(ok), "")
+
+    def test_unverified_close_keeps_position_and_marks_stuck(self):
+        """The infinite recover→close loop must break (SOLUSD incident)."""
+        import asyncio
+        ex, st = self._executor()
+        for cycle in range(3):
+            pos = self._position()
+            pos.id = f"p{cycle}"
+            st.add_position(pos)
+            res = asyncio.run(ex.close(pos, "TP"))
+            self.assertIsNone(res)                   # close never verified
+            self.assertIn(f"p{cycle}", st.positions())  # NOT removed, no PnL
+        self.assertIn("SOLUSD", st.get("stuck_symbols", set()))  # flagged
+
+    def test_verified_close_finalizes(self):
+        import asyncio
+        ex, st = self._executor()
+
+        class GoneClient(ex._client.__class__):
+            async def get_positions(self):
+                return {"ok": True, "data": []}
+
+        ex._client = GoneClient()
+        pos = self._position()
+        st.add_position(pos)
+        res = asyncio.run(ex.close(pos, "TP"))
+        self.assertIsNotNone(res)
+        self.assertNotIn("p1", st.positions())
+        self.assertGreater(res.realized_pnl, 0)
+
+    def test_pagination_assembles_history(self):
+        """fetch_klines pages backwards when the proxy truncates history."""
+        from app.api.ariax_client import AriaXClient
+        from app.api.signing import RequestSigner
+
+        class PagingClient(AriaXClient):
+            def __init__(self):
+                super().__init__(S, RequestSigner(S))
+                self.calls = []
+
+            async def request(self, method, path, json_body=None):
+                self.calls.append(path)
+                # First page: newest 51 bars; then full older pages.
+                limit = int(path.split("limit=")[1].split("&")[0])
+                if "end=" not in path:
+                    rows = [[str((1787000000 + i * 3600) * 1000), "1", "2",
+                             "0.5", "1.5", "10"] for i in range(51)]
+                else:
+                    end = int(path.split("end=")[1])
+                    rows = [[str(end - i * 3600 * 1000), "1", "2", "0.5",
+                             "1.5", "10"] for i in range(1, min(200, limit))]
+                return {"retCode": 0, "result": {"list": rows}}
+
+        cl = PagingClient()
+        candles = asyncio.run(cl.fetch_klines("ADAUSD", "1h", 220))
+        self.assertGreaterEqual(len(candles), 100)   # assembled via paging
+        self.assertLessEqual(len(cl.calls), 4)
+        ts = [c.ts for c in candles]
+        self.assertEqual(ts, sorted(ts))             # oldest -> newest
+
+    def test_http200_ghost_error_resolves_without_pnl(self):
+        """A desynced /api/positions record (exchange bug observed live):
+        closes answered HTTP 200 + 'qty exceeds position size' for ANY qty.
+        Must resolve as ghost — never book phantom PnL."""
+        import asyncio
+        ex, st = self._executor()
+
+        class GhostClient:
+            symbol_meta = {}
+            async def place_order(self, *a, **k):
+                return {"ok": False, "error": "qty exceeds position size"}
+            async def get_positions(self):
+                return {"ok": True, "data": [{"symbol": "SOLUSD",
+                                              "size": 0.31, "entry": 97.21}]}
+
+        ex._client = GhostClient()
+        pos = self._position()
+        st.add_position(pos)
+        res = asyncio.run(ex.close(pos, "TP"))
+        self.assertIsNone(res)
+        self.assertNotIn("p1", st.positions())   # ghost-resolved locally
+
+    def test_default_config_matches_validated_config_a(self):
+        """Ship the think-tank's validated setup: HTF_Breakout, long-only."""
+        self.assertEqual(S.enabled_strategies, ("HTF_Breakout",))
+        self.assertEqual(S.sides, "long")
+        self.assertEqual(S.funding_max_pct, 0.0)

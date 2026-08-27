@@ -82,6 +82,11 @@ class QuantEngine:
         self.last_price_ts: Dict[str, float] = {}
         self._tasks: list = []
         self._miss_count: Dict[str, int] = {}
+        # v20.4 stuck-position protection state.
+        self._recover_ts: Dict[str, float] = {}      # symbol -> last recovery ts
+        self._recover_cycles: Dict[str, int] = {}    # symbol -> recover attempts
+        self._absent_count: Dict[str, int] = {}      # symbol -> consecutive remote absences
+        self._stuck_recheck: Dict[str, float] = {}   # symbol -> last stuck re-check
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -326,13 +331,46 @@ class QuantEngine:
 
         # Recovery: remote positions we don't track locally.
         known = {p.symbol for p in local.values()}
+        stuck = set(self.state.get("stuck_symbols", set()) or set())
         for sym, rpos in remote.items():
             if sym in known:
                 continue
+            if sym in stuck:
+                # Auto-close is suspended for this symbol (the exchange keeps
+                # reporting it after confirmed closes). Only re-check hourly:
+                # allow exactly one recover+close attempt per window.
+                last = self._stuck_recheck.get(sym, 0.0)
+                if time.time() - last < self.settings.close_verify_recheck_s:
+                    continue
+                self._stuck_recheck[sym] = time.time()
+                stuck.discard(sym)
+                self.state.set("stuck_symbols", stuck)
+                self._recover_cycles[sym] = 0   # permit one fresh cycle
+                log.info("STUCK %s: hourly re-check close", sym)
             await self._recover_position(sym, rpos)
 
         if startup:
             await self._cleanup_startup_ghosts(remote)
+
+        # Un-stick: a symbol that stays ABSENT from the remote feed for two
+        # consecutive syncs is genuinely closed — clear its protection state.
+        watched = set(self._recover_cycles) | set(self.state.get("stuck_symbols", set()) or set())
+        for sym in watched:
+            if sym in remote:
+                self._absent_count.pop(sym, None)
+            else:
+                n = self._absent_count.get(sym, 0) + 1
+                self._absent_count[sym] = n
+                if n >= 2:
+                    self._recover_cycles.pop(sym, None)
+                    self._recover_ts.pop(sym, None)
+                    self._absent_count.pop(sym, None)
+                    stuck = set(self.state.get("stuck_symbols", set()) or set())
+                    if sym in stuck:
+                        stuck.discard(sym)
+                        self.state.set("stuck_symbols", stuck)
+                        log.info("UNSTUCK %s: absent from remote feed — resumed", sym)
+                        await self.tg.send(f"✅ {sym} position resolved — auto-management resumed")
 
         self.state.set("last_sync", time.strftime("%H:%M:%S"))
         log.info("sync done: active=%d", len(self.state.positions()))
@@ -341,6 +379,30 @@ class QuantEngine:
     # Position recovery / drift
     # ------------------------------------------------------------------
     async def _recover_position(self, sym: str, rpos: Dict) -> None:
+        # v20.4: rate-limit recovery per symbol. Without this, a remote
+        # position that never disappears (exchange bug / stale feed) was
+        # re-recovered every sync and instantly re-closed by the watchdog —
+        # an infinite loop booking phantom PnL once a minute.
+        now = time.time()
+        last = self._recover_ts.get(sym, 0.0)
+        if now - last < self.settings.recover_cooldown_s:
+            return
+        cycles = self._recover_cycles.get(sym, 0)
+        if cycles >= self.settings.max_recover_cycles:
+            stuck = set(self.state.get("stuck_symbols", set()) or set())
+            if sym not in stuck:
+                stuck.add(sym)
+                self.state.set("stuck_symbols", stuck)
+                log.error("STUCK %s: %d recover/close cycles without progress — "
+                          "suspending auto-management", sym, cycles)
+                await self.tg.send(
+                    f"⚠️ <b>STUCK POSITION</b> {sym}\n"
+                    f"{cycles} recover/close cycles, position persists.\n"
+                    f"Auto-management suspended — check the exchange side.")
+            return
+        self._recover_ts[sym] = now
+        self._recover_cycles[sym] = cycles + 1
+
         entry = rpos.get("entry") or self.prices.get(sym, 0.0)
         if entry <= 0:
             return

@@ -214,3 +214,55 @@ cooldown 3600s, `sides` filter, config-driven strategy enablement.
 and unstable IS/OOS — conditional acceptance for testnet only.
 
 Signed off by the Chief Development Manager — 2026-08-21.
+
+---
+
+## Cycle 2026-08-27 — v20.4: full live audit & production-incident fixes
+
+**Mandate:** user report — "earlier versions lost money, the current version
+doesn't trade at all". Full audit of code + live Render instance + exchange
+API behaviour.
+
+**Live evidence gathered:**
+1. `/api/status` showed every signal rejected with `funding drag +0.75%`.
+   The exchange's `/api/markets` reports a **static placeholder funding of
+   0.75** for LINK/ADA/DOT/AVAX (+ others) — the hard-coded 0.30 funding
+   gate therefore blocked every long entry on those symbols.
+2. Render logs exposed an **infinite recover→close loop on SOLUSD**: a
+   remote long 0.31 SOL that never disappears from `/api/positions`. Every
+   60s sync: recover → watchdog "TP" close → +$2.1 phantom PnL booked →
+   repeat. This faked the dashboard stats (+$1024, 97.7% WR over 695
+   "trades") and permanently blocked SOLUSD from scanning (always "open").
+3. The exchange answers business rejections with HTTP 200 + `{ok:false}`
+   envelopes; the fill parser fished prices out of error bodies → phantom
+   closes were booked as real.
+4. The kline proxy serves truncated history for some symbols (51 one-hour
+   bars for a 220-bar request) — intermittent, per-worker cache.
+5. v20.3.1 had re-enabled three strategy families the think-tank REJECTED
+   (TrendPullback_HTF PF 0.77, MomentumRetrace_RSI PF 0.89,
+   SwingPullback_1h PF 0.57) — the "bleeding money" regression.
+6. `.env` was committed; the dashboard has no auth (testnet: accepted,
+   optional DASH_TOKEN added).
+
+**Fixes shipped (all with regression tests):**
+- `executor.close()` detects HTTP-200 error envelopes and **verifies the
+  position actually closed** via `/api/positions`; unverified closes keep
+  the local position, book no PnL, back off exponentially, and after 3
+  failures mark the symbol **stuck** (auto-management suspended, one
+  re-check/hour, Telegram alert, auto-unstick after 2 absent syncs).
+- `engine.smart_sync()` rate-limits recovery per symbol
+  (RECOVER_COOLDOWN 1800s, MAX_RECOVER_CYCLES 3) → the recover→close
+  churn loop is structurally impossible.
+- Funding gate configurable (`FUNDING_MAX_PCT`, default **0 = off** for the
+  placeholder testnet data; set 0.10 on a real exchange).
+- Defaults restored to the validated "config A": `HTF_Breakout` long-only.
+- `fetch_klines` pages backwards (up to 4 requests) to assemble full
+  history when the proxy truncates.
+- Metrics exclude stuck/ghost exits; wins strictly `pnl > 0`.
+- Watchdog skips stuck symbols; partial-TP path also checks error envelopes.
+- `.env` untracked; optional `DASH_TOKEN` gate on the dashboard.
+
+**Verification:** 34 unit tests green (5 new regression tests), strategy
+config validated at startup, live smoke checks against the exchange API.
+
+Signed off by the Chief Development Manager — 2026-08-27.

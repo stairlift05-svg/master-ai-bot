@@ -36,7 +36,7 @@ log = logging.getLogger("quant.main")
 
 def run_web(settings: Settings, state: EngineState, db) -> None:
     """Run the Flask dashboard in a daemon thread."""
-    app = create_app(state, db)
+    app = create_app(state, db, settings)
     log.info("Flask dashboard on 0.0.0.0:%d", settings.port)
     app.run(host="0.0.0.0", port=settings.port, debug=False,
             use_reloader=False, threaded=True)

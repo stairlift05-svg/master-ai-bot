@@ -61,6 +61,11 @@ class PositionWatchdog:
                         live_price: Callable[[str], float]) -> Optional[str]:
         s = self._settings
         now = time.time()
+        # Stuck symbols: the exchange keeps reporting the position after
+        # confirmed closes. Auto-management is suspended (the sync loop
+        # allows exactly one recovery+close attempt per re-check window).
+        if position.symbol in (self._state.get("stuck_symbols", set()) or set()):
+            return None
         price, age = price_provider(position.symbol)
         hold = max(0.0, now - position.opened_at)
 

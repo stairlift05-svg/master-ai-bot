@@ -21,3 +21,15 @@ services:
       # use validated code defaults to prevent dashboard configuration drift.
       - key: ARIAX_BASE
         value: https://dryclean-app-1.onrender.com
+      # Optional operator overrides (safe defaults ship in app/config.py):
+      #   FUNDING_MAX_PCT (0 = gate off — testnet placeholder funding data)
+      #   ENABLED_STRATEGIES / SIDES (validated default: HTF_Breakout, long)
+      #   DASH_TOKEN (shared secret for the public dashboard)
+      - key: ENABLED_STRATEGIES
+        sync: false
+      - key: SIDES
+        sync: false
+      - key: FUNDING_MAX_PCT
+        sync: false
+      - key: DASH_TOKEN
+        sync: false

@@ -15,7 +15,7 @@ All decisions return ``(allowed: bool, reason: str)`` pairs.
 from __future__ import annotations
 
 import time
-from typing import Callable, Dict, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 from app.config import Settings
 from app.models import Position
@@ -134,16 +134,21 @@ class RiskManager:
     # ------------------------------------------------------------------
     # Funding gate
     # ------------------------------------------------------------------
-    @staticmethod
-    def funding_blocked(side: str, funding_pct: float,
-                        threshold: float = 0.30) -> Tuple[bool, str]:
+    def funding_blocked(self, side: str, funding_pct: float,
+                        threshold: Optional[float] = None) -> Tuple[bool, str]:
         """Block entries that pay funding above the risk-approved threshold.
 
-        Loosening this gate merely to increase trade frequency converts a
-        known carrying cost into systematic loss. The caller must normalize
-        the exchange value to percentage points before invoking this method.
+        The threshold comes from ``FUNDING_MAX_PCT`` (percentage points per
+        funding interval). **0 disables the gate** — required on the AriaX
+        testnet, whose /api/markets reports a static placeholder funding
+        (0.75) for most symbols; with the old hard-coded 0.30 threshold every
+        long entry was rejected ("funding drag +0.75%") and the bot went
+        silent. On a real exchange set e.g. 0.10.
         """
-        if abs(funding_pct) < threshold:
+        limit = self._settings.funding_max_pct if threshold is None else threshold
+        if limit <= 0:
+            return False, ""
+        if abs(funding_pct) < limit:
             return False, ""
         pays = (side == "buy" and funding_pct > 0) or (side == "sell" and funding_pct < 0)
         if pays:

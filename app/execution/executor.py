@@ -17,10 +17,11 @@ and handle "position already closed remotely" gracefully.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from app.api.ariax_client import AriaXClient, find_market_item
 from app.capital.margin import MarginManager
@@ -67,6 +68,7 @@ class OrderExecutor:
         self._adaptive = AdaptiveRisk(settings, state)
         self._limits = PortfolioLimits(settings)
         self._failure_count: Dict[str, int] = {}
+        self._unverified_closes: Dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Opening
@@ -85,7 +87,7 @@ class OrderExecutor:
             self._state.record_missed_signal(f"{symbol} {signal.strategy} -> no price")
             return None
         funding = await self._funding_for(symbol)
-        blocked, why_f = RiskManager.funding_blocked(signal.side, funding)
+        blocked, why_f = self._risk.funding_blocked(signal.side, funding)
         if blocked:
             self._state.record_missed_signal(f"{symbol} {signal.strategy} -> {why_f}")
             log.warning("SKIP %s %s: %s", symbol, signal.side, why_f)
@@ -176,6 +178,24 @@ class OrderExecutor:
     # ------------------------------------------------------------------
     # Closing
     # ------------------------------------------------------------------
+    @staticmethod
+    def _error_message(resp: Any) -> str:
+        """Return an explicit error string from an API response, if any.
+
+        The AriaX API answers HTTP 200 even for business rejections, and its
+        error envelopes can still contain price-ish fields. The old parser
+        fished a "price" out of such a body and booked a PHANTOM close with
+        made-up PnL (the +$2.1/minute fake "TP" loop came from this).
+        """
+        for item in OrderExecutor._response_dicts(resp):
+            err = str(item.get("error") or item.get("msg") or item.get("message") or "")
+            if err and err.lower() not in ("ok", "success", "none", ""):
+                if item.get("ok") is False or item.get("success") is False \
+                        or item.get("retCode") not in (None, 0) \
+                        or "error" in item:
+                    return err
+        return ""
+
     async def close(self, position: Position, reason: str) -> Optional[CloseResult]:
         """Close a position at market. Returns the realised result or None."""
         side = "sell" if position.side == "buy" else "buy"
@@ -191,6 +211,20 @@ class OrderExecutor:
             self._state.record_error(f"close {position.symbol}: {exc}")
             return None
 
+        err = self._error_message(resp)
+        if err:
+            # Business rejection with HTTP 200: treat exactly like an API error.
+            if self._looks_ghost(err):
+                await self.resolve_ghost(position, f"{reason}_ghostresp")
+                return None
+            self._state.record_error(f"close {position.symbol}: {err[:120]}")
+            log.warning("CLOSE %s rejected by exchange: %s", position.symbol, err[:160])
+            # Back off: without this the 2s watchdog would hammer the API.
+            count = self._failure_count.get(position.symbol, 0) + 1
+            self._failure_count[position.symbol] = count
+            self._risk.mark_failure(position.symbol, count)
+            return None
+
         fill = self._fill_price(resp, position.symbol, position.qty)
         if fill <= 0:
             # Some AriaX responses wrap fills in an envelope or acknowledge a
@@ -203,6 +237,22 @@ class OrderExecutor:
             )
             log.error("CLOSE %s acknowledged without a usable fill price", position.symbol)
             return None
+
+        # ---- Close verification (v20.4) --------------------------------
+        # If the exchange keeps reporting the position at (nearly) the same
+        # qty after a "successful" close, the close did NOT really take
+        # effect. Booking PnL anyway creates fake statistics and — far worse
+        # — removing the local position re-triggers recovery every sync,
+        # producing the recover→close→recover churn loop.
+        if self._settings.close_verify_recheck_s > 0:
+            verified, remote_qty = await self._verify_closed(position)
+            if not verified:
+                backoff = self._register_unverified_close(position, reason)
+                if backoff:
+                    return None
+                # Position stays locally; watchdog retries after the backoff.
+                return None
+
         raw_pnl = position.unrealized_pnl(fill)
         fees = abs(fill * position.qty) * self._settings.taker_fee * 2 \
             * self._settings.fee_buffer
@@ -216,6 +266,75 @@ class OrderExecutor:
         )
         await self._finalize_close(position, result, hold)
         return result
+
+    # ------------------------------------------------------------------
+    # Close verification helpers (v20.4)
+    # ------------------------------------------------------------------
+    async def _verify_closed(self, position: Position) -> Tuple[bool, float]:
+        """Re-fetch remote positions; True when the symbol is gone/reduced.
+
+        Tolerates the verification endpoint being unavailable: if the call
+        fails we must NOT assume the close failed (that would double-sell).
+        """
+        try:
+            data = await self._client.get_positions()
+        except AriaXAPIError as exc:
+            log.warning("close verify %s unavailable: %s (assuming closed)",
+                        position.symbol, exc)
+            return True, 0.0
+        remote = {}
+        try:
+            from app.core.engine import QuantEngine  # local import: avoid cycle
+            remote = QuantEngine._parse_remote_positions(data)
+        except Exception:  # noqa: BLE001 - defensive
+            return True, 0.0
+        rpos = remote.get(position.symbol)
+        if rpos is None:
+            return True, 0.0
+        if rpos["qty"] <= position.qty * 0.55:   # meaningfully reduced → OK
+            return True, rpos["qty"]
+        return False, rpos["qty"]
+
+    def _register_unverified_close(self, position: Position, reason: str) -> bool:
+        """Count consecutive unverified closes; space out retries, then flag stuck.
+
+        Returns True when the caller should keep the local position and back
+        off (always True here — kept as a hook for future policy).
+        """
+        sym = position.symbol
+        count = self._unverified_closes.get(sym, 0) + 1
+        self._unverified_closes[sym] = count
+        wait = min(300.0 * (2 ** (count - 1)), self._settings.close_verify_recheck_s)
+        # Reuse the risk failure backoff so the watchdog waits before retrying.
+        self._risk.mark_failure(sym, count)
+        log.warning("CLOSE %s #%d NOT verified remotely (still reported) — "
+                    "retry in %.0fs", sym, count, wait)
+        self._state.record_error(
+            f"close {sym} unverified x{count}; remote still reports position")
+        if count >= 3:
+            self._mark_stuck(sym, reason)
+        return True
+
+    def _mark_stuck(self, symbol: str, reason: str) -> None:
+        stuck = set(self._state.get("stuck_symbols", set()) or set())
+        if symbol in stuck:
+            return
+        stuck.add(symbol)
+        self._state.set("stuck_symbols", stuck)
+        log.error("STUCK POSITION %s: exchange keeps reporting it after closes "
+                  "(%s). Auto-close suspended; manual exchange-side check needed.",
+                  symbol, reason)
+        self._state.record_error(f"STUCK {symbol}: auto-close suspended ({reason})")
+        try:
+            asyncio.get_running_loop().create_task(
+                self._tg.send(
+                    f"⚠️ <b>STUCK POSITION</b> {symbol}\n"
+                    f"Exchange keeps reporting it after {reason} closes.\n"
+                    f"Auto-close suspended; check the exchange dashboard."
+                )
+            )
+        except RuntimeError:
+            pass
 
     # ------------------------------------------------------------------
     # Partial take-profit
@@ -234,6 +353,10 @@ class OrderExecutor:
             )
         except AriaXAPIError as exc:
             self._state.record_error(f"partial {position.symbol}: {exc}")
+            return False
+        if self._error_message(resp):
+            self._state.record_error(
+                f"partial {position.symbol}: {self._error_message(resp)[:120]}")
             return False
         filled = self._fill_qty(resp, half)
         if filled <= 0:
@@ -285,6 +408,7 @@ class OrderExecutor:
     async def resolve_ghost(self, position: Position, reason: str) -> None:
         """Position no longer exists remotely; clean up local state."""
         self._state.remove_position(position.id)
+        self._unverified_closes.pop(position.symbol, None)
         if position.strategy != "RealTest":
             await self._db.close_trade(position.id, 0.0, 0.0,
                                        f"ghost_{reason}", 0.0)
@@ -347,15 +471,13 @@ class OrderExecutor:
 
     def _parse_order_result(self, resp: Any, symbol: str, side: str,
                             qty: float, fallback_price: float) -> OrderResult:
-        err = ""
-        if isinstance(resp, dict):
-            err = str(resp.get("error") or resp.get("msg") or resp.get("message") or "")
-            if err.lower() not in ("ok", "success", "none", "") and (
-                resp.get("ok") is False or resp.get("success") is False
-            ):
-                raise OrderRejectedError(symbol, err, resp)
+        err = self._error_message(resp)
+        if err:
+            raise OrderRejectedError(symbol, err, resp)
         fill = self._fill_price(resp, symbol, qty) or fallback_price
         filled = self._fill_qty(resp, qty)
+        log.info("ORDER RESULT %s %s fill=%s qty=%s raw=%s", side, symbol,
+                 fill, filled, str(resp)[:200])
         return OrderResult(
             order_id=self._order_id(resp), symbol=symbol, side=side,
             qty=filled, avg_price=fill, raw=resp if isinstance(resp, dict) else {},
@@ -377,5 +499,13 @@ class OrderExecutor:
     @staticmethod
     def _looks_ghost(message: str) -> bool:
         lowered = message.lower()
+        # v20.4 live evidence: the AriaX matching engine answers closes of a
+        # desynced /api/positions record with "qty exceeds position size"
+        # (even for qty << size — the engine has no such position), and dust
+        # closes with "notional below minimum … USD". Both mean the position
+        # can never be closed via the API: resolve it as a ghost locally
+        # (no PnL booked) and let the engine's stuck-position policy take over.
         return any(tag in lowered for tag in
-                   ("not found", "no position", "already", "404", "position not exist"))
+                   ("not found", "no position", "already", "404",
+                    "position not exist", "qty exceeds position size",
+                    "notional below minimum"))

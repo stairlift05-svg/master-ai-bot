@@ -209,7 +209,9 @@ class Database:
             async with db.execute(
                 """SELECT pnl, hold_seconds FROM trades WHERE status='closed'
                    AND IFNULL(exit_reason,'') NOT LIKE 'ghost%'
-                   AND IFNULL(exit_reason,'') NOT LIKE 'startup%'""",
+                   AND IFNULL(exit_reason,'') NOT LIKE 'startup%'
+                   AND IFNULL(exit_reason,'') NOT LIKE 'stuck%'
+                   AND IFNULL(exit_reason,'') NOT LIKE '%ghostresp%'""",
             ) as cur:
                 rows = [dict(r) for r in await cur.fetchall()]
             async with db.execute(
