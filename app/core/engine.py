@@ -262,7 +262,8 @@ class QuantEngine:
         try:
             candles5 = await self.feed.fetch(sym, self.settings.timeframe,
                                              self.settings.candle_limit_5m)
-            candles15 = await self.feed.fetch(sym, "15m", 160)
+            candles15 = await self.feed.fetch(sym, self.settings.mid_timeframe,
+                                              self.settings.candle_limit_1h)
             candles1 = await self.feed.fetch(sym, self.settings.htf_timeframe,
                                              self.settings.candle_limit_1h)
         except DataUnavailableError:

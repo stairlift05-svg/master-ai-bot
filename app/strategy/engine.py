@@ -24,7 +24,14 @@ from app.strategy.signals import (
 
 log = logging.getLogger("quant.strategy")
 
-MIN_BARS_5M = 120          # کافی برای EMA50 روی 5m؛ نیاز ۲۶۰ خیلی سخت‌گیر بود
+# v20.6: Donchian_Trend's regime filter uses the EMA200 of the primary
+# timeframe. With fewer than 200 closed bars the EMA200 is undefined and the
+# context silently falls back to the EMA50 — a DIFFERENT, unvalidated
+# strategy. Measured on the real 1h test set: 260-bar warm-up gives
+# +3.52% / PF 1.53, the old 120-bar floor gives +3.23% / PF 1.47 (the filter
+# is weaker, so it lets marginal trades through). The floor is therefore
+# raised to cover the EMA200 plus a small margin.
+MIN_BARS_5M = 210
 LOOKBACKS = {"15m": 24, "1h": 48}
 
 
@@ -60,7 +67,10 @@ class StrategyEngine:
 
         closes5 = df5.closes
         if len(closes5) < MIN_BARS_5M or closes5[-1] <= 0:
-            return AnalysisResult("neutral", "insufficient data")
+            return AnalysisResult(
+                "neutral",
+                f"insufficient data ({len(closes5)}/{MIN_BARS_5M} bars)",
+            )
 
         ctx = self._build_context(symbol, df5, df15, df1)
         self._state.record_trend_strength(symbol, ctx.tf1.strength)

@@ -502,7 +502,9 @@ class TestV204Regressions(unittest.TestCase):
         be the shipped default, and real money must be opt-in.
         """
         self.assertNotIn("HTF_Breakout", S.enabled_strategies)
-        self.assertEqual(S.sides, "long")
+        # v20.6: shorts carry the entire edge in the bear half of the sample
+        # (+$61.6 short vs -$6.4 long). Long-only must never be the default.
+        self.assertEqual(S.sides, "both")
         self.assertEqual(S.funding_max_pct, 0.0)
         self.assertTrue(S.paper_mode, "real trading must be opt-in")
         self.assertGreaterEqual(S.min_edge_ratio, 1.0, "cost gate must be on")
@@ -673,3 +675,126 @@ class TestV205StressHarness(unittest.TestCase):
         self.assertTrue(checks["funding_gate_blocks_long"])
         self.assertTrue(checks["funding_gate_allows_small"])
         self.assertTrue(all(checks.values()), checks)
+
+
+class TestV206DonchianTrend(unittest.TestCase):
+    """Locks in the properties that made Donchian_Trend survive out-of-sample
+    testing where all six legacy families failed (analysis/STRATEGY_v20.6.md).
+    """
+
+    def _ctx(self, closes, highs=None, lows=None, atr=1.0, ema200=None):
+        from app.strategy.signals import HtfContext, TFContext
+
+        n = len(closes)
+        highs = highs or list(closes)
+        lows = lows or list(closes)
+        tf = TFContext(label="1h", closes=closes, highs=highs, lows=lows,
+                       volumes=[1.0] * n, atr=atr, rsi=50.0, ema20=closes[-1],
+                       ema50=closes[-1],
+                       ema200=ema200 if ema200 is not None else 100.0,
+                       trend="bullish", strength=1.0)
+        return HtfContext(symbol="ETHUSD", price=closes[-1], tf5=tf, tf15=tf,
+                          tf1=tf, candle_bull_5m=True, candle_bear_5m=False,
+                          min_stop_pct=0.003, round_trip_cost_pct=0.0014,
+                          min_edge_ratio=3.0)
+
+    def _strat(self, **over):
+        from app.strategy.signals import build_strategy
+        return build_strategy("Donchian_Trend", over or None)
+
+    def test_registered_and_is_the_shipped_default(self):
+        from app.strategy.signals import _STRATEGY_CLASSES
+        self.assertIn("Donchian_Trend", _STRATEGY_CLASSES)
+        self.assertEqual(S.enabled_strategies, ("Donchian_Trend",))
+
+    def test_breaks_out_long_above_channel(self):
+        closes = [100.0] * 60 + [130.0]
+        sig = self._strat().propose(self._ctx(closes, atr=1.0, ema200=100.0))
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig.side, "buy")
+
+    def test_symmetric_short_below_channel(self):
+        """Shorts produced the entire edge; the strategy must take them."""
+        closes = [100.0] * 60 + [70.0]
+        sig = self._strat().propose(self._ctx(closes, atr=1.0, ema200=100.0))
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig.side, "sell")
+
+    def test_marginal_poke_through_channel_is_rejected(self):
+        """break_atr is the filter that turned the strategy profitable:
+        58 stop-outs vs 7 targets without it."""
+        closes = [100.0] * 60 + [100.5]     # 0.5 ATR break, needs 1.5
+        self.assertIsNone(
+            self._strat(break_atr=1.5).propose(
+                self._ctx(closes, atr=1.0, ema200=100.0)))
+
+    def test_regime_filter_blocks_counter_trend_breakout(self):
+        """Breakout up while price is below the slow EMA -> no trade."""
+        closes = [100.0] * 60 + [130.0]
+        self.assertIsNone(
+            self._strat().propose(self._ctx(closes, atr=1.0, ema200=500.0)))
+
+    def test_no_signal_inside_the_channel(self):
+        closes = [100.0 + (i % 5) for i in range(60)] + [102.0]
+        self.assertIsNone(
+            self._strat().propose(self._ctx(closes, atr=1.0, ema200=100.0)))
+
+    def test_target_is_far_so_winners_can_run(self):
+        """Fixed near targets capped winners at ~cost in every losing version."""
+        closes = [100.0] * 60 + [130.0]
+        sig = self._strat().propose(self._ctx(closes, atr=1.0, ema200=100.0))
+        reward = abs(sig.tp - sig.entry)
+        risk = abs(sig.entry - sig.sl)
+        self.assertGreater(reward / risk, 3.0)
+
+    def test_exit_policy_lets_trends_mature(self):
+        """The 4h time stop closed 55/85 trades at ~zero PnL."""
+        self.assertGreaterEqual(S.max_hold_s, 100 * 3600)
+        self.assertFalse(S.partial_tp)
+
+    def test_primary_timeframe_matches_validation(self):
+        self.assertEqual(S.timeframe, "1h")
+        self.assertIn(S.mid_timeframe, ("4h", "1h"))
+
+
+class TestV206WarmupInvariants(unittest.TestCase):
+    """The live feed must be able to satisfy the strategy's warm-up.
+
+    Donchian_Trend's regime filter needs the EMA200 of the primary timeframe.
+    If the feed can pass its own completeness gate while still delivering
+    fewer bars than the strategy requires, the context silently falls back to
+    the EMA50 — i.e. the bot would run an unvalidated strategy in production.
+    """
+
+    def test_feed_minimum_covers_strategy_warmup(self):
+        import math
+        from app.strategy.engine import MIN_BARS_5M
+
+        accepted = max(30, math.ceil(S.candle_limit_5m * 0.80))
+        # The live scan drops the forming bar before analysing.
+        self.assertGreaterEqual(
+            accepted - 1, MIN_BARS_5M,
+            "feed can accept a batch too small for the strategy warm-up",
+        )
+
+    def test_warmup_covers_ema200_regime_filter(self):
+        from app.strategy.engine import MIN_BARS_5M
+
+        self.assertGreaterEqual(
+            MIN_BARS_5M, 200,
+            "EMA200 regime filter would degrade to EMA50",
+        )
+
+    def test_ema200_is_present_after_warmup(self):
+        """Guard the actual indicator, not just the constant."""
+        from app.strategy.engine import StrategyEngine, MIN_BARS_5M
+        from app.models import Candle, CandleSeries
+
+        rows = [Candle(ts=i * 3600000, o=100.0, h=101.0, l=99.0,
+                       c=100.0 + i * 0.01, v=1.0)
+                for i in range(MIN_BARS_5M + 1)]
+        series = CandleSeries(rows)
+        engine = StrategyEngine(S, EngineState())
+        ctx = engine._build_context("ETHUSD", series, series, series)
+        self.assertIsNotNone(ctx.tf5.ema200,
+                             "regime filter has no EMA200 after warm-up")

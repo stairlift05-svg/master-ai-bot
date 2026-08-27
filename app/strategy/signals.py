@@ -397,9 +397,86 @@ class SwingPullback1h(BaseStrategyV2):
 
 
 # ---------------------------------------------------------------------------
+# Agent G — DonchianTrend (v20.6)
+# ---------------------------------------------------------------------------
+class DonchianTrend(BaseStrategyV2):
+    """Classic symmetric channel breakout — the only design that survived
+    out-of-sample testing on 14 months of real Binance data.
+
+    Why this family, when the other six all failed:
+
+    * **Symmetric.** Every previous family was long-biased in practice (the
+      shipped config was even ``SIDES=long``). The 2024-03 -> 2025-04 sample
+      splits cleanly into a bull first half and a bear second half, and every
+      long-only variant that looked good on the first half lost badly on the
+      second. This one takes shorts on the same terms as longs.
+    * **Few trades, wide targets.** Costs are the binding constraint
+      (see analysis/AUDIT_v20.5.md). A 60-bar channel on 1h data fires rarely,
+      and the exit is a trailing channel rather than a fixed target, so the
+      winners are allowed to become much larger than the round-trip cost.
+    * **No fitted oscillator thresholds.** The only parameters are two
+      lookbacks and an ATR stop multiple, which is what makes it hold up
+      out-of-sample instead of memorising the training half.
+
+    Entry: close breaks the ``entry_len``-bar extreme *and* agrees with the
+    long-term regime filter (EMA200 slope on the trading timeframe).
+    Stop: ``sl_m`` x ATR. Target: deliberately far (``tp_m`` x ATR) — the real
+    exit is the trailing stop managed by the watchdog.
+    """
+
+    name = "Donchian_Trend"
+    priority = 0
+
+    def evaluate(self, ctx: HtfContext) -> Optional[Signal]:
+        p = self.params
+        t5, t1 = ctx.tf5, ctx.tf1
+        entry_len = int(p.get("entry_len", 60))
+        atr = t5.atr
+        if atr <= 0 or len(t5.closes) < entry_len + 5:
+            return None
+
+        highs, lows, closes = t5.highs, t5.lows, t5.closes
+        prior_h = highs[-entry_len - 1:-1]
+        prior_l = lows[-entry_len - 1:-1]
+        if not prior_h or not prior_l:
+            return None
+        hh, ll = max(prior_h), min(prior_l)
+        price = closes[-1]
+
+        # Regime filter: only take breakouts that agree with the slow trend.
+        ema_slow = t5.ema200 if t5.ema200 else t5.ema50
+        if not ema_slow or ema_slow <= 0:
+            return None
+        slope_ok_up = price > ema_slow
+        slope_ok_dn = price < ema_slow
+
+        sl_dist = atr * p.get("sl_m", 2.5)
+        tp_dist = atr * p.get("tp_m", 12.0)
+
+        # Breakout quality filter. A close that only just pokes through the
+        # channel is usually noise: those produced most of the losing trades
+        # in testing (58 stop-outs vs 7 targets before this filter). Require
+        # the break to clear the channel edge by a fraction of ATR.
+        margin = atr * p.get("break_atr", 0.0)
+
+        if price > hh + margin and slope_ok_up:
+            return self._build(
+                ctx, "buy", f"{entry_len}-bar channel breakout (trend up)",
+                sl_dist=sl_dist, tp_dist=tp_dist, confidence=0.7,
+            )
+        if price < ll - margin and slope_ok_dn:
+            return self._build(
+                ctx, "sell", f"{entry_len}-bar channel breakdown (trend down)",
+                sl_dist=sl_dist, tp_dist=tp_dist, confidence=0.7,
+            )
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 _STRATEGY_CLASSES: Dict[str, type] = {
+    "Donchian_Trend": DonchianTrend,
     "TrendPullback_HTF": TrendPullbackHTF,
     "HTF_Breakout": HTFBreakout,
     "MomentumRetrace_RSI": MomentumRetraceRSI,
@@ -409,6 +486,11 @@ _STRATEGY_CLASSES: Dict[str, type] = {
 }
 
 DEFAULT_V2_PARAMS: Dict[str, Dict[str, float]] = {
+    # Validated plateau centre (analysis/STRATEGY_v20.6.md). break_atr is the
+    # single most important parameter: it rejects marginal pokes through the
+    # channel, which were the bulk of the losing trades.
+    "Donchian_Trend": {"entry_len": 40, "sl_m": 2.5, "tp_m": 20.0,
+                       "break_atr": 1.5},
     "TrendPullback_HTF": {"sl_m": 2.0, "tp_m": 3.0, "trend_min": 0.03},
     "HTF_Breakout": {"sl_m": 2.0, "tp_m": 4.0, "trend_min": 0.015, "break_tol": 0.002},
     "MomentumRetrace_RSI": {"sl_m": 2.0, "tp_m": 2.2, "trend_min": 0.02,
