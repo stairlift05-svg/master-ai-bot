@@ -64,6 +64,16 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 <div id="positions"></div>
 <div style="margin-top:16px" id="errors"></div>
 <script>
+// F-07: the page is only reachable with a token, so carry it on every
+// XHR the page makes (read from ?token=… in the URL).
+const _TOK = new URLSearchParams(location.search).get('token');
+const _fetch = window.fetch.bind(window);
+window.fetch = (url, opts) => {
+  if (_TOK && typeof url === 'string' && !/[?&]token=/.test(url)) {
+    url += (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(_TOK);
+  }
+  return _fetch(url, opts);
+};
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({
   '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
 }[c]));
@@ -116,10 +126,21 @@ def create_app(state: EngineState, db: Database, settings=None) -> Flask:
         log.warning("db init failed at app creation: %s", exc)
     app = Flask(__name__)
 
-    # Optional shared-secret gate (DASH_TOKEN). The dashboard is on a public
-    # URL; with a token set, every route except /health requires ?token=…
-    # (or X-Dash-Token) to match. Constant-time compare; default: disabled.
+    # Shared-secret gate. Review F-07 (2026-08-28): the dashboard sits on a
+    # public URL, so auth is now ON BY DEFAULT. With DASH_TOKEN unset a
+    # random token is generated once per process start and logged below
+    # (dashed so it survives the log-redaction filter); set DASH_TOKEN for
+    # a stable operator-managed token. Every route except /health requires
+    # ?token=… (or X-Dash-Token); constant-time compare.
     dash_token = (getattr(settings, "dash_token", "") or "").strip()
+    if not dash_token:
+        raw = secrets.token_urlsafe(18)  # 24 chars
+        dash_token = "-".join(raw[i:i + 8] for i in range(0, len(raw), 8))
+        log.info(
+            "Dashboard auth ON — auto-generated token: %s "
+            "(set DASH_TOKEN env var for a stable token)", dash_token)
+    else:
+        log.info("Dashboard auth ON — using DASH_TOKEN from environment")
 
     def _authed() -> bool:
         if not dash_token:

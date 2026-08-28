@@ -21,16 +21,24 @@ services:
       # use validated code defaults to prevent dashboard configuration drift.
       - key: ARIAX_BASE
         value: https://dryclean-app-1.onrender.com
-      # SAFETY (v20.5): paper mode is ON. The engine runs the full pipeline
-      # but sends no orders to the exchange. Change this to "false" ONLY
-      # after a paper run demonstrates positive expectancy — see
-      # analysis/AUDIT_v20.5.md. No strategy here is proven profitable yet.
+      # SAFETY (v21): paper mode is ON. The engine runs the full pipeline
+      # but sends no orders to the exchange. The v21 Donchian_Trend setup is
+      # validated on 30 months of real data (analysis/STRATEGY_v21.0.md), but
+      # change this to "false" ONLY after passing every gate in
+      # GO_LIVE_CHECKLIST.md (≥50 positive paper trades, REAL TEST verified,
+      # secret-header probe, credential rotation).
       - key: PAPER_MODE
         value: "true"
       # Optional operator overrides (safe defaults ship in app/config.py):
       #   FUNDING_MAX_PCT (0 = gate off — testnet placeholder funding data)
-      #   ENABLED_STRATEGIES / SIDES (validated default: HTF_Breakout, long)
-      #   DASH_TOKEN (shared secret for the public dashboard)
+      #   ENABLED_STRATEGIES / SIDES (validated default: Donchian_Trend, both)
+      #   DASH_TOKEN (dashboard auth — ON by default; unset = auto-generated
+      #              token logged at startup. Set a stable value to stop it
+      #              rotating on each deploy)
+      #   ARIAX_SEND_SECRET_HEADER (true = send raw X-API-Secret header on
+      #     every request, current working contract; set false only after
+      #     the GO_LIVE_CHECKLIST §2 probe proves the exchange accepts calls
+      #     without it)
       - key: ENABLED_STRATEGIES
         sync: false
       - key: SIDES
@@ -38,4 +46,6 @@ services:
       - key: FUNDING_MAX_PCT
         sync: false
       - key: DASH_TOKEN
+        sync: false
+      - key: ARIAX_SEND_SECRET_HEADER
         sync: false

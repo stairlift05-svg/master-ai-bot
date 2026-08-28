@@ -1,12 +1,14 @@
-"""Security module (#09): secret handling, redaction, input validation.
+"""Security module (#09): secret handling and redaction.
 
 Principles enforced here:
 
 * Secrets are loaded from the environment / ``.env`` only — never hard-coded.
 * Secrets are redacted from every log line and Telegram message.
-* Every outbound order is validated against a symbol allowlist and numeric
-  sanity bounds *before* it reaches the exchange.
 * Credential failures produce an actionable, checklist-style error.
+
+Order validation lives in :mod:`app.security.validation` (the
+``OrderValidator`` actually used by the execution layer). A duplicate dead
+copy used to sit in this file — removed in review F-12 (2026-08-28).
 """
 from __future__ import annotations
 
@@ -15,7 +17,7 @@ import re
 from typing import List, Optional
 
 from app.config import Settings
-from app.errors import ConfigError, OrderRejectedError
+from app.errors import ConfigError
 
 _SECRET_PATTERN_CACHE: List[re.Pattern] = []
 
@@ -60,33 +62,6 @@ def redact(text: str, settings: Optional[Settings] = None) -> str:
     result = re.sub(r"(?i)([a-f0-9]{32,})", "***", result)
     result = re.sub(r"(?i)(secret[\"']?\s*[:=]\s*[\"']?)[^\"'\s,}]{4,}", r"\1***", result)
     return result
-
-
-class OrderValidator:
-    """Local pre-trade validation gate (defence in depth)."""
-
-    def __init__(self, settings: Settings):
-        self._settings = settings
-
-    def validate(self, symbol: str, side: str, qty: float, price: float,
-                 notional: float) -> None:
-        """Raise :class:`OrderRejectedError` on any violation."""
-        if symbol not in self._settings.symbols:
-            raise OrderRejectedError(symbol, f"symbol not in allowlist {self._settings.symbols}")
-        if side not in ("buy", "sell"):
-            raise OrderRejectedError(symbol, f"invalid side {side!r}")
-        if not (qty > 0 and isinstance(qty, (int, float))):
-            raise OrderRejectedError(symbol, f"invalid qty {qty!r}")
-        if not (price > 0 and isinstance(price, (int, float))):
-            raise OrderRejectedError(symbol, f"invalid price {price!r}")
-        if notional <= 0:
-            raise OrderRejectedError(symbol, f"invalid notional {notional!r}")
-        if notional > self._settings.max_notional_usd * 1.5:
-            raise OrderRejectedError(
-                symbol,
-                f"notional ${notional:.2f} exceeds hard cap "
-                f"${self._settings.max_notional_usd * 1.5:.2f}",
-            )
 
 
 def is_secret(text: str) -> bool:

@@ -124,6 +124,13 @@ class Settings:
     connect_timeout_s: float = 25.0
     max_retries: int = 4
     retry_base_s: float = 4.0
+    # Review F-06 (2026-08-28): the legacy /api/* contract is believed to
+    # authenticate with the raw X-API-Secret header. Sent by default for
+    # compatibility (changing it could break a working live deployment);
+    # verify one private call works without it, then set
+    # ARIAX_SEND_SECRET_HEADER=false so the raw secret stops leaving the
+    # process (only the derived HMAC is sent).
+    send_secret_header: bool = True
 
     # ---- Telegram notifications ------------------------------------------
     tg_token: str = ""
@@ -317,8 +324,9 @@ class Settings:
             recv_window_ms=_env_int("ARIAX_RECV_WINDOW", 5000, 1000, 60000),
             request_timeout_s=_env_float("ARIAX_TIMEOUT", 55.0, 5, 180),
             connect_timeout_s=_env_float("ARIAX_CONNECT_TIMEOUT", 25.0, 2, 60),
-            max_retries=_env_int("ARIAX_MAX_RETRIES", 4, 1, 8),
-            retry_base_s=_env_float("ARIAX_RETRY_BASE", 4.0, 0.5, 60),
+        max_retries=_env_int("ARIAX_MAX_RETRIES", 4, 1, 8),
+        retry_base_s=_env_float("ARIAX_RETRY_BASE", 4.0, 0.5, 60),
+        send_secret_header=_env_bool("ARIAX_SEND_SECRET_HEADER", True),
             tg_token=_env_str("TELEGRAM_BOT_TOKEN"),
             tg_chat_id=_env_str("TELEGRAM_CHAT_ID"),
             leverage=_env_int("LEVERAGE", 5, 1, 100),
@@ -368,8 +376,14 @@ class Settings:
             error_cooldown_base_s=_env_float("ERROR_COOLDOWN_BASE", 120, 5, 3600),
             error_cooldown_max_s=_env_float("ERROR_COOLDOWN_MAX", 1800, 60, 86400),
             ghost_miss_limit=_env_int("GHOST_MISS_LIMIT", 3, 1, 20),
-            candle_limit_5m=_env_int("CANDLE_LIMIT_5M", 300, 261, 1000),
-            candle_limit_1h=_env_int("CANDLE_LIMIT_1H", 220, 50, 1000),
+        # Review F-15: the "5m" name is historical — this is the PRIMARY
+        # timeframe fetch size (1h in the shipped config). CANDLE_LIMIT_5M
+        # keeps working for existing deployments; CANDLE_LIMIT_PRIMARY is
+        # the preferred name.
+        candle_limit_5m=_env_int(
+            "CANDLE_LIMIT_5M", _env_int("CANDLE_LIMIT_PRIMARY", 300, 261, 1000),
+            261, 1000),
+        candle_limit_1h=_env_int("CANDLE_LIMIT_1H", 220, 50, 1000),
             close_on_data_stall=_env_bool("CLOSE_ON_DATA_STALL", True),
             data_stall_grace_s=_env_float("DATA_STALL_GRACE", 600, 60, 86400),
             adapt_enabled=_env_bool("ADAPTIVE_RISK", True),

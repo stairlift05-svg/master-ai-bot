@@ -73,7 +73,7 @@ class TelegramController:
              {"text": btn_text, "callback_data": btn_cmd}],
             [{"text": "📄 Report", "callback_data": "cmd_txt"},
              {"text": "🚫 Rejections", "callback_data": "cmd_rej"}],
-            [{"text": "⚡ REAL TEST", "callback_data": "cmd_realtest"}],
+            [{"text": "⚡ REAL TEST (real $)", "callback_data": "cmd_realtest"}],
         ]
         for pos in list(st["active_positions"].values())[:5]:
             rows.append([{

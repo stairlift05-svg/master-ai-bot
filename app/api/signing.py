@@ -8,8 +8,16 @@ Implements the AriaX testnet signing contract:
   payload is the *query string* for GET requests and the raw JSON body for
   POST requests.
 
-The secret never appears in the signature payload — only the derived HMAC —
-and header building is fully deterministic for testability.
+The HMAC signature covers the payload; the signature itself never contains
+the secret. **Review note (F-06, 2026-08-28):** the legacy contract is
+believed to authenticate ``/api/*`` calls with the raw ``X-API-Secret``
+header, so it is still sent by default — but that is a design risk (the
+secret then travels in a plaintext header on every request and can end up
+in proxy/log stores). The OpenAPI spec publishes no security scheme, so we
+cannot prove the header is required; it is therefore now a **config option**
+(``ARIAX_SEND_SECRET_HEADER``). Once you have verified the exchange accepts
+requests without it (one private call each way), set it to ``false`` and the
+raw secret no longer leaves the process — only the derived HMAC does.
 """
 from __future__ import annotations
 
@@ -29,6 +37,7 @@ class RequestSigner:
         self._key = settings.arlax_key
         self._secret = settings.arlax_secret
         self._recv_window = str(int(settings.recv_window_ms))
+        self._send_secret_header = bool(getattr(settings, "send_secret_header", True))
 
     # ------------------------------------------------------------------
     def _sign(self, timestamp_ms: str, payload: str) -> str:
@@ -53,18 +62,25 @@ class RequestSigner:
         else:
             payload = body
         signature = self._sign(timestamp, payload)
-        return {
+        headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
             # Legacy AriaX headers (used by /api/* endpoints).
             "X-API-Key": self._key,
-            "X-API-Secret": self._secret,
             # Bybit-v5 style headers (used by /v5/* endpoints).
             "X-BAPI-API-KEY": self._key,
             "X-BAPI-SIGNATURE": signature,
             "X-BAPI-TIMESTAMP": timestamp,
             "X-BAPI-RECV-WINDOW": self._recv_window,
         }
+        # Review F-06: the legacy contract is believed to authenticate
+        # /api/* calls with the raw X-API-Secret header. It is sent only
+        # while ARIAX_SEND_SECRET_HEADER=true (default, compatibility).
+        # Turn it off once you have verified the exchange still accepts
+        # the calls — then the raw secret never leaves the process.
+        if self._send_secret_header:
+            headers["X-API-Secret"] = self._secret
+        return headers
 
     # ------------------------------------------------------------------
     @staticmethod

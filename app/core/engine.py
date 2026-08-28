@@ -462,6 +462,28 @@ class QuantEngine:
     # ------------------------------------------------------------------
     # Real-test flow (Telegram command)
     # ------------------------------------------------------------------
+    async def _tg_realtest_prompt(self) -> None:
+        """F-08: confirmation gate before any real-money test order.
+
+        A single tap on "REAL TEST" now only shows a warning and a
+        confirm/cancel keyboard. Only the explicit YES arm reaches
+        ``real_test_trade`` (which sends a live market order).
+        """
+        await self.tg.send(
+            "⚠️ <b>REAL TEST — real money</b>\n"
+            f"Next tap places a LIVE market order on "
+            f"<b>{self.settings.test_symbol}</b> (~${self.settings.test_usd:.0f}, "
+            f"{self.settings.leverage}x) and closes it ~12s later.\n"
+            "This uses real funds on the exchange — not paper.",
+            {"inline_keyboard": [[
+                {"text": "✅ YES, trade real", "callback_data": "cmd_realtest_yes"},
+                {"text": "✖ Cancel", "callback_data": "cmd_realtest_no"},
+            ]]},
+        )
+
+    async def _tg_realtest_no(self) -> None:
+        await self.tg.send("✖ Cancelled — no order placed", self.tg.menu())
+
     async def real_test_trade(self) -> None:
         await self.tg.send("⚡ Real test on AriaX…")
         try:
@@ -572,7 +594,12 @@ class QuantEngine:
             "cmd_sync": self._tg_sync,
             "cmd_txt": self._tg_report,
             "cmd_rej": self._tg_rejections,
-            "cmd_realtest": self.real_test_trade,
+            # Review F-08 (2026-08-28): a real-money test must never be a
+            # single tap. The button now opens a confirmation prompt; only
+            # the explicit YES arm places the order.
+            "cmd_realtest": self._tg_realtest_prompt,
+            "cmd_realtest_yes": self.real_test_trade,
+            "cmd_realtest_no": self._tg_realtest_no,
             "cmd_start": self._tg_start,
             "cmd_pause": self._tg_pause,
             "on_close": self._tg_close,

@@ -372,7 +372,14 @@ class OrderExecutor:
         rpos = remote.get(position.symbol)
         if rpos is None:
             return True, 0.0
-        if rpos["qty"] <= position.qty * 0.55:   # meaningfully reduced → OK
+        # Review F-13 (2026-08-28): the old 55% threshold counted a close as
+        # verified while up to 45% of the position was still open remotely —
+        # real residual exposure the engine no longer managed. A close is now
+        # verified only when the remote position is gone or down to dust
+        # (10% of local qty, floored at a tiny absolute amount so exchange
+        # dust rounding never flaps the check).
+        dust = max(position.qty * 0.10, 1e-4)
+        if rpos["qty"] <= dust:
             return True, rpos["qty"]
         return False, rpos["qty"]
 

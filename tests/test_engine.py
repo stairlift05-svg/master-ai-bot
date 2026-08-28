@@ -9,6 +9,7 @@ adaptive risk and the shared state snapshot.
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import time
 import unittest
@@ -990,3 +991,297 @@ class TestV21ReviewFixes(unittest.TestCase):
         self.assertAlmostEqual(pos.entry - pos.sl, 2.5, places=6,
                                msg="stop distance must track the fill, not the anchor")
         self.assertAlmostEqual(pos.tp - pos.entry, 5.0, places=6)
+
+# ======================================================================
+# v21.1 hardening cycle (2026-08-28): security gates + verification
+# ======================================================================
+
+
+class TestV211Hardening(unittest.TestCase):
+    """Review F-06/F-07/F-08/F-12/F-13/F-15 fixes, unit-verified."""
+
+    # -- F-06: raw secret header is now a config flag -------------------
+    def test_secret_header_sent_by_default(self):
+        from app.api.signing import RequestSigner
+
+        S_ = Settings()
+        self.assertTrue(S_.send_secret_header)  # backward-compatible default
+        headers = RequestSigner(S_).headers("GET", "/api/wallet")
+        self.assertEqual(headers["X-API-Secret"], S_.arlax_secret)
+        self.assertTrue(headers["X-BAPI-SIGNATURE"])
+
+    def test_secret_header_can_be_switched_off(self):
+        from app.api.signing import RequestSigner
+
+        off = replace(S, send_secret_header=False)
+        headers = RequestSigner(off).headers("GET", "/api/wallet")
+        self.assertNotIn("X-API-Secret", headers)
+        # The derived HMAC must still be present — auth never silently dies.
+        self.assertTrue(headers["X-BAPI-SIGNATURE"])
+        self.assertIn("X-API-Key", headers)
+        # Signing is untouched by the flag (same key → same HMAC).
+        on = RequestSigner(S)
+        ts, payload = "1700000000000", "q=1"
+        self.assertEqual(on._sign(ts, payload),
+                         RequestSigner(off)._sign(ts, payload))
+
+    # -- F-15: CANDLE_LIMIT_PRIMARY alias -------------------------------
+    def test_candle_limit_primary_alias(self):
+        import os
+
+        saved = {k: os.environ.get(k) for k in ("CANDLE_LIMIT_PRIMARY",
+                                                "CANDLE_LIMIT_5M")}
+        try:
+            os.environ.pop("CANDLE_LIMIT_5M", None)
+            os.environ["CANDLE_LIMIT_PRIMARY"] = "320"
+            self.assertEqual(Settings.from_env().candle_limit_5m, 320)
+            # The legacy name still works and takes precedence.
+            os.environ["CANDLE_LIMIT_5M"] = "310"
+            self.assertEqual(Settings.from_env().candle_limit_5m, 310)
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    # -- F-12: dead validator removed ------------------------------------
+    def test_dead_order_validator_removed(self):
+        import app.security.secrets as sec
+
+        self.assertFalse(hasattr(sec, "OrderValidator"))
+        from app.security.validation import OrderValidator  # live one intact
+        OrderValidator(S).validate("ETHUSD", "buy", 0.1, 100.0, 10.0)
+
+    # -- F-13: close verification tolerance 55% -> 10% -------------------
+    def _live_executor(self, remote_qty):
+        st = EngineState()
+        rm = RiskManager(S, st)
+        sizer = PositionSizer(S)
+
+        class FakeTG:
+            menu = lambda self: ""  # noqa: E731
+            async def send(self, *a, **k):
+                return None
+
+        class FakeDB:
+            async def close_trade(self, *a, **k):
+                return None
+
+            async def update_analytics(self, *a, **k):
+                return None
+
+            async def insert_trade(self, *a, **k):
+                return None
+
+        class FakeClient:
+            async def place_order(self, *a, **k):
+                return {"ok": True, "data": {"price": 100.0, "qty": 1}}
+
+            async def get_positions(self):
+                if remote_qty is None:
+                    return {"ok": True, "data": []}
+                return {"ok": True, "data": [
+                    {"symbol": "SOLUSD", "side": "buy", "qty": remote_qty,
+                     "entryPrice": 98.0},
+                ]}
+
+        class FakeMargin:
+            async def refresh(self):
+                return None
+
+        live = replace(S, paper_mode=False)
+        return OrderExecutor(live, FakeClient(), st, rm, sizer, FakeMargin(),
+                             FakeDB(), FakeTG(), lambda s: 100.0), st
+
+    def _sol_position(self, pid="p1"):
+        return Position(id=pid, symbol="SOLUSD", side="buy", strategy="X",
+                        entry=98.0, qty=0.31, sl=95.0, tp1=101.0, tp=102.0,
+                        opened_at=time.time() - 60)
+
+    def test_close_rejected_when_45pct_still_open(self):
+        """Old 55% threshold would have verified this — it must not."""
+        import asyncio
+
+        ex, st = self._live_executor(0.31 * 0.45)
+        pos = self._sol_position()
+        st.add_position(pos)
+        res = asyncio.run(ex.close(pos, "TP"))
+        self.assertIsNone(res)
+        self.assertIn("p1", st.positions())
+
+    def test_close_verified_when_down_to_dust(self):
+        import asyncio
+
+        ex, st = self._live_executor(0.31 * 0.05)  # 5% <= 10% dust floor
+        pos = self._sol_position()
+        st.add_position(pos)
+        res = asyncio.run(ex.close(pos, "TP"))
+        self.assertIsNotNone(res)
+        self.assertNotIn("p1", st.positions())
+
+    # -- F-07: dashboard auth is ON by default ----------------------------
+    def _dash_app(self, dash_token=""):
+        from app.server.web import create_app
+
+        class FakeDB:
+            async def init(self):
+                return None
+
+            async def get_recent_decisions(self, n):
+                return []
+
+            async def compute_metrics(self):
+                return None
+
+        return create_app(EngineState(), FakeDB(), replace(S, dash_token=dash_token))
+
+    def test_dashboard_requires_token(self):
+        app = self._dash_app("sekrit-token-123")
+        c = app.test_client()
+        self.assertEqual(c.get("/api/status").status_code, 401)
+        self.assertEqual(c.get("/").status_code, 401)
+        self.assertEqual(c.get("/health").status_code, 200)
+        self.assertEqual(
+            c.get("/api/status?token=sekrit-token-123").status_code, 200)
+        self.assertEqual(
+            c.get("/api/status",
+                  headers={"X-Dash-Token": "sekrit-token-123"}).status_code,
+            200)
+        self.assertEqual(c.get("/api/status?token=WRONG").status_code, 401)
+
+    def test_dashboard_autogenerates_token_when_unset(self):
+        import logging
+
+        records = []
+        handler = logging.Handler()
+        handler.emit = lambda record: records.append(record.getMessage())
+        target = logging.getLogger("quant.web")
+        old_level = target.level
+        target.setLevel(logging.INFO)
+        target.addHandler(handler)
+        try:
+            app = self._dash_app("")  # DASH_TOKEN unset
+        finally:
+            target.removeHandler(handler)
+            target.setLevel(old_level)
+
+        # Without the token nobody gets in…
+        c = app.test_client()
+        self.assertEqual(c.get("/api/status").status_code, 401)
+        # …and the auto-generated token is published in the startup log.
+        token_line = next(m for m in records
+                          if "auto-generated token" in m)
+        token = token_line.split("token: ")[1].split(" (")[0]
+        self.assertTrue(token)
+        self.assertEqual(c.get("/api/status?token=" + token).status_code, 200)
+
+    # -- F-08: real test needs an explicit confirmation tap ---------------
+    def test_realtest_requires_confirmation_tap(self):
+        import asyncio
+        import tempfile
+        from unittest import mock
+
+        from app.core.engine import QuantEngine
+
+        st = EngineState()
+        st.set("free_balance", 1000.0)
+        calls = {"orders": 0, "sends": []}
+
+        class FakeClient:
+            symbol_meta = {}
+
+            async def health(self):
+                return True
+
+            async def get_markets(self):
+                return {}
+
+            async def get_config(self):
+                return {}
+
+            async def get_wallet(self):
+                return {"data": {}}
+
+            async def get_positions(self):
+                return {"ok": True, "data": []}
+
+            async def place_order(self, *a, **k):
+                calls["orders"] += 1
+                return {"ok": True, "data": {"price": 100.0, "qty": 1}}
+
+            async def close(self):
+                return None
+
+        class FakeDB:
+            async def close_trade(self, *a, **k):
+                return None
+
+            async def update_analytics(self, *a, **k):
+                return None
+
+            async def insert_trade(self, *a, **k):
+                return None
+
+        db_path = os.path.join(tempfile.mkdtemp(), "t.db")
+        eng = QuantEngine(S, st, db_path=db_path, client=FakeClient())
+        eng.db = FakeDB()
+        eng.executor._db = FakeDB()
+
+        async def _noop():
+            return None
+
+        async def _px(_sym):
+            return 100.0
+
+        async def _capture(text, markup=None):
+            calls["sends"].append((text, markup))
+
+        async def _fast_sleep(*a, **k):
+            return None
+
+        eng.margin.refresh = _noop
+        eng._live_price = _px
+        eng.executor._price = _px  # executor captured the original bound method
+        eng.tg.send = _capture
+
+        cbs = eng.tg._callbacks
+        self.assertIs(cbs["cmd_realtest"].__func__,
+                      QuantEngine._tg_realtest_prompt)
+        self.assertIs(cbs["cmd_realtest_yes"].__func__,
+                      QuantEngine.real_test_trade)
+
+        async def scenario():
+            # Tap 1: the menu button must only open the confirmation gate.
+            await cbs["cmd_realtest"]()
+            nonlocal_ok = calls["orders"] == 0
+            prompt = calls["sends"][-1][1]
+            flat = [b["callback_data"]
+                    for row in prompt["inline_keyboard"] for b in row]
+            self.assertIn("cmd_realtest_yes", flat)
+            self.assertTrue(nonlocal_ok, "tap 1 must NOT place an order")
+            # Tap 2: explicit YES places exactly one live order.
+            with mock.patch("asyncio.sleep", new=_fast_sleep):
+                await cbs["cmd_realtest_yes"]()
+            self.assertEqual(calls["orders"], 1)
+
+        asyncio.run(scenario())
+
+        # No failure message was sent (the fake order filled cleanly).
+        self.assertFalse(any(t.startswith("❌ Test failed")
+                             for t, _ in calls["sends"]))
+        # Menu button labels the action as real-money.
+        menu = eng.tg.menu()
+        labels = [b["text"] for row in menu["inline_keyboard"] for b in row]
+        self.assertIn("⚡ REAL TEST (real $)", labels)
+
+    # -- F-14 hygiene: funding gate stays OFF, documented ------------------
+    def test_funding_gate_default_off(self):
+        # The testnet reports a static placeholder funding rate, so the gate
+        # must stay disabled (0 = off) — enabled with fake data it would
+        # reject every trade.
+        self.assertEqual(S.funding_max_pct, 0.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -4,6 +4,16 @@
 
 A modular crypto-futures trading engine for the **AriaX testnet**, rebuilt from the single-file v19.3 into a typed, dependency-light, self-healing system with strict risk management and an offline backtest/stress harness.
 
+> **v21.1 (2026-08-28, cycle 2):** security hardening for go-live readiness.
+> Dashboard auth is **on by default** (auto-generated token, all routes
+> except `/health`); the REAL TEST button now needs an explicit
+> confirmation tap before it can spend real money; close verification no
+> longer accepts a position that is 45% open (55%→10%); the raw
+> `X-API-Secret` header is a config flag (`ARIAX_SEND_SECRET_HEADER`) with a
+> documented probe procedure. Add
+> [`GO_LIVE_CHECKLIST.md`](GO_LIVE_CHECKLIST.md) — the gate the bot must
+> pass before `PAPER_MODE=false`.
+
 > **v21 (2026-08-28):** full character-by-character review + re-validation.
 > The backtest harness now matches the live engine (per-bar 1h signal
 > cadence, fill re-anchoring, identical fee model), and the strategy
@@ -22,7 +32,7 @@ A modular crypto-futures trading engine for the **AriaX testnet**, rebuilt from 
 - **Redundant candle feed** — AriaX public kline → Bybit → OKX → Binance fallback chain (ccxt optional).
 - **Risk-first sizing** — ATR-based stops, risk budget ≡ stop distance, per-position/aggregate notional caps, funding-drag gate, drawdown & daily-loss circuit breakers.
 - **Backtest & stress harness** — event-driven simulation reusing the *same* strategy/risk code as live, plus flash-crash / gap / volume-drought scenarios and 15 logic assertions.
-- **Verified** — 16 unit tests + full-engine integration smoke test (all green), Flask dashboard, Telegram control.
+- **Verified** — 72 unit tests + full-engine integration smoke test (all green), Flask dashboard, Telegram control.
 
 > ⚠️ **Honest disclaimer:** no trading system can guarantee profitability or a target win-rate. The included backtest on synthetic markets shows this parameter set does **not** beat fees on efficient markets — exactly what a good harness should reveal. Validate on real history (`simulate.py --csv`) and the testnet before risking capital.
 
