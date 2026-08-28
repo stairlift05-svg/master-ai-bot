@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  unit-tests:
+    name: Unit tests (72+)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run test suite
+        run: python tests/run_tests.py
+
+  secret-scan:
+    name: gitleaks (new commits)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Shallow on purpose: the pre-v20 history contains a known leaked
+          # password in an old .env (see SECURITY.md). After the history is
+          # purged per SECURITY.md, switch to fetch-depth: 0 so the ENTIRE
+          # history is guarded.
+          fetch-depth: 1
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
