@@ -135,6 +135,9 @@ class Settings:
     # ---- Telegram notifications ------------------------------------------
     tg_token: str = ""
     tg_chat_id: str = ""
+    # v22: master switch for per-trade Telegram messages (open/close).
+    # Alerts (halts, errors) are always sent.
+    tg_notify_trades: bool = True
 
     # ---- Trading universe ------------------------------------------------
     symbols: Tuple[str, ...] = tuple(SYMBOL_MAP.keys())
@@ -329,16 +332,17 @@ class Settings:
         send_secret_header=_env_bool("ARIAX_SEND_SECRET_HEADER", True),
             tg_token=_env_str("TELEGRAM_BOT_TOKEN"),
             tg_chat_id=_env_str("TELEGRAM_CHAT_ID"),
+            tg_notify_trades=_env_bool("TG_NOTIFY_TRADES", True),
             strategy_params={
                 **{k: dict(v) for k, v in DEFAULT_STRATEGY_PARAMS.items()},
-                # N-04: optional long-side distance gate for Donchian_Trend.
-                # Default 0.0 reproduces the validated v21 behaviour exactly;
-                # see analysis/runs/v21_final_validation.json (long book:
-                # +$4.01 window A, -$8.48 window B) before enabling.
+                # v22: long-side distance gate for Donchian_Trend.
+                # Shipped default 1.0 = two-window sweep optimum
+                # (analysis/runs/sweep_long_gate_v22.json); 0.0 reproduces
+                # the v21 behaviour exactly.
                 "Donchian_Trend": {
                     **DEFAULT_STRATEGY_PARAMS["Donchian_Trend"],
                     "long_dist_atr": _env_float(
-                        "DONCHIAN_LONG_DIST_ATR", 0.0, 0.0, 10.0),
+                        "DONCHIAN_LONG_DIST_ATR", 1.0, 0.0, 10.0),
                 },
             },
             leverage=_env_int("LEVERAGE", 5, 1, 100),
