@@ -140,6 +140,20 @@ class TelegramController:
                 log.error("TG poll: %s", exc)
             await asyncio.sleep(1)
 
+    def _sender_allowed(self, cb: Dict[str, Any]) -> bool:
+        """True only when the callback comes from the configured operator chat.
+
+        N-01 (review 2026-08-28): inline buttons keep working when a message
+        is *forwarded* to another chat, and Telegram then delivers the click
+        to the bot with the forwarder's chat id — so the chat id must be
+        verified on every callback. Callbacks without a chat (or when no
+        TELEGRAM_CHAT_ID is configured) are rejected.
+        """
+        if not self._chat_id:
+            return False
+        chat = ((cb.get("message") or {}).get("chat") or {}).get("id")
+        return chat is not None and str(chat) == str(self._chat_id)
+
     async def _poll_once(self) -> None:
         session = await self._get_session()
         url = f"{self._base}/getUpdates?offset={self._offset + 1}&timeout=8"
@@ -150,6 +164,11 @@ class TelegramController:
             if "callback_query" not in update:
                 continue
             cb = update["callback_query"]
+            # N-01: only the configured operator chat may drive the bot.
+            if not self._sender_allowed(cb):
+                bad_chat = ((cb.get("message") or {}).get("chat") or {}).get("id")
+                log.warning("TG callback from unauthorized chat %r ignored", bad_chat)
+                continue
             data_cb = cb.get("data", "")
             await self._ack(cb["id"])
             await self._handle_callback(data_cb)
