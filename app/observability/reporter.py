@@ -35,7 +35,7 @@ async def build_txt_report(state: EngineState, db: Database, settings: Settings,
 
     lines = [
         "=" * 78,
-        "     MASTER QUANT ENGINE v20  |  ARIAX TESTNET (PROFESSIONAL)",
+        "     MASTER QUANT ENGINE v22  |  ARIAX TESTNET (PROFESSIONAL)",
         f"     Generated: {_fmt_utc()}",
         "=" * 78, "",
         "┌─ 1. SUMMARY ───────────────────────────────────────────────────────────",
@@ -70,8 +70,8 @@ async def build_txt_report(state: EngineState, db: Database, settings: Settings,
         # directly: Telegram report generation must remain total.
         s = st["fetch_stats"].get(sym, {})
         lines.append(
-            f"│  {sym:<12} 5m {s.get('ok_5m', 0)}/{s.get('fail_5m', 0)}  "
-            f"1h {s.get('ok_1h', 0)}/{s.get('fail_1h', 0)}"
+            f"│  {sym:<12} {settings.timeframe} {s.get('ok_5m', 0)}/{s.get('fail_5m', 0)}  "
+            f"{settings.htf_timeframe} {s.get('ok_1h', 0)}/{s.get('fail_1h', 0)}"
         )
     lines += ["└────────────────────────────────────────────────────────────────────────", "",
               "┌─ 4. CLOSED ────────────────────────────────────────────────────────────"]
