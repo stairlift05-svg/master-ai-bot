@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+import time
 
 from flask import Flask, jsonify, render_template_string, request
 
@@ -149,11 +150,57 @@ def create_app(state: EngineState, db: Database, settings=None) -> Flask:
             request.headers.get("X-Dash-Token", "")
         return secrets.compare_digest(supplied, dash_token)
 
+    # N-02 (review 2026-08-28): brute-force lockout for the shared-secret
+    # gate. The dashboard sits on a public URL; without a lockout the
+    # 24-char token can be hammered without limit. 8 consecutive failures
+    # from one client lock that client out for 10 minutes (in-memory — a
+    # restart clears it, which also clears Render's ephemeral filesystem).
+    FAIL_LIMIT = 8
+    LOCK_SECONDS = 600.0
+    _fails: dict = {}  # client key -> [consecutive failures, locked_until]
+
+    def _client_key() -> str:
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        ip = forwarded.split(",")[0].strip() or (request.remote_addr or "?")
+        return ip
+
+    def _is_locked() -> bool:
+        rec = _fails.get(_client_key())
+        if not rec:
+            return False
+        fails, until = rec
+        if until and time.monotonic() < until:
+            return True
+        if until:  # lock expired — start fresh
+            _fails.pop(_client_key(), None)
+        return False
+
     @app.before_request
     def _gate():
-        if request.path == "/health" or _authed():
+        if request.path == "/health":
             return None
+        if _is_locked():
+            return jsonify({"error": "locked, retry later"}), 429
+        if _authed():
+            _fails.pop(_client_key(), None)
+            return None
+        rec = _fails.get(_client_key()) or [0, 0.0]
+        rec[0] += 1
+        if rec[0] >= FAIL_LIMIT:
+            rec[1] = time.monotonic() + LOCK_SECONDS
+            log.warning("dashboard auth: client %s locked for %.0fs after %d failures",
+                        _client_key(), LOCK_SECONDS, rec[0])
+        _fails[_client_key()] = rec
         return jsonify({"error": "unauthorized"}), 401
+
+    @app.after_request
+    def _security_headers(resp):
+        """N-02: baseline browser hardening for an operator-only dashboard."""
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "no-referrer")
+        resp.headers.setdefault("X-Robots-Tag", "noindex, nofollow")
+        return resp
 
     @app.route("/")
     def dashboard():
