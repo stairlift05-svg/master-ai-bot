@@ -135,6 +135,9 @@ class Settings:
     # ---- Telegram notifications ------------------------------------------
     tg_token: str = ""
     tg_chat_id: str = ""
+    # v22.2: periodic result report to Telegram (hours). 0 disables the
+    # automatic report; the /report button always works.
+    report_interval_h: float = 6.0
     # v22: master switch for per-trade Telegram messages (open/close).
     # Alerts (halts, errors) are always sent.
     tg_notify_trades: bool = True
@@ -333,6 +336,7 @@ class Settings:
             tg_token=_env_str("TELEGRAM_BOT_TOKEN"),
             tg_chat_id=_env_str("TELEGRAM_CHAT_ID"),
             tg_notify_trades=_env_bool("TG_NOTIFY_TRADES", True),
+            report_interval_h=_env_float("REPORT_INTERVAL_H", 6.0, 0, 168),
             strategy_params={
                 **{k: dict(v) for k, v in DEFAULT_STRATEGY_PARAMS.items()},
                 # v22: long-side distance gate for Donchian_Trend.

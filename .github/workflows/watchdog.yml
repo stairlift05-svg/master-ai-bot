@@ -1,0 +1,72 @@
+name: Watchdog (6h)
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # UTC — every 6 hours
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  health:
+    name: Bot health check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health (free-tier wake-tolerant)
+        id: health
+        run: |
+          set -u
+          URL="https://master-ai-bot-dme5.onrender.com/health"
+          code=000
+          for attempt in 1 2 3; do
+            code=$(curl -s -o /tmp/body.json -w "%{http_code}" --max-time 90 "$URL" || echo 000)
+            echo "attempt $attempt -> HTTP $code"
+            if [ "$code" = "200" ]; then break; fi
+            sleep 45   # free-tier cold start can take ~1 minute
+          done
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          cat /tmp/body.json 2>/dev/null || true
+
+      - name: Open issue if the bot is unreachable
+        if: steps.health.outputs.code != '200'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'watchdog'
+            });
+            if (open.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: `🚨 Watchdog: bot unreachable (health HTTP ${{ steps.health.outputs.code }})`,
+                body: `Automatic 6-hourly check failed at ${new Date().toISOString()}.\n\n` +
+                      `The health endpoint did not return 200 after 3 attempts (free-tier wake-up tolerated).\n\n` +
+                      `**What to check:** Render dashboard → master-ai-bot → Logs/Events. ` +
+                      `Known free-tier causes: service asleep (the ping itself wakes it), a failed deploy, ` +
+                      `or the AriaX exchange host (also free-tier) being asleep.`,
+                labels: ['watchdog']
+              });
+            }
+
+      - name: Close resolved issues when healthy again
+        if: steps.health.outputs.code == '200'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'watchdog'
+            });
+            for (const i of open) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: i.number,
+                body: `✅ Service healthy again at ${new Date().toISOString()} — auto-closing.`
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: i.number, state: 'closed'
+              });
+            }
