@@ -98,7 +98,7 @@ class QuantEngine:
         if not self.settings.arlax_key or not self.settings.arlax_secret:
             raise ConfigError("ARIAX_KEY / ARIAX_SECRET missing (see .env.example)")
 
-        log.info("Quant v20 starting | base=%s | symbols=%s",
+        log.info("Quant v22 starting | base=%s | symbols=%s",
                  self.settings.arlax_base, list(self.settings.symbols))
 
         await self._health_check_with_retry()
@@ -608,7 +608,7 @@ class QuantEngine:
     async def _tg_dashboard(self) -> None:
         st = self.state.snapshot()
         await self.tg.send(
-            f"📊 <b>Quant v20 AriaX</b>\n"
+            f"📊 <b>Quant v22 AriaX</b>\n"
             f"Total ${st['balance']:.2f}\nFree ${st['free_balance']:.2f}\n"
             f"Pos {len(st['active_positions'])}/{self.settings.max_positions}\n"
             f"DD {st['current_dd']:.2f}% | "
@@ -638,7 +638,7 @@ class QuantEngine:
                                         self.prices, open_times)
         with open("report.txt", "w", encoding="utf-8") as handle:
             handle.write(report)
-        await self.tg.send_document("report.txt", "📄 Quant v20 AriaX")
+        await self.tg.send_document("report.txt", "📄 Quant v22 AriaX")
 
     async def _tg_rejections(self) -> None:
         decisions = await self.db.get_recent_decisions(12)

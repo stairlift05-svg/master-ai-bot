@@ -1,8 +1,18 @@
-# Master Quant Engine v21 — AriaX Testnet (Professional Edition)
+# Master Quant Engine v22 — AriaX Testnet (Professional Edition)
 
 **موتور معاملاتی ماژولار برای صرافی آزمایشی AriaX** — بازطراحی کامل از نسخه تک‌فایلی v19.3 به یک سیستم ۱۰ ماژول حرفه‌ای با خودترمیمی، مدیریت ریسک سخت‌گیرانه و هارنس بک‌تست/استرس.
 
 A modular crypto-futures trading engine for the **AriaX testnet**, rebuilt from the single-file v19.3 into a typed, dependency-light, self-healing system with strict risk management and an offline backtest/stress harness.
+
+> **v22 (2026-08-28):** strategy + operator-visibility cycle.
+> Donchian_Trend long entries must now clear the slow EMA by 1×ATR
+> (`long_dist_atr=1.0` — validated on BOTH windows: the unseen OOS window
+> improves to +7.09% / PF 1.30 / maxDD 6.15% while the validation window
+> stays bit-identical; every gate ≥1.5 collapses OOS and was rejected —
+> [`analysis/STRATEGY_v22.md`](analysis/STRATEGY_v22.md)). Telegram trade
+> messages are now fully detailed (open: entry/SL/TP/R:R/reason · close:
+> PnL in $ and %, fees, reason, hold time, balance) with a
+> `TG_NOTIFY_TRADES` switch. 84 unit tests.
 
 > **v21.1 (2026-08-28, cycle 2):** security hardening for go-live readiness.
 > Dashboard auth is **on by default** (auto-generated token, all routes
@@ -32,7 +42,7 @@ A modular crypto-futures trading engine for the **AriaX testnet**, rebuilt from 
 - **Redundant candle feed** — AriaX public kline → Bybit → OKX → Binance fallback chain (ccxt optional).
 - **Risk-first sizing** — ATR-based stops, risk budget ≡ stop distance, per-position/aggregate notional caps, funding-drag gate, drawdown & daily-loss circuit breakers.
 - **Backtest & stress harness** — event-driven simulation reusing the *same* strategy/risk code as live, plus flash-crash / gap / volume-drought scenarios and 15 logic assertions.
-- **Verified** — 72 unit tests + full-engine integration smoke test (all green), Flask dashboard, Telegram control.
+- **Verified** — 84 unit tests + full-engine integration smoke test (all green), Flask dashboard, Telegram control.
 
 > ⚠️ **Honest disclaimer:** no trading system can guarantee profitability or a target win-rate. The included backtest on synthetic markets shows this parameter set does **not** beat fees on efficient markets — exactly what a good harness should reveal. Validate on real history (`simulate.py --csv`) and the testnet before risking capital.
 

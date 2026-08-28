@@ -194,7 +194,7 @@ class TelegramController:
             while True:
                 await asyncio.sleep(60)
         await self.send(
-            f"🚀 <b>Quant v20 AriaX (Professional)</b>\n"
+            f"🚀 <b>Quant v22 AriaX (Professional)</b>\n"
             f"Base: {self._settings.arlax_base}\n"
             f"Candles: AriaX → Bybit → OKX → Binance\n"
             f"Risk {self._settings.risk_pct}% | Lev {self._settings.leverage}x | "
