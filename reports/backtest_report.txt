@@ -1,56 +1,28 @@
 ==============================================================================
-QUANT v20 — REAL-DATA BACKTEST (['ETHUSD', 'SOLUSD', 'XRPUSD', 'AVAXUSD', 'DOTUSD', 'LINKUSD', 'ADAUSD', 'DOGEUSD'])
+QUANT v20 — REAL-DATA BACKTEST (['BTCUSD', 'ETHUSD', 'SOLUSD', 'BNBUSD', 'DOGEUSD'])
 ==============================================================================
 {
   "initial_balance": 1000.0,
-  "final_equity": 900.42,
-  "total_return_pct": -9.96,
-  "max_dd_pct": 10.07,
-  "sharpe": -14.99,
-  "n_trades": 815,
-  "win_rate": 32.0,
-  "profit_factor": 0.57,
-  "net_pnl": -99.58,
-  "decisions": 129005,
-  "exposure_pct": 26.9,
-  "halted_bars": 11527,
+  "final_equity": 1070.55,
+  "total_return_pct": 7.06,
+  "max_dd_pct": 3.91,
+  "sharpe": 0.83,
+  "n_trades": 114,
+  "win_rate": 32.5,
+  "profit_factor": 1.41,
+  "net_pnl": 70.55,
+  "decisions": 39966,
+  "exposure_pct": 61.9,
+  "halted_bars": 0,
   "per_strategy": {
-    "Volume_Surge": {
-      "n": 72,
-      "pnl": -7.43,
-      "wins": 25,
-      "win_rate": 34.7
-    },
-    "SuperTrend_Pullback": {
-      "n": 373,
-      "pnl": -50.46,
-      "wins": 121,
-      "win_rate": 32.4
-    },
-    "Breakout_Momentum": {
-      "n": 333,
-      "pnl": -33.04,
-      "wins": 108,
-      "win_rate": 32.4
-    },
-    "RSI_Extreme_Bounce": {
-      "n": 34,
-      "pnl": -7.44,
-      "wins": 7,
-      "win_rate": 20.6
-    },
-    "RSI_Divergence": {
-      "n": 3,
-      "pnl": -1.21,
-      "wins": 0,
-      "win_rate": 0.0
+    "Donchian_Trend": {
+      "n": 114,
+      "pnl": 70.55,
+      "wins": 37,
+      "win_rate": 32.5
     }
   }
 }
 Per-strategy:
-  Volume_Surge           {'n': 72, 'pnl': -7.43, 'wins': 25, 'win_rate': 34.7}
-  SuperTrend_Pullback    {'n': 373, 'pnl': -50.46, 'wins': 121, 'win_rate': 32.4}
-  Breakout_Momentum      {'n': 333, 'pnl': -33.04, 'wins': 108, 'win_rate': 32.4}
-  RSI_Extreme_Bounce     {'n': 34, 'pnl': -7.44, 'wins': 7, 'win_rate': 20.6}
-  RSI_Divergence         {'n': 3, 'pnl': -1.21, 'wins': 0, 'win_rate': 0.0}
+  Donchian_Trend         {'n': 114, 'pnl': 70.55, 'wins': 37, 'win_rate': 32.5}
 NOTE: past performance is not a promise of future results.

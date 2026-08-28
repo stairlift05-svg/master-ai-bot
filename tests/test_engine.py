@@ -798,3 +798,195 @@ class TestV206WarmupInvariants(unittest.TestCase):
         ctx = engine._build_context("ETHUSD", series, series, series)
         self.assertIsNotNone(ctx.tf5.ema200,
                              "regime filter has no EMA200 after warm-up")
+
+
+# ---------------------------------------------------------------------------
+# v21 review fixes: fill re-anchoring (F-03), per-TF signal cadence (F-02),
+# live/backtest fee parity (F-09).
+# ---------------------------------------------------------------------------
+class TestV21ReviewFixes(unittest.TestCase):
+    """The three P0/P1 harness-fidelity fixes from the 2026-08-28 review."""
+
+    def _flat_market(self, n: int, gap_open: float = None) -> dict:
+        """n flat 100.0 candles; if gap_open is set, the FINAL bar is a
+        consistent gap bar (o=h=l=c around the gap open)."""
+        from app.models import Candle
+        rows = []
+        for i in range(n - 1):
+            rows.append(Candle(i * 3600_000, 100.0, 100.5, 99.5, 100.0, 10.0))
+        if gap_open is None:
+            i = n - 1
+            rows.append(Candle(i * 3600_000, 100.0, 100.5, 99.5, 100.0, 10.0))
+        else:
+            i = n - 1
+            g = gap_open
+            rows.append(Candle(i * 3600_000, g, g * 1.01, g * 0.998,
+                                g * 1.002, 10.0))
+        return {"ETHUSD": rows}
+
+    def _bt_with_probe(self, signal_side="buy", sl_dist=2.5, tp_dist=5.0,
+                       n=280):
+        """Backtester whose strategy emits one fixed signal on the last bar."""
+        from app.backtest.backtester import Backtester
+        from app.models import AnalysisResult, Signal
+
+        class ProbeStrategy:
+            name = "probe"
+
+            def __init__(self):
+                self.calls = 0
+
+            def analyze(self, df5, df15, df1, symbol="", drop_forming=False):
+                self.calls += 1
+                # Fire exactly on the second-to-last bar so the order
+                # executes at the FINAL (gap) bar's open.
+                if len(df5.closes) != n - 1:
+                    return AnalysisResult("neutral", "wait")
+                price = df5.closes[-1]
+                sign = 1.0 if signal_side == "buy" else -1.0
+                sig = Signal(
+                    side=signal_side, strategy="probe", reason="r",
+                    entry=price, sl=price - sign * sl_dist,
+                    tp1=price + sign * sl_dist * 0.8,
+                    tp=price + sign * tp_dist, rsi=50.0, atr=1.0,
+                    htf="bullish", confidence=0.5)
+                return AnalysisResult(
+                    signal_side, "probe fired", "probe", 50.0, 1.0, "bullish",
+                    signal=sig)
+
+        probe = ProbeStrategy()
+        # Build with the DEFAULT enabled strategies (probe is not registered),
+        # then swap the engine's strategy object AFTER construction.
+        bt = Backtester(S, initial_balance=1000.0, base_tf="5m",
+                        min_bars=n - 5, signal_every_n=1)
+        bt.strategy = probe  # inject the probe in place of StrategyEngine
+        return bt
+
+    def _run_and_capture(self, bt, market, side: str):
+        """Run the backtest, capturing the position's anchored levels on the
+        first management call (the backtest closes everything at EndOfTest)."""
+        seen: dict = {}
+        orig = bt._manage_position
+
+        def wrapper(pos, bar, i):
+            if side == "buy":
+                seen.setdefault("sl_dist", pos.entry - pos.sl)
+                seen.setdefault("tp_dist", pos.tp - pos.entry)
+            else:
+                seen.setdefault("sl_dist", pos.sl - pos.entry)
+                seen.setdefault("tp_dist", pos.entry - pos.tp)
+            seen.setdefault("entry", pos.entry)
+            return orig(pos, bar, i)
+
+        bt._manage_position = wrapper
+        bt.run(market)
+        self.assertEqual(len(bt.closed), 1, "probe should have opened one trade")
+        return seen, bt.closed[0]
+
+    def test_backtest_reanchors_levels_to_actual_fill(self):
+        """F-03: a gap-open fill must keep the INTENDED stop/target distance.
+
+        The signal is anchored to the flat 100.0 close; the final bar opens at
+        104. Without re-anchoring the realized stop distance would be 104-97.5
+        = 6.5 (2.6x the budgeted 2.5). With it, entry-sl == 2.5 exactly.
+        """
+        bt = self._bt_with_probe(signal_side="buy", sl_dist=2.5, tp_dist=5.0, n=281)
+        market = self._flat_market(281, gap_open=104.0)
+        seen, trade = self._run_and_capture(bt, market, "buy")
+        slip = bt.slippage
+        expected_fill = 104.0 * (1.0 + slip)
+        self.assertAlmostEqual(seen["entry"], expected_fill, places=6)
+        self.assertAlmostEqual(seen["sl_dist"], 2.5, places=6,
+                               msg="stop distance must equal the intended 2.5")
+        self.assertAlmostEqual(seen["tp_dist"], 5.0, places=6,
+                               msg="target distance must equal the intended 5.0")
+
+    def test_backtest_reanchors_shorts_too(self):
+        bt = self._bt_with_probe(signal_side="sell", sl_dist=3.0, tp_dist=6.0, n=281)
+        market = self._flat_market(281, gap_open=96.0)  # gap-down open
+        seen, trade = self._run_and_capture(bt, market, "sell")
+        self.assertAlmostEqual(seen["sl_dist"], 3.0, places=6)
+        self.assertAlmostEqual(seen["tp_dist"], 6.0, places=6)
+
+    def test_cadence_default_is_live_equivalent_per_base_tf(self):
+        """F-02: 1h base must evaluate every bar (live scans ~70s), 5m every 3."""
+        from app.backtest.backtester import TF_PRESETS, Backtester
+        self.assertEqual(TF_PRESETS["5m"][2], 3)
+        self.assertEqual(TF_PRESETS["1h"][2], 1)
+        self.assertEqual(Backtester(S, base_tf="1h").signal_every_n, 1)
+        self.assertEqual(Backtester(S, base_tf="5m").signal_every_n, 3)
+        # explicit override still wins
+        self.assertEqual(Backtester(S, base_tf="1h",
+                                    signal_every_n=2).signal_every_n, 2)
+
+    def test_context_slots_match_live_4h_4h(self):
+        """F-05: for a 1h base the mid/HTF context slots are both 4h (4 bars),
+        matching the live mid_timeframe=4h / htf_timeframe=4h."""
+        from app.backtest.backtester import TF_PRESETS
+        self.assertEqual(TF_PRESETS["1h"][1]["15m"], 4)
+        self.assertEqual(TF_PRESETS["1h"][1]["1h"], 4)
+
+    def test_backtest_fees_match_live_formula(self):
+        """F-09: backtest fees == 2 x fill x qty x taker_fee x fee_buffer,
+        identical to executor.close."""
+        from app.backtest.backtester import Backtester, BacktestPosition
+        bt = Backtester(S, initial_balance=1000.0, base_tf="5m")
+        pos = BacktestPosition(symbol="ETHUSD", side="buy", strategy="t",
+                               entry=100.0, qty=1.0, sl=97.0, tp1=102.0,
+                               tp=105.0, opened_bar=0, atr_at_entry=1.0)
+        bt.positions.append(pos)
+        bt._close_position(pos, exit_price=105.0, bar_idx=10, reason="TP")
+        self.assertEqual(len(bt.closed), 1)
+        fill = 105.0 * (1.0 - bt.slippage)  # a buy closes below the touch
+        expected = 2.0 * fill * 1.0 * S.taker_fee * S.fee_buffer
+        self.assertAlmostEqual(bt.closed[0].fees, expected, places=9)
+
+    def test_executor_reanchors_levels_to_fill_price(self):
+        """F-03 (live path): the Position registered by try_open keeps the
+        intended SL/TP distances from the ACTUAL fill, not the stale anchor."""
+        from app.models import Signal
+        from app.persistence.database import Database  # noqa: F401
+
+        st = EngineState()
+        st.set_many(balance=1000.0, free_balance=1000.0)
+        settings = replace(S, paper_mode=True, min_order_usd=1.0)
+
+        class Client:
+            symbol_meta = {}
+            def __init__(self):
+                self.sent = []
+            async def place_order(self, *a, **k):
+                self.sent.append((a, k))
+                return {"ok": True, "avgPrice": 100.0, "qty": k.get("qty", 1)}
+            async def get_positions(self):
+                return {"ok": True, "data": []}
+            async def get_markets(self):
+                return {"ok": True, "data": {"ETHUSD": {"funding": 0.0}}}
+
+        class FakeDB:
+            async def insert_trade(self, *a, **k): return None
+            async def close_trade(self, *a, **k): return None
+            async def update_trade(self, *a, **k): return None
+            async def log_decision(self, *a, **k): return None
+            async def update_analytics(self, *a, **k): return None
+
+        class FakeTG:
+            async def send(self, *a, **k): return None
+            def menu(self): return None
+
+        class FakeMargin:
+            async def refresh(self): return None
+
+        # Live price moved to 105 while the signal was anchored at 100.
+        ex = OrderExecutor(settings, Client(), st, RiskManager(settings, st),
+                           PositionSizer(settings), FakeMargin(), FakeDB(),
+                           FakeTG(), _async_price(105.0))
+        sig = Signal(side="buy", strategy="T", reason="r", entry=100.0,
+                     sl=97.5, tp1=102.0, tp=105.0)
+        pos = asyncio.run(ex.try_open("ETHUSD", sig))
+        self.assertIsNotNone(pos)
+        slip = settings.slippage_pct
+        self.assertAlmostEqual(pos.entry, 105.0 * (1.0 + slip), places=6)
+        self.assertAlmostEqual(pos.entry - pos.sl, 2.5, places=6,
+                               msg="stop distance must track the fill, not the anchor")
+        self.assertAlmostEqual(pos.tp - pos.entry, 5.0, places=6)

@@ -1,5 +1,16 @@
 # STRATEGY v20.6 — Donchian_Trend, validated on real market data
 
+> **ERRATUM (2026-08-28):** the headline numbers in §4/§5 of this document
+> could not be reproduced from the repo as committed (the pipeline that
+> produced them was not shipped, and the committed harness's default signal
+> cadence does not match the live engine — see `REVIEW_2026-08-28.md`, F-01/
+> F-02). The strategy decision stands and is **strengthened** by an honest
+> re-validation plus a 16-month unseen-data extension: see
+> **`STRATEGY_v21.0.md`** (window A full: +7.06%, PF 1.41, DD 3.91%; window B
+> unseen 16 months: +6.69%, PF 1.28, DD 6.43%; reproduce with
+> `python analysis/validate_v21_final.py`). Treat the numbers below as
+> historical; the v21 document is authoritative.
+
 Follow-up to `AUDIT_v20.5.md`, which fixed the plumbing but concluded that
 **no strategy in the repo had a positive post-cost edge**. This document
 replaces the strategy.

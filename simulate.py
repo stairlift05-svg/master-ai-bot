@@ -52,8 +52,15 @@ def _parse_args() -> argparse.Namespace:
                         help="also write reports/stress_report.json")
     parser.add_argument(
         "--csv", type=str, default="",
-        help="directory of real 5m CSV files ({SYMBOL}.csv with columns "
+        help="directory of real CSV files ({SYMBOL}.csv with columns "
              "ts,o,h,l,c,v) to backtest instead of synthetic data",
+    )
+    parser.add_argument(
+        "--tf", type=str, default="",
+        help="base timeframe of the CSV data: '5m' or '1h' "
+             "(default: auto-detected from the bar spacing; v21 review F-04 "
+             "— 1h data previously ran under the 5m preset, mis-scaling "
+             "cooldowns, daily rolls and context resamples by 12x)",
     )
     return parser.parse_args()
 
@@ -96,8 +103,23 @@ def main() -> int:
         if not market:
             print("❌ no CSV data loaded")
             return 2
-        bt = Backtester(settings, initial_balance=args.balance)
-        report = bt.run(market, {s: resample_1h(market[s]) for s in market})
+        base_tf = args.tf
+        if not base_tf:
+            first = next(iter(market.values()))
+            dt = (first[1].ts - first[0].ts) / 1000.0 if len(first) > 1 else 300
+            base_tf = "1h" if dt >= 1800 else "5m"
+            print(f"   auto-detected base timeframe: {base_tf} "
+                  f"(bar spacing {dt:.0f}s)")
+        bt = Backtester(settings, initial_balance=args.balance,
+                        base_tf=base_tf)
+        if base_tf == "1h":
+            # HTF context must be 4h (4 base bars) to match the live engine
+            # (htf_timeframe=4h); the 5m path keeps 1h context as before.
+            from app.backtest.synthetic import resample
+            htf = {s: resample(market[s], 4) for s in market}
+        else:
+            htf = {s: resample_1h(market[s]) for s in market}
+        report = bt.run(market, htf)
         lines = ["=" * 78,
                  f"QUANT v20 — REAL-DATA BACKTEST ({list(market.keys())})",
                  "=" * 78]

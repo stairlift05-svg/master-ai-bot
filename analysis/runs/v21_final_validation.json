@@ -1,0 +1,181 @@
+{
+ "market_returns_A": {
+  "BTCUSD": 53.1,
+  "ETHUSD": -46.9,
+  "SOLUSD": 11.0,
+  "BNBUSD": 48.4,
+  "DOGEUSD": 44.1
+ },
+ "market_returns_B": {
+  "BTCUSD": -16.8,
+  "ETHUSD": 37.8,
+  "SOLUSD": -28.7,
+  "BNBUSD": 16.1,
+  "DOGEUSD": -50.1
+ },
+ "A_full_v21": {
+  "ret_pct": 7.06,
+  "n": 114,
+  "wr": 32.5,
+  "pf": 1.41,
+  "max_dd": 3.91,
+  "net": 70.55,
+  "long": 4.01,
+  "short": 66.54,
+  "exits": {
+   "SL": 51,
+   "Trail": 48,
+   "MaxHold": 5,
+   "TP": 10
+  }
+ },
+ "A_train60": {
+  "ret_pct": 4.74,
+  "n": 69,
+  "wr": 31.9,
+  "pf": 1.5,
+  "max_dd": 3.71,
+  "net": 47.23,
+  "long": 38.44,
+  "short": 8.79,
+  "exits": {
+   "SL": 33,
+   "Trail": 27,
+   "MaxHold": 4,
+   "TP": 4,
+   "EndOfTest": 1
+  }
+ },
+ "A_test40": {
+  "ret_pct": 3.92,
+  "n": 42,
+  "wr": 38.1,
+  "pf": 1.59,
+  "max_dd": 2.71,
+  "net": 39.21,
+  "long": -18.27,
+  "short": 57.48,
+  "exits": {
+   "Trail": 19,
+   "SL": 16,
+   "MaxHold": 1,
+   "TP": 6
+  }
+ },
+ "A_longonly": {
+  "ret_pct": 3.59,
+  "n": 68,
+  "wr": 29.4,
+  "pf": 1.34,
+  "max_dd": 4.27,
+  "net": 35.9,
+  "long": 35.9,
+  "short": 0,
+  "exits": {
+   "SL": 34,
+   "Trail": 27,
+   "TP": 6,
+   "MaxHold": 1
+  }
+ },
+ "A_shortonly": {
+  "ret_pct": 7.28,
+  "n": 56,
+  "wr": 37.5,
+  "pf": 1.93,
+  "max_dd": 3.26,
+  "net": 72.78,
+  "long": 0,
+  "short": 72.78,
+  "exits": {
+   "SL": 23,
+   "Trail": 23,
+   "MaxHold": 4,
+   "TP": 6
+  }
+ },
+ "B_full_v21": {
+  "ret_pct": 6.69,
+  "n": 162,
+  "wr": 22.2,
+  "pf": 1.28,
+  "max_dd": 6.43,
+  "net": 66.63,
+  "long": -8.48,
+  "short": 75.11,
+  "exits": {
+   "SL": 104,
+   "Trail": 37,
+   "MaxHold": 2,
+   "TP": 17,
+   "EndOfTest": 2
+  }
+ },
+ "B_first_half": {
+  "ret_pct": 4.68,
+  "n": 72,
+  "wr": 29.2,
+  "pf": 1.45,
+  "max_dd": 4.83,
+  "net": 46.62,
+  "long": 28.15,
+  "short": 18.47,
+  "exits": {
+   "SL": 41,
+   "Trail": 20,
+   "MaxHold": 1,
+   "TP": 8,
+   "EndOfTest": 2
+  }
+ },
+ "B_second_half": {
+  "ret_pct": 3.25,
+  "n": 85,
+  "wr": 20.0,
+  "pf": 1.27,
+  "max_dd": 6.35,
+  "net": 32.23,
+  "long": -27.54,
+  "short": 59.77,
+  "exits": {
+   "SL": 57,
+   "TP": 9,
+   "Trail": 16,
+   "MaxHold": 1,
+   "EndOfTest": 2
+  }
+ },
+ "B_longonly": {
+  "ret_pct": -1.05,
+  "n": 99,
+  "wr": 20.2,
+  "pf": 0.92,
+  "max_dd": 6.91,
+  "net": -10.67,
+  "long": -10.67,
+  "short": 0,
+  "exits": {
+   "SL": 65,
+   "Trail": 22,
+   "TP": 9,
+   "MaxHold": 1,
+   "EndOfTest": 2
+  }
+ },
+ "B_shortonly": {
+  "ret_pct": 10.7,
+  "n": 75,
+  "wr": 29.3,
+  "pf": 2.01,
+  "max_dd": 3.97,
+  "net": 107.01,
+  "long": 0,
+  "short": 107.01,
+  "exits": {
+   "Trail": 21,
+   "SL": 42,
+   "MaxHold": 1,
+   "TP": 11
+  }
+ }
+}

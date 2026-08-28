@@ -150,7 +150,18 @@ class OrderExecutor:
         free = self._state.get("free_balance") or self._state.get("balance") or 0.0
         risk_pct = self._adaptive.effective_risk_pct()
         meta = self._client.symbol_meta.get(symbol)
-        size = self._sizer.compute(symbol, price, signal.sl, free, meta, risk_pct)
+        # v21 (review F-03): size off the signal's INTENDED stop distance.
+        # signal.sl is an absolute level anchored to the signal bar's close;
+        # the trade will fill at the current market price (possibly minutes
+        # later), so |price - signal.sl| is NOT the distance we will actually
+        # risk. Use |entry - sl| from the signal and re-anchor to the fill
+        # below (kept in sync with backtester._execute_pending).
+        sl_dist = abs(signal.entry - signal.sl)
+        tp1_dist = abs(signal.tp1 - signal.entry)
+        tp_dist = abs(signal.tp - signal.entry)
+        sign = 1.0 if signal.side == "buy" else -1.0
+        size = self._sizer.compute(symbol, price, price - sign * sl_dist,
+                                   free, meta, risk_pct)
         if not size.ok:
             self._state.record_missed_signal(
                 f"{symbol} {signal.strategy} -> {size.reason}"
@@ -199,12 +210,35 @@ class OrderExecutor:
             )
             return None
 
-        # 6) Register the position.
+        # 6) Re-anchor SL/TP/TP1 to the ACTUAL fill price, preserving the
+        #    intended distances (v21, review F-03). The signal levels were
+        #    built from the signal bar's close; the fill may be minutes
+        #    later and past the channel edge, which would otherwise inflate
+        #    the realized stop distance (and risk per trade) beyond the
+        #    sizer's budget. Mirrored in backtester._execute_pending so the
+        #    backtest prices this behaviour identically.
+        fill_px = result.avg_price
+        new_sl = fill_px - sign * sl_dist
+        new_tp1 = fill_px + sign * tp1_dist
+        new_tp = fill_px + sign * tp_dist
+        # Cost-gate re-check at the actual fill price: if the price moved,
+        # the (distance-based) target must still clear friction x ratio.
+        round_trip = (2.0 * self._settings.taker_fee
+                      + 2.0 * self._settings.slippage_pct) \
+            * self._settings.fee_buffer
+        if self._settings.min_edge_ratio > 0 and \
+                tp_dist < fill_px * round_trip * self._settings.min_edge_ratio:
+            self._state.record_missed_signal(
+                f"{symbol} {signal.strategy} -> target below cost floor "
+                f"at fill {fill_px:.4f}")
+            log.warning("SKIP %s %s: target %.2f%% below cost floor at fill",
+                        symbol, signal.side, tp_dist / fill_px * 100.0)
+            return None
         position = Position(
             id=f"pos_{uuid.uuid4().hex[:8]}",
             symbol=symbol, side=signal.side, strategy=signal.strategy,
-            entry=result.avg_price, qty=result.qty,
-            sl=signal.sl, tp1=signal.tp1, tp=signal.tp,
+            entry=fill_px, qty=result.qty,
+            sl=new_sl, tp1=new_tp1, tp=new_tp,
             opened_at=time.time(), atr_at_entry=signal.atr,
         )
         self._state.add_position(position)

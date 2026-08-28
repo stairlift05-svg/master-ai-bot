@@ -1,8 +1,17 @@
-# Master Quant Engine v20 — AriaX Testnet (Professional Edition)
+# Master Quant Engine v21 — AriaX Testnet (Professional Edition)
 
 **موتور معاملاتی ماژولار برای صرافی آزمایشی AriaX** — بازطراحی کامل از نسخه تک‌فایلی v19.3 به یک سیستم ۱۰ ماژول حرفه‌ای با خودترمیمی، مدیریت ریسک سخت‌گیرانه و هارنس بک‌تست/استرس.
 
 A modular crypto-futures trading engine for the **AriaX testnet**, rebuilt from the single-file v19.3 into a typed, dependency-light, self-healing system with strict risk management and an offline backtest/stress harness.
+
+> **v21 (2026-08-28):** full character-by-character review + re-validation.
+> The backtest harness now matches the live engine (per-bar 1h signal
+> cadence, fill re-anchoring, identical fee model), and the strategy
+> (Donchian_Trend, 1h, both sides) is validated on **30 months of real data
+> including 16 months it had never seen**: +7.06%/PF 1.41 (validation
+> window) and +6.69%/PF 1.28 (unseen extension), max DD 6.43%.
+> See [`REVIEW_2026-08-28.md`](REVIEW_2026-08-28.md) and
+> [`analysis/STRATEGY_v21.0.md`](analysis/STRATEGY_v21.0.md).
 
 ---
 

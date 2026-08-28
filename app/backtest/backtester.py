@@ -37,10 +37,20 @@ SIGNAL_EVERY_N = 3                  # evaluate signals every 3 bars (15m cadence
 # validated on real 1h history (analysis/data_1h) and not just 5m synthetic
 # data. ``bar_seconds`` drives every time-based rule (holds, cooldowns), and
 # the resample factors are expressed in base bars.
+#
+# v21 (review F-02/F-05): the context slots now mirror the LIVE engine:
+# the "15m" slot is the mid timeframe, the "1h" slot the HTF timeframe.
+# Live defaults are mid=4h / htf=4h, so for a 1h base BOTH slots are 4 bars
+# (4h). Previously the "1h" slot was 24 bars (daily) — a context the live
+# engine never feeds the strategy. ``signal_every_n`` is per base TF: 3 for
+# 5m (15m cadence, which matched the old live scan loop) and 1 for 1h —
+# the live scan loop re-evaluates every ~70s, i.e. on EVERY closed 1h bar.
+# Using 3 for a 1h base silently dropped 2/3 of the live-equivalent signals
+# (measured: 54 trades vs 114 on the same data, review F-02).
 TF_PRESETS = {
-    # base_tf: (bar_seconds, {"15m": n_base_bars, "1h": n_base_bars})
-    "5m": (300.0, {"15m": 3, "1h": 12}),
-    "1h": (3600.0, {"15m": 4, "1h": 24}),   # -> 4h context and 1d context
+    # base_tf: (bar_seconds, {"15m": mid_bars, "1h": htf_bars}, signal_every_n)
+    "5m": (300.0, {"15m": 3, "1h": 12}, 3),
+    "1h": (3600.0, {"15m": 4, "1h": 4}, 1),   # mid=4h, htf=4h (live parity)
 }
 
 
@@ -143,11 +153,14 @@ class Backtester:
     def __init__(self, settings: Settings, initial_balance: float = 500.0,
                  slippage_bps: Optional[float] = None,
                  base_tf: str = "5m", min_bars: int = MIN_BARS,
-                 signal_every_n: int = SIGNAL_EVERY_N) -> None:
+                 signal_every_n: Optional[int] = None) -> None:
         self.settings = settings
-        self.bar_seconds, self.resample_n = TF_PRESETS[base_tf]
+        (self.bar_seconds, self.resample_n,
+         preset_every_n) = TF_PRESETS[base_tf]
         self.min_bars = min_bars
-        self.signal_every_n = signal_every_n
+        # None -> the live-equivalent cadence for this base TF (review F-02).
+        self.signal_every_n = (signal_every_n if signal_every_n is not None
+                               else preset_every_n)
         self.initial_balance = float(initial_balance)
         # Default to the same slippage the strategy cost gate assumes, so the
         # backtest can never be optimistic relative to the live cost model.
@@ -264,10 +277,23 @@ class Backtester:
             signal = self.pending.pop(sym)
             bar = market[sym][i]
             fill = bar.o * (1.0 + self.slippage if signal.side == "buy" else 1.0 - self.slippage)
+            # v21 (review F-03): the signal's SL/TP/TP1 were anchored to the
+            # signal bar's close, but the fill happens at THIS bar's open.
+            # Re-anchor to the actual fill price, preserving the intended
+            # distances, so realized risk equals the sizer's budget. A
+            # breakout fill past the channel edge would otherwise inflate
+            # the stop distance — and the risk per trade — beyond budget.
+            sl_dist = abs(signal.entry - signal.sl)
+            tp1_dist = abs(signal.tp1 - signal.entry)
+            tp_dist = abs(signal.tp - signal.entry)
+            sign = 1.0 if signal.side == "buy" else -1.0
+            sl = fill - sign * sl_dist
+            tp1 = fill + sign * tp1_dist
+            tp = fill + sign * tp_dist
             equity = self._equity({s: market[s][i].c for s in market})
             free = self._free_margin(equity)
             risk_pct = self.risk.adaptive_risk_pct()
-            size = self.sizer.compute(sym, fill, signal.sl, free, None, risk_pct)
+            size = self.sizer.compute(sym, fill, sl, free, None, risk_pct)
             cap_err = self.limits.would_exceed(
                 {p.symbol for p in self.positions}, len(self.positions),
                 sym, fill, size.notional,
@@ -282,8 +308,8 @@ class Backtester:
             self.risk.mark_daily_entry()
             self.positions.append(BacktestPosition(
                 symbol=sym, side=signal.side, strategy=signal.strategy,
-                entry=fill, qty=size.qty, sl=signal.sl, tp1=signal.tp1,
-                tp=signal.tp, opened_bar=i, atr_at_entry=signal.atr,
+                entry=fill, qty=size.qty, sl=sl, tp1=tp1,
+                tp=tp, opened_bar=i, atr_at_entry=signal.atr,
             ))
 
     def _manage_position(self, pos: BacktestPosition, bar: Candle, i: int) -> None:
@@ -348,7 +374,10 @@ class Backtester:
 
     def _realize(self, pos: BacktestPosition, exit_price: float,
                  qty: float, reason: str) -> None:
-        fees = (pos.entry + exit_price) * qty * self.settings.taker_fee
+        # v21 (review F-09): identical fee formula to live/paper
+        # (executor.close): both sides at the fill price, x fee_buffer.
+        fees = 2.0 * exit_price * qty * self.settings.taker_fee \
+            * self.settings.fee_buffer
         pnl = pos.unrealized(exit_price) * (qty / pos.qty) - fees
         self.balance += pnl
         self.state.bump_loss_streak(pnl > 0)
@@ -365,7 +394,10 @@ class Backtester:
             return
         slip = 1.0 - self.slippage if pos.side == "buy" else 1.0 + self.slippage
         fill = exit_price * slip
-        fees = (pos.entry + fill) * pos.qty * self.settings.taker_fee
+        # v21 (review F-09): identical fee formula to live/paper
+        # (executor.close): both sides at the fill price, x fee_buffer.
+        fees = 2.0 * fill * pos.qty * self.settings.taker_fee \
+            * self.settings.fee_buffer
         pnl = pos.unrealized(fill) - fees
         self.balance += pnl
         self.state.bump_loss_streak(pnl > 0)
