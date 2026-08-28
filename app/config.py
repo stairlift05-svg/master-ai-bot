@@ -329,6 +329,18 @@ class Settings:
         send_secret_header=_env_bool("ARIAX_SEND_SECRET_HEADER", True),
             tg_token=_env_str("TELEGRAM_BOT_TOKEN"),
             tg_chat_id=_env_str("TELEGRAM_CHAT_ID"),
+            strategy_params={
+                **{k: dict(v) for k, v in DEFAULT_STRATEGY_PARAMS.items()},
+                # N-04: optional long-side distance gate for Donchian_Trend.
+                # Default 0.0 reproduces the validated v21 behaviour exactly;
+                # see analysis/runs/v21_final_validation.json (long book:
+                # +$4.01 window A, -$8.48 window B) before enabling.
+                "Donchian_Trend": {
+                    **DEFAULT_STRATEGY_PARAMS["Donchian_Trend"],
+                    "long_dist_atr": _env_float(
+                        "DONCHIAN_LONG_DIST_ATR", 0.0, 0.0, 10.0),
+                },
+            },
             leverage=_env_int("LEVERAGE", 5, 1, 100),
             max_positions=_env_int("MAX_POS", 5, 1, 50),
             max_dd_pct=_env_float("MAX_DD", 10.0, 0.5, 100),

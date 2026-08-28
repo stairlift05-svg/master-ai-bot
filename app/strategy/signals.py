@@ -459,7 +459,17 @@ class DonchianTrend(BaseStrategyV2):
         # the break to clear the channel edge by a fraction of ATR.
         margin = atr * p.get("break_atr", 0.0)
 
-        if price > hh + margin and slope_ok_up:
+        # N-04 (optional, default OFF = exact validated v21 behaviour):
+        # long-side distance gate. In BOTH v21 validation windows the long
+        # book barely earned (window A: +$4.01) or lost (window B: -$8.48,
+        # second half -$27.54) while shorts carried the strategy (+$66.5 /
+        # +$75.1). The bleeding longs were breakouts hugging a flat/slow
+        # EMA200. When long_dist_atr > 0, a long must additionally clear the
+        # slow EMA by that many ATR before it is taken. Shorts are untouched.
+        long_gate = atr * p.get("long_dist_atr", 0.0)
+
+        if (price > hh + margin and slope_ok_up
+                and (price - ema_slow) >= long_gate):
             return self._build(
                 ctx, "buy", f"{entry_len}-bar channel breakout (trend up)",
                 sl_dist=sl_dist, tp_dist=tp_dist, confidence=0.7,
@@ -490,7 +500,7 @@ DEFAULT_V2_PARAMS: Dict[str, Dict[str, float]] = {
     # single most important parameter: it rejects marginal pokes through the
     # channel, which were the bulk of the losing trades.
     "Donchian_Trend": {"entry_len": 40, "sl_m": 2.5, "tp_m": 20.0,
-                       "break_atr": 1.5},
+                       "break_atr": 1.5, "long_dist_atr": 0.0},
     "TrendPullback_HTF": {"sl_m": 2.0, "tp_m": 3.0, "trend_min": 0.03},
     "HTF_Breakout": {"sl_m": 2.0, "tp_m": 4.0, "trend_min": 0.015, "break_tol": 0.002},
     "MomentumRetrace_RSI": {"sl_m": 2.0, "tp_m": 2.2, "trend_min": 0.02,
