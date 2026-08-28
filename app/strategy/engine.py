@@ -98,19 +98,22 @@ class StrategyEngine:
                 )
 
         return AnalysisResult(
-            "neutral", f"no signal (15m RSI={ctx.tf15.rsi:.1f}, 1h {ctx.tf1.trend})",
+            "neutral", f"no signal ({ctx.tf15.label} RSI={ctx.tf15.rsi:.1f}, {ctx.tf1.label} {ctx.tf1.trend})",
             rsi=ctx.tf15.rsi, atr=ctx.tf15.atr, htf=ctx.tf1.trend,
         )
 
     # ------------------------------------------------------------------
     def _build_context(self, symbol: str, df5: CandleSeries,
                        df15: CandleSeries, df1: CandleSeries) -> HtfContext:
-        tf5 = self._tf_context("5m", df5, lookback=12)
-        tf15 = self._tf_context("15m", df15, lookback=LOOKBACKS["15m"])
-        tf1 = self._tf_context("1h", df1, lookback=LOOKBACKS["1h"])
+        # v22.1: label the context slots with the CONFIGURED timeframes, not
+        # the historical "5m/15m/1h" names (the shipped config is 1h/4h/4h —
+        # reports used to show a "15m RSI" that was really the 4h RSI).
+        s = self._settings
+        tf5 = self._tf_context(s.timeframe, df5, lookback=12)
+        tf15 = self._tf_context(s.mid_timeframe, df15, lookback=LOOKBACKS["15m"])
+        tf1 = self._tf_context(s.htf_timeframe, df1, lookback=LOOKBACKS["1h"])
         closes = tf5.closes
         price = closes[-1]
-        s = self._settings
         # Round-trip friction: entry fee + exit fee + entry/exit slippage,
         # inflated by the configured fee buffer (conservative).
         round_trip = (2.0 * s.taker_fee + 2.0 * s.slippage_pct) * s.fee_buffer
