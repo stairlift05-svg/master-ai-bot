@@ -64,6 +64,12 @@ def load(directory: str) -> Dict[str, List[Candle]]:
 def settings_for(**ov) -> Settings:
     base = dict(enabled_strategies=("Donchian_Trend",), sides="both",
                 timeframe="1h", mid_timeframe="4h", htf_timeframe="4h")
+    # v22 note: the shipped default long gate became 1.0 after this
+    # validation was frozen; pin 0.0 here so the committed v21 numbers in
+    # analysis/runs/v21_final_validation.json stay exactly reproducible.
+    params = dict(Settings().strategy_params)
+    params["Donchian_Trend"] = {**params["Donchian_Trend"], "long_dist_atr": 0.0}
+    base.setdefault("strategy_params", params)
     base.update(ov)
     return dataclasses.replace(Settings(), **base)
 

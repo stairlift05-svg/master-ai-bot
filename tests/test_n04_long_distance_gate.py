@@ -1,8 +1,9 @@
 """N-04: optional long-side distance gate for Donchian_Trend.
 
-Default OFF must reproduce the validated v21 behaviour bit-for-bit; with
-DONCHIAN_LONG_DIST_ATR > 0 a long breakout must also clear the slow EMA
-by that many ATR (shorts are never affected).
+v22 ships long_dist_atr=1.0 (two-window sweep optimum; see
+analysis/runs/sweep_long_gate_v22.json). A long breakout must clear the
+slow EMA by that many ATR (shorts are never affected); 0.0 reproduces
+the v21 behaviour bit-for-bit.
 """
 import os
 import unittest
@@ -55,13 +56,14 @@ class TestLongDistanceGate(unittest.TestCase):
         self.assertIsNotNone(sig)
         self.assertEqual(sig.side, "sell")
 
-    def test_env_override_is_wired_and_default_is_zero(self):
+    def test_env_override_is_wired_and_default_is_v22_shipped(self):
+        """v22 ships the two-window sweep optimum (1.0); 0 = v21 behaviour."""
         self.assertEqual(
-            Settings.from_env().strategy_params["Donchian_Trend"]["long_dist_atr"], 0.0)
-        os.environ["DONCHIAN_LONG_DIST_ATR"] = "1.5"
+            Settings.from_env().strategy_params["Donchian_Trend"]["long_dist_atr"], 1.0)
+        os.environ["DONCHIAN_LONG_DIST_ATR"] = "0"
         try:
             self.assertEqual(
-                Settings.from_env().strategy_params["Donchian_Trend"]["long_dist_atr"], 1.5)
+                Settings.from_env().strategy_params["Donchian_Trend"]["long_dist_atr"], 0.0)
         finally:
             del os.environ["DONCHIAN_LONG_DIST_ATR"]
 

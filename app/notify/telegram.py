@@ -26,6 +26,71 @@ from app.state import EngineState
 log = logging.getLogger("quant.telegram")
 
 
+# ---------------------------------------------------------------------------
+# v22: rich trade messages. Pure functions so they are unit-testable and
+# identical for paper and live (only the mode tag differs).
+# ---------------------------------------------------------------------------
+
+def _fmt_hold(seconds: float) -> str:
+    s = max(0, int(seconds))
+    d, s = divmod(s, 86400)
+    h, s = divmod(s, 3600)
+    m, _ = divmod(s, 60)
+    if d:
+        return f"{d}d {h}h"
+    if h:
+        return f"{h}h {m}m"
+    return f"{m}m"
+
+
+def _pct(diff: float, base: float) -> str:
+    return f"{(diff / base) * 100.0:+.2f}%" if base > 0 else "n/a"
+
+
+def _mode_tag(paper: bool) -> str:
+    return "📝 PAPER" if paper else "💵 LIVE"
+
+
+def format_open_message(*, symbol: str, side: str, strategy: str,
+                        entry: float, qty: float, sl: float, tp: float,
+                        paper: bool, reason: str = "") -> str:
+    """The message sent when a position opens (v22)."""
+    notional = qty * entry
+    risk = abs(entry - sl)
+    reward = abs(tp - entry)
+    rr = f"{reward / risk:.1f}" if risk > 0 else "n/a"
+    lines = [
+        f"🎯 OPEN {side.upper()} • {strategy} [{_mode_tag(paper)}]",
+        f"{symbol} @ {entry:.6g}",
+        f"Qty {qty:.6g} (~${notional:.1f})",
+        f"🛑 SL {sl:.6g} ({_pct(sl - entry, entry)}) | "
+        f"🎯 TP {tp:.6g} ({_pct(tp - entry, entry)})",
+        f"R:R 1:{rr}",
+    ]
+    if reason:
+        lines.append(f"ℹ️ {reason}")
+    return "\n".join(lines)
+
+
+def format_close_message(*, symbol: str, side: str, entry: float,
+                         exit_price: float, qty: float, pnl: float,
+                         fees: float, reason: str, hold_s: float,
+                         paper: bool, balance: float = None) -> str:
+    """The message sent when a position closes (v22)."""
+    emoji = "🟢" if pnl >= 0 else "🔴"
+    invested = entry * qty
+    lines = [
+        f"{emoji} CLOSE {side.upper()} • {symbol} [{_mode_tag(paper)}]",
+        f"Entry {entry:.6g} → Exit {exit_price:.6g} ({_pct(exit_price - entry, entry)})",
+        f"💵 PnL {pnl:+.2f}$"
+        + (f" ({pnl / invested * 100.0:+.2f}% of ${invested:.0f})" if invested > 0 else ""),
+        f"⚖️ fees ${fees:.2f} | 📎 {reason} | ⏱ held {_fmt_hold(hold_s)}",
+    ]
+    if balance is not None:
+        lines.append(f"💰 balance ${balance:.2f}")
+    return "\n".join(lines)
+
+
 class TelegramController:
     """Telegram bot front-end (commands + push notifications)."""
 
@@ -122,7 +187,10 @@ class TelegramController:
     async def run(self) -> None:
         """Startup message + long-poll loop (never returns)."""
         if not self._token:
-            log.info("Telegram disabled (no TELEGRAM_BOT_TOKEN)")
+            log.warning(
+                "Telegram notifications DISABLED — set TELEGRAM_BOT_TOKEN and "
+                "TELEGRAM_CHAT_ID (Render -> Environment) to receive trade "
+                "messages. The engine runs normally without them.")
             while True:
                 await asyncio.sleep(60)
         await self.send(

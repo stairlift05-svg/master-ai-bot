@@ -499,8 +499,13 @@ DEFAULT_V2_PARAMS: Dict[str, Dict[str, float]] = {
     # Validated plateau centre (analysis/STRATEGY_v20.6.md). break_atr is the
     # single most important parameter: it rejects marginal pokes through the
     # channel, which were the bulk of the losing trades.
+    # long_dist_atr (v22): longs must clear the slow EMA by N x ATR; 1.0 is
+    # the two-window sweep optimum (analysis/runs/sweep_long_gate_v22.json —
+    # OOS window B improves +$4.01 net with window A unchanged; every value
+    # >= 1.5 collapses the OOS window, so do NOT raise it without a new
+    # two-window validation).
     "Donchian_Trend": {"entry_len": 40, "sl_m": 2.5, "tp_m": 20.0,
-                       "break_atr": 1.5, "long_dist_atr": 0.0},
+                       "break_atr": 1.5, "long_dist_atr": 1.0},
     "TrendPullback_HTF": {"sl_m": 2.0, "tp_m": 3.0, "trend_min": 0.03},
     "HTF_Breakout": {"sl_m": 2.0, "tp_m": 4.0, "trend_min": 0.015, "break_tol": 0.002},
     "MomentumRetrace_RSI": {"sl_m": 2.0, "tp_m": 2.2, "trend_min": 0.02,

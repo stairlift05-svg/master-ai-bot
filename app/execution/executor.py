@@ -35,7 +35,9 @@ from app.risk.risk_manager import RiskManager
 from app.security.validation import OrderValidator
 from app.state import EngineState
 from app.strategy.indicators import quantize
-from app.notify.telegram import TelegramController
+from app.notify.telegram import (TelegramController,
+                                   format_close_message,
+                                   format_open_message)
 
 log = logging.getLogger("quant.execution")
 
@@ -246,12 +248,16 @@ class OrderExecutor:
         self._risk.mark_daily_entry()
         self._failure_count.pop(symbol, None)
         await self._db.insert_trade(position)
-        await self._tg.send(
-            f"🎯 <b>{signal.side.upper()}</b> {signal.strategy}\n"
-            f"{symbol} @ {result.avg_price:.4f}\n"
-            f"Qty {result.qty} | ~${result.notional:.1f}\n🧪 AriaX Testnet",
-            self._tg.menu(),
-        )
+        if self._settings.tg_notify_trades:
+            await self._tg.send(
+                format_open_message(
+                    symbol=symbol, side=signal.side, strategy=signal.strategy,
+                    entry=result.avg_price, qty=result.qty,
+                    sl=new_sl, tp=new_tp, paper=self._settings.paper_mode,
+                    reason=signal.reason,
+                ),
+                self._tg.menu(),
+            )
         log.info("TRADE OPENED %s %s @ %.4f qty=%s", signal.side.upper(),
                  symbol, result.avg_price, result.qty)
         return position
@@ -482,11 +488,18 @@ class OrderExecutor:
                                        result.fees, result.reason, hold)
         self._state.bump_loss_streak(result.realized_pnl > 0)
         await self._db.update_analytics(self._state)
-        await self._tg.send(
-            f"{'🟢' if result.realized_pnl >= 0 else '🔴'} closed "
-            f"({result.reason}) ${result.realized_pnl:.2f}",
-            self._tg.menu(),
-        )
+        if self._settings.tg_notify_trades:
+            await self._tg.send(
+                format_close_message(
+                    symbol=position.symbol, side=position.side,
+                    entry=position.entry, exit_price=result.avg_price,
+                    qty=position.qty, pnl=result.realized_pnl,
+                    fees=result.fees, reason=result.reason, hold_s=hold,
+                    paper=self._settings.paper_mode,
+                    balance=self._state.get("balance", 0.0) or None,
+                ),
+                self._tg.menu(),
+            )
         log.info("CLOSED %s %s pnl=%+.2f reason=%s", position.symbol,
                  position.side, result.realized_pnl, result.reason)
 
