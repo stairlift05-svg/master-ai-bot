@@ -113,8 +113,17 @@ class QuantEngine:
             asyncio.create_task(self._loop("watchdog", 2.0, self._watchdog_round)),
             asyncio.create_task(self._loop("sync", self.settings.sync_interval_s,
                                            self._sync_round)),
-            asyncio.create_task(self.tg.run()),
         ]
+        # v22.2: autonomous periodic result report (default every 6h).
+        # Sends the full text report to Telegram without any operator
+        # action; 0 disables. Failure never kills the engine (_loop guards).
+        if self.settings.report_interval_h > 0:
+            self._tasks.append(asyncio.create_task(self._loop(
+                "report", self.settings.report_interval_h * 3600.0,
+                self._report_round)))
+            log.info("periodic Telegram report every %.1fh",
+                     self.settings.report_interval_h)
+        self._tasks.append(asyncio.create_task(self.tg.run()))
         log.info("Engine loops started (%d tasks)", len(self._tasks))
 
     async def shutdown(self) -> None:
@@ -639,6 +648,16 @@ class QuantEngine:
         with open("report.txt", "w", encoding="utf-8") as handle:
             handle.write(report)
         await self.tg.send_document("report.txt", "📄 Quant v22 AriaX")
+
+    async def _report_round(self) -> None:
+        """Periodic autonomous report (v22.2) — same payload as /report."""
+        open_times = {pid: p.opened_at
+                      for pid, p in self.state.snapshot()["active_positions"].items()}
+        report = await build_txt_report(self.state, self.db, self.settings,
+                                        self.prices, open_times)
+        with open("report.txt", "w", encoding="utf-8") as handle:
+            handle.write(report)
+        await self.tg.send_document("report.txt", "📄 Quant v22 — 6h report")
 
     async def _tg_rejections(self) -> None:
         decisions = await self.db.get_recent_decisions(12)
