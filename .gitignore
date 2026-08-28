@@ -13,3 +13,10 @@ report.txt
 
 # downloaded OHLCV data (regenerate with analysis/fetch_real_data.py)
 analysis/data/
+
+# --- secrets hygiene (incident 2026-08-28) ---
+.env.*
+!.env.example
+*.db-journal
+*.db-wal
+*.db-shm
