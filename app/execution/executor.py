@@ -69,6 +69,54 @@ class OrderExecutor:
         self._limits = PortfolioLimits(settings)
         self._failure_count: Dict[str, int] = {}
         self._unverified_closes: Dict[str, int] = {}
+        self._paper_positions: Dict[str, Dict[str, float]] = {}
+        if settings.paper_mode:
+            log.warning(
+                "PAPER MODE ACTIVE — orders are simulated locally, nothing is "
+                "sent to the exchange. Set PAPER_MODE=false to trade for real."
+            )
+
+    # ------------------------------------------------------------------
+    # Order transport (the single place that reaches the exchange)
+    # ------------------------------------------------------------------
+    async def _submit(self, symbol: str, side: str, qty: float,
+                      strategy: str = "", client_oid: str = "") -> Any:
+        """Send an order, or simulate the fill when paper mode is enabled.
+
+        Paper fills use the live price moved against us by the configured
+        slippage, so paper PnL is charged the same friction the strategy cost
+        gate and the backtester assume. The response mimics the exchange
+        envelope so every downstream parser is exercised unchanged.
+        """
+        if not self._settings.paper_mode:
+            return await self._client.place_order(
+                symbol, side, qty, lev=self._settings.leverage,
+                order_type="market", strategy=strategy, client_oid=client_oid,
+            )
+
+        price = await self._price(symbol)
+        if price <= 0:
+            raise OrderRejectedError(symbol, "paper fill needs a live price")
+        slip = 1.0 + self._settings.slippage_pct if side == "buy" \
+            else 1.0 - self._settings.slippage_pct
+        fill = price * slip
+        held = self._paper_positions.get(symbol, {"qty": 0.0, "side": side})
+        if held["side"] == side:
+            held = {"qty": held["qty"] + qty, "side": side}
+        else:
+            held = {"qty": max(0.0, held["qty"] - qty), "side": held["side"]}
+        if held["qty"] <= 1e-12:
+            self._paper_positions.pop(symbol, None)
+        else:
+            self._paper_positions[symbol] = held
+        log.info("PAPER %s %s qty=%s @ %.6f", side.upper(), symbol, qty, fill)
+        return {"ok": True, "paper": True,
+                "orderId": f"paper_{uuid.uuid4().hex[:10]}",
+                "avgPrice": fill, "qty": qty}
+
+    def paper_positions(self) -> Dict[str, Dict[str, float]]:
+        """Simulated exchange-side positions (paper mode only)."""
+        return {k: dict(v) for k, v in self._paper_positions.items()}
 
     # ------------------------------------------------------------------
     # Opening
@@ -135,10 +183,9 @@ class OrderExecutor:
         # 5) Place the order.
         client_oid = uuid.uuid4().hex[:24] if self._settings.send_client_oid else ""
         try:
-            resp = await self._client.place_order(
-                symbol, signal.side, size.qty, lev=self._settings.leverage,
-                order_type="market", strategy=signal.strategy,
-                client_oid=client_oid,
+            resp = await self._submit(
+                symbol, signal.side, size.qty,
+                strategy=signal.strategy, client_oid=client_oid,
             )
         except (AriaXAPIError, OrderRejectedError) as exc:
             await self._on_order_failure(symbol, signal, exc)
@@ -200,10 +247,7 @@ class OrderExecutor:
         """Close a position at market. Returns the realised result or None."""
         side = "sell" if position.side == "buy" else "buy"
         try:
-            resp = await self._client.place_order(
-                position.symbol, side, position.qty, lev=self._settings.leverage,
-                order_type="market",
-            )
+            resp = await self._submit(position.symbol, side, position.qty)
         except AriaXAPIError as exc:
             if self._looks_ghost(str(exc)):
                 await self.resolve_ghost(position, reason)
@@ -276,6 +320,9 @@ class OrderExecutor:
         Tolerates the verification endpoint being unavailable: if the call
         fails we must NOT assume the close failed (that would double-sell).
         """
+        if self._settings.paper_mode:
+            held = self._paper_positions.get(position.symbol)
+            return (held is None), (held or {}).get("qty", 0.0)
         try:
             data = await self._client.get_positions()
         except AriaXAPIError as exc:
@@ -347,10 +394,7 @@ class OrderExecutor:
             return False
         side = "sell" if position.side == "buy" else "buy"
         try:
-            resp = await self._client.place_order(
-                position.symbol, side, half, lev=self._settings.leverage,
-                order_type="market",
-            )
+            resp = await self._submit(position.symbol, side, half)
         except AriaXAPIError as exc:
             self._state.record_error(f"partial {position.symbol}: {exc}")
             return False

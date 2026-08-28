@@ -12,6 +12,7 @@ import asyncio
 import sys
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -392,7 +393,10 @@ class TestV204Regressions(unittest.TestCase):
             async def refresh(self):
                 return None
 
-        return OrderExecutor(S, FakeClient(), st, rm, sizer, FakeMargin(),
+        # These regressions exercise the REAL exchange close path, so paper
+        # mode (the shipped default) must be switched off for them.
+        live = replace(S, paper_mode=False)
+        return OrderExecutor(live, FakeClient(), st, rm, sizer, FakeMargin(),
                              FakeDB(), FakeTG(), lambda s: 100.0), st
 
     def _position(self):
@@ -490,8 +494,307 @@ class TestV204Regressions(unittest.TestCase):
         self.assertIsNone(res)
         self.assertNotIn("p1", st.positions())   # ghost-resolved locally
 
-    def test_default_config_matches_validated_config_a(self):
-        """Ship the think-tank's validated setup: HTF_Breakout, long-only."""
-        self.assertEqual(S.enabled_strategies, ("HTF_Breakout",))
-        self.assertEqual(S.sides, "long")
+    def test_default_config_is_safe_and_evidence_based(self):
+        """v20.5: defaults must reflect the evidence, not the v20.4 claim.
+
+        The screening report rejected every family ("None passed"), and a
+        fresh hold-out re-run ranked HTF_Breakout LAST. So it must no longer
+        be the shipped default, and real money must be opt-in.
+        """
+        self.assertNotIn("HTF_Breakout", S.enabled_strategies)
+        # v20.6: shorts carry the entire edge in the bear half of the sample
+        # (+$61.6 short vs -$6.4 long). Long-only must never be the default.
+        self.assertEqual(S.sides, "both")
         self.assertEqual(S.funding_max_pct, 0.0)
+        self.assertTrue(S.paper_mode, "real trading must be opt-in")
+        self.assertGreaterEqual(S.min_edge_ratio, 1.0, "cost gate must be on")
+
+
+class TestV205CostGate(unittest.TestCase):
+    """The cost gate is the fix for the root cause of every losing version:
+    signals whose target could not pay for fees + slippage."""
+
+    def _ctx(self, tp_atr: float, cost_pct: float, edge_ratio: float):
+        from app.strategy.signals import HtfContext, TFContext
+
+        closes = [100.0] * 60
+        tf = TFContext(label="x", closes=closes, highs=closes, lows=closes,
+                       volumes=[1.0] * 60, atr=tp_atr, rsi=50.0, ema20=100.0,
+                       ema50=100.0, trend="bullish", strength=1.0)
+        return HtfContext(symbol="ETHUSD", price=100.0, tf5=tf, tf15=tf, tf1=tf,
+                          candle_bull_5m=True, candle_bear_5m=False,
+                          min_stop_pct=0.003, round_trip_cost_pct=cost_pct,
+                          min_edge_ratio=edge_ratio)
+
+    def _strategy(self):
+        from app.strategy.signals import BaseStrategyV2
+
+        class Probe(BaseStrategyV2):
+            name = "Probe"
+
+            def evaluate(self, ctx):
+                # Target = 1 ATR, stop = 1 ATR.
+                return self._build(ctx, "buy", "probe",
+                                   sl_dist=ctx.tf1.atr, tp_dist=ctx.tf1.atr)
+
+        return Probe({})
+
+    def test_rejects_signal_that_cannot_pay_for_costs(self):
+        """Target far below the cost floor -> no trade at all."""
+        strat = self._strategy()
+        # Tiny ATR target vs 1% round-trip friction (need 3% to be worth it).
+        ctx = self._ctx(tp_atr=0.05, cost_pct=0.01, edge_ratio=3.0)
+        self.assertIsNone(strat.propose(ctx))
+
+    def test_widens_target_that_is_marginally_below_floor(self):
+        """A target close to the floor is stretched, not discarded."""
+        strat = self._strategy()
+        # Target 0.45 (after the 1.5x stop floor) vs required 0.60.
+        ctx = self._ctx(tp_atr=0.30, cost_pct=0.002, edge_ratio=3.0)
+        sig = strat.propose(ctx)
+        self.assertIsNotNone(sig)
+        required = 100.0 * 0.002 * 3.0
+        self.assertGreaterEqual(sig.tp - sig.entry, required - 1e-9)
+
+    def test_healthy_signal_passes_untouched(self):
+        strat = self._strategy()
+        ctx = self._ctx(tp_atr=2.0, cost_pct=0.0014, edge_ratio=3.0)
+        sig = strat.propose(ctx)
+        self.assertIsNotNone(sig)
+        # tp = max(atr target, 1.5 x stop) = 3.0, well clear of the 0.42 floor.
+        self.assertAlmostEqual(sig.tp - sig.entry, 3.0, places=6)
+
+    def test_gate_disabled_lets_everything_through(self):
+        strat = self._strategy()
+        ctx = self._ctx(tp_atr=0.05, cost_pct=0.01, edge_ratio=0.0)
+        self.assertIsNotNone(strat.propose(ctx))
+
+
+def _async_price(value: float):
+    """Async price provider matching QuantEngine._live_price's signature."""
+    async def _price(_symbol: str) -> float:
+        return value
+    return _price
+
+
+class TestV205PaperMode(unittest.TestCase):
+    """Paper mode must run the whole pipeline without reaching the exchange."""
+
+    def _executor(self, paper: bool):
+        from app.persistence.database import Database
+
+        st = EngineState()
+        st.set_many(balance=1000.0, free_balance=1000.0)
+        settings = replace(S, paper_mode=paper, min_order_usd=1.0)
+
+        class Client:
+            symbol_meta = {}
+
+            def __init__(self):
+                self.sent = []
+
+            async def place_order(self, *a, **k):
+                self.sent.append((a, k))
+                return {"ok": True, "avgPrice": 100.0, "qty": k.get("qty", 1)}
+
+            async def get_positions(self):
+                return {"ok": True, "data": []}
+
+            async def get_markets(self):
+                return {"ok": True, "data": {"ETHUSD": {"funding": 0.0}}}
+
+        class FakeDB:
+            async def insert_trade(self, *a, **k): return None
+            async def close_trade(self, *a, **k): return None
+            async def update_trade(self, *a, **k): return None
+            async def log_decision(self, *a, **k): return None
+            async def update_analytics(self, *a, **k): return None
+
+        class FakeTG:
+            async def send(self, *a, **k): return None
+            def menu(self): return None
+
+        class FakeMargin:
+            async def refresh(self): return None
+
+        client = Client()
+        ex = OrderExecutor(settings, client, st, RiskManager(settings, st),
+                           PositionSizer(settings), FakeMargin(), FakeDB(),
+                           FakeTG(), _async_price(100.0))
+        return ex, client, st
+
+    def test_paper_mode_never_calls_the_exchange(self):
+        from app.models import Signal
+
+        ex, client, st = self._executor(paper=True)
+        sig = Signal(side="buy", strategy="T", reason="r", entry=100.0,
+                     sl=97.0, tp1=103.0, tp=106.0)
+        pos = asyncio.run(ex.try_open("ETHUSD", sig))
+        self.assertIsNotNone(pos)
+        self.assertEqual(client.sent, [], "paper mode must not place orders")
+        self.assertIn("ETHUSD", ex.paper_positions())
+
+    def test_paper_fill_is_charged_slippage(self):
+        from app.models import Signal
+
+        ex, _, _ = self._executor(paper=True)
+        sig = Signal(side="buy", strategy="T", reason="r", entry=100.0,
+                     sl=97.0, tp1=103.0, tp=106.0)
+        pos = asyncio.run(ex.try_open("ETHUSD", sig))
+        # A buy fills ABOVE the mid price by the modelled slippage.
+        self.assertGreater(pos.entry, 100.0)
+
+    def test_paper_round_trip_clears_the_simulated_book(self):
+        from app.models import Signal
+
+        ex, client, st = self._executor(paper=True)
+        sig = Signal(side="buy", strategy="T", reason="r", entry=100.0,
+                     sl=97.0, tp1=103.0, tp=106.0)
+        pos = asyncio.run(ex.try_open("ETHUSD", sig))
+        res = asyncio.run(ex.close(pos, "TP"))
+        self.assertIsNotNone(res)
+        self.assertEqual(ex.paper_positions(), {})
+        self.assertEqual(client.sent, [])
+
+    def test_live_mode_still_reaches_the_exchange(self):
+        from app.models import Signal
+
+        ex, client, _ = self._executor(paper=False)
+        sig = Signal(side="buy", strategy="T", reason="r", entry=100.0,
+                     sl=97.0, tp1=103.0, tp=106.0)
+        asyncio.run(ex.try_open("ETHUSD", sig))
+        self.assertEqual(len(client.sent), 1)
+
+
+class TestV205StressHarness(unittest.TestCase):
+    def test_logic_assertions_run(self):
+        """run_logic_assertions used to raise TypeError, killing simulate.py."""
+        from app.backtest.stress import run_logic_assertions
+
+        checks = run_logic_assertions(S)
+        self.assertTrue(checks["funding_gate_blocks_long"])
+        self.assertTrue(checks["funding_gate_allows_small"])
+        self.assertTrue(all(checks.values()), checks)
+
+
+class TestV206DonchianTrend(unittest.TestCase):
+    """Locks in the properties that made Donchian_Trend survive out-of-sample
+    testing where all six legacy families failed (analysis/STRATEGY_v20.6.md).
+    """
+
+    def _ctx(self, closes, highs=None, lows=None, atr=1.0, ema200=None):
+        from app.strategy.signals import HtfContext, TFContext
+
+        n = len(closes)
+        highs = highs or list(closes)
+        lows = lows or list(closes)
+        tf = TFContext(label="1h", closes=closes, highs=highs, lows=lows,
+                       volumes=[1.0] * n, atr=atr, rsi=50.0, ema20=closes[-1],
+                       ema50=closes[-1],
+                       ema200=ema200 if ema200 is not None else 100.0,
+                       trend="bullish", strength=1.0)
+        return HtfContext(symbol="ETHUSD", price=closes[-1], tf5=tf, tf15=tf,
+                          tf1=tf, candle_bull_5m=True, candle_bear_5m=False,
+                          min_stop_pct=0.003, round_trip_cost_pct=0.0014,
+                          min_edge_ratio=3.0)
+
+    def _strat(self, **over):
+        from app.strategy.signals import build_strategy
+        return build_strategy("Donchian_Trend", over or None)
+
+    def test_registered_and_is_the_shipped_default(self):
+        from app.strategy.signals import _STRATEGY_CLASSES
+        self.assertIn("Donchian_Trend", _STRATEGY_CLASSES)
+        self.assertEqual(S.enabled_strategies, ("Donchian_Trend",))
+
+    def test_breaks_out_long_above_channel(self):
+        closes = [100.0] * 60 + [130.0]
+        sig = self._strat().propose(self._ctx(closes, atr=1.0, ema200=100.0))
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig.side, "buy")
+
+    def test_symmetric_short_below_channel(self):
+        """Shorts produced the entire edge; the strategy must take them."""
+        closes = [100.0] * 60 + [70.0]
+        sig = self._strat().propose(self._ctx(closes, atr=1.0, ema200=100.0))
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig.side, "sell")
+
+    def test_marginal_poke_through_channel_is_rejected(self):
+        """break_atr is the filter that turned the strategy profitable:
+        58 stop-outs vs 7 targets without it."""
+        closes = [100.0] * 60 + [100.5]     # 0.5 ATR break, needs 1.5
+        self.assertIsNone(
+            self._strat(break_atr=1.5).propose(
+                self._ctx(closes, atr=1.0, ema200=100.0)))
+
+    def test_regime_filter_blocks_counter_trend_breakout(self):
+        """Breakout up while price is below the slow EMA -> no trade."""
+        closes = [100.0] * 60 + [130.0]
+        self.assertIsNone(
+            self._strat().propose(self._ctx(closes, atr=1.0, ema200=500.0)))
+
+    def test_no_signal_inside_the_channel(self):
+        closes = [100.0 + (i % 5) for i in range(60)] + [102.0]
+        self.assertIsNone(
+            self._strat().propose(self._ctx(closes, atr=1.0, ema200=100.0)))
+
+    def test_target_is_far_so_winners_can_run(self):
+        """Fixed near targets capped winners at ~cost in every losing version."""
+        closes = [100.0] * 60 + [130.0]
+        sig = self._strat().propose(self._ctx(closes, atr=1.0, ema200=100.0))
+        reward = abs(sig.tp - sig.entry)
+        risk = abs(sig.entry - sig.sl)
+        self.assertGreater(reward / risk, 3.0)
+
+    def test_exit_policy_lets_trends_mature(self):
+        """The 4h time stop closed 55/85 trades at ~zero PnL."""
+        self.assertGreaterEqual(S.max_hold_s, 100 * 3600)
+        self.assertFalse(S.partial_tp)
+
+    def test_primary_timeframe_matches_validation(self):
+        self.assertEqual(S.timeframe, "1h")
+        self.assertIn(S.mid_timeframe, ("4h", "1h"))
+
+
+class TestV206WarmupInvariants(unittest.TestCase):
+    """The live feed must be able to satisfy the strategy's warm-up.
+
+    Donchian_Trend's regime filter needs the EMA200 of the primary timeframe.
+    If the feed can pass its own completeness gate while still delivering
+    fewer bars than the strategy requires, the context silently falls back to
+    the EMA50 — i.e. the bot would run an unvalidated strategy in production.
+    """
+
+    def test_feed_minimum_covers_strategy_warmup(self):
+        import math
+        from app.strategy.engine import MIN_BARS_5M
+
+        accepted = max(30, math.ceil(S.candle_limit_5m * 0.80))
+        # The live scan drops the forming bar before analysing.
+        self.assertGreaterEqual(
+            accepted - 1, MIN_BARS_5M,
+            "feed can accept a batch too small for the strategy warm-up",
+        )
+
+    def test_warmup_covers_ema200_regime_filter(self):
+        from app.strategy.engine import MIN_BARS_5M
+
+        self.assertGreaterEqual(
+            MIN_BARS_5M, 200,
+            "EMA200 regime filter would degrade to EMA50",
+        )
+
+    def test_ema200_is_present_after_warmup(self):
+        """Guard the actual indicator, not just the constant."""
+        from app.strategy.engine import StrategyEngine, MIN_BARS_5M
+        from app.models import Candle, CandleSeries
+
+        rows = [Candle(ts=i * 3600000, o=100.0, h=101.0, l=99.0,
+                       c=100.0 + i * 0.01, v=1.0)
+                for i in range(MIN_BARS_5M + 1)]
+        series = CandleSeries(rows)
+        engine = StrategyEngine(S, EngineState())
+        ctx = engine._build_context("ETHUSD", series, series, series)
+        self.assertIsNotNone(ctx.tf5.ema200,
+                             "regime filter has no EMA200 after warm-up")

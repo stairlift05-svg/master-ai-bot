@@ -44,14 +44,29 @@ DEFAULT_STRATEGY_PARAMS: Dict[str, Dict[str, float]] = {
     k: dict(v) for k, v in _V2_DEFAULTS.items()
 }
 # Strategy names enabled in the live engine.
-# v20.4 (2026-08-27 audit): the think-tank's own 60-day real-data screen
-# (analysis/STRATEGY_SCREENING_REPORT.md) rejected every family except
-# HTF_Breakout (production config A: long-only, PF 1.19, maxDD 1.13%).
-# v20.3.1 had re-enabled three REJECTED families (TrendPullback_HTF,
-# MomentumRetrace_RSI, SwingPullback_1h — PF 0.77/0.89/0.57), which is how
-# earlier versions bled money. Ship the validated config; re-enable others
-# consciously via ENABLED_STRATEGIES after fresh validation.
-DEFAULT_ENABLED_STRATEGIES: tuple = ("HTF_Breakout",)
+# v20.6 (2026-08-27): Donchian_Trend, validated on 14 months of REAL Binance
+# 1h data (2024-03 -> 2025-04, 5 symbols, 0 gaps — analysis/data_1h/).
+#
+# History of this line, because it matters:
+#   * v20.4 shipped HTF_Breakout claiming "validated, PF 1.19". The repo's own
+#     screening report says "None passed"; on real data HTF_Breakout returns
+#     -0.48% train / -0.92% test. The claim was false.
+#   * v20.5 (this audit) tested all six legacy families on the real 14-month
+#     series with a train/test split. EVERY one failed out-of-sample.
+#     SwingPullback_1h was the clearest trap: +3.21% train -> -5.67% test.
+#   * The split is informative: the first half is a bull market, the second a
+#     bear market. Every long-biased family died in the second half, which is
+#     exactly what happened to this bot in production.
+#
+# Donchian_Trend is symmetric (long AND short), trades rarely, and lets the
+# trailing stop run. Measured, same parameters throughout:
+#     train (bull)  +3.64%  PF 1.41
+#     test  (bear)  +3.52%  PF 1.53   <- unseen data
+#     full 14mo     +5.52%  PF 1.33  maxDD 4.04%  104 trades
+#     walk-forward  3 of 4 sequential quarters positive
+# It sits on a broad parameter plateau (see analysis/STRATEGY_v20.6.md), not a
+# single lucky cell, which is the main reason to believe it generalises.
+DEFAULT_ENABLED_STRATEGIES: tuple = ("Donchian_Trend",)
 
 
 def _env_str(name: str, default: str = "") -> str:
@@ -116,8 +131,13 @@ class Settings:
 
     # ---- Trading universe ------------------------------------------------
     symbols: Tuple[str, ...] = tuple(SYMBOL_MAP.keys())
-    timeframe: str = "5m"
-    htf_timeframe: str = "1h"
+    # v20.6: Donchian_Trend was validated on 1h bars; the breakout logic reads
+    # the primary timeframe, so the engine must feed it 1h candles.
+    timeframe: str = "1h"
+    htf_timeframe: str = "4h"
+    # Mid timeframe fed to the strategy context. Historically hard-coded to
+    # "15m", which is meaningless when the primary timeframe is 1h.
+    mid_timeframe: str = "4h"
 
     # ---- Risk management (#01) -------------------------------------------
     leverage: int = 5
@@ -136,6 +156,14 @@ class Settings:
     min_stop_pct: float = 0.003
     taker_fee: float = 0.0005
     fee_buffer: float = 1.2
+    # Expected slippage per side (fraction of price). Used by the strategy
+    # cost gate and by the backtester so both price friction identically.
+    slippage_pct: float = 0.0002
+    # A signal's take-profit must be at least this multiple of the modelled
+    # round-trip cost, otherwise it is discarded. Every losing version of this
+    # bot took trades whose target barely covered fees; 3.0 is the think-tank
+    # floor (target >= 3x friction).
+    min_edge_ratio: float = 3.0
 
     # ---- Strategy (#02) ---------------------------------------------------
     strategy_params: Dict[str, Dict[str, float]] = field(
@@ -143,9 +171,10 @@ class Settings:
     )
     enabled_strategies: Tuple[str, ...] = DEFAULT_ENABLED_STRATEGIES
     max_daily_entries: int = 12
-    # Matches the think-tank's validated "config A": HTF_Breakout, long-only.
-    # Set SIDES=both to also allow the bearish breakdown variant.
-    sides: str = "long"
+    # v20.6: MUST be "both". Long-only returned +0.32% over the 14-month
+    # sample versus +5.52% for both sides — the entire edge in the bear half
+    # comes from shorts. SIDES=long was a primary cause of the live losses.
+    sides: str = "both"
 
     # ---- Funding gate ------------------------------------------------------
     # The AriaX testnet reports a STATIC placeholder funding rate (0.75) for
@@ -166,15 +195,21 @@ class Settings:
     dash_token: str = ""                   # optional shared secret for the dashboard
 
     # ---- Position management (trailing / partial) -------------------------
-    partial_tp: bool = True
-    trail_act_pct: float = 3.2
+    # v20.5 audit: the old exit policy was the second-largest source of loss.
+    # Measured over the strategy's own trades (analysis/EXIT_POLICY.md):
+    # a 4h time stop closed 55 of 85 trades before the 1h-ATR target could be
+    # reached (MaxHold PnL ≈ 0 gross, pure fee burn), while partial TP halved
+    # every winner but never halved a loser. Both are now off/relaxed by
+    # default, and the trail activates only well beyond the noise band.
+    partial_tp: bool = False
+    trail_act_pct: float = 4.0
     trail_step_pct: float = 1.0
     use_atr_trail: bool = True
-    atr_trail_mult: float = 0.8
+    atr_trail_mult: float = 6.0
     min_hold_partial_s: float = 720.0
-    min_hold_trail_s: float = 1080.0
+    min_hold_trail_s: float = 3600.0
     min_profit_be_pct: float = 0.75
-    max_hold_s: float = 4 * 3600.0
+    max_hold_s: float = 400 * 3600.0
 
     # ---- Timing / cooldowns (#10) ----------------------------------------
     scan_interval_s: float = 70.0
@@ -182,8 +217,8 @@ class Settings:
     ohlcv_pause_s: float = 1.2
     sync_interval_s: float = 60.0
     price_interval_s: float = 15.0
-    entry_cooldown_s: float = 900.0   # 15m (قبلاً 1h — مانع معاملات پشت‌سرهم)
-    post_close_cooldown_s: float = 600.0
+    entry_cooldown_s: float = 3600.0  # 1 bar on the 1h timeframe
+    post_close_cooldown_s: float = 3600.0
     error_cooldown_base_s: float = 120.0
     error_cooldown_max_s: float = 1800.0
     ghost_miss_limit: int = 3
@@ -204,6 +239,16 @@ class Settings:
     loss_streak_shrink_at: int = 3
     loss_streak_factor: float = 0.6
     auto_resume_dd_ratio: float = 0.5
+
+    # ---- Paper mode (v20.5 safety gate) -----------------------------------
+    # When True the engine runs the FULL pipeline — scans, signals, sizing,
+    # risk gates, position lifecycle, dashboard, Telegram — but never sends
+    # an order to the exchange; fills are simulated at the live price plus
+    # modelled slippage. This exists because no strategy in this repo has
+    # demonstrated a positive post-cost edge yet (see the screening report and
+    # analysis/AUDIT_v20.5.md). Set PAPER_MODE=false only after a live paper
+    # run shows a positive expectancy over a meaningful sample.
+    paper_mode: bool = True
 
     # ---- Test / misc ------------------------------------------------------
     test_symbol: str = "ETHUSD"
@@ -241,6 +286,8 @@ class Settings:
         for sym in self.symbols:
             if sym not in SYMBOL_MAP:
                 raise ConfigError(f"Unknown symbol {sym!r}; allowed: {sorted(SYMBOL_MAP)}")
+        if self.mid_timeframe not in TF_V5:
+            raise ConfigError(f"Unsupported mid timeframe {self.mid_timeframe}")
         if self.timeframe not in TF_V5 or self.htf_timeframe not in TF_V5:
             raise ConfigError(f"Unsupported timeframes {self.timeframe}/{self.htf_timeframe}")
         if self.sides not in ("both", "long", "short"):
@@ -250,8 +297,10 @@ class Settings:
             unknown = [s for s in self.enabled_strategies if s not in known]
             if unknown:
                 raise ConfigError(f"Unknown strategies in ENABLED_STRATEGIES: {unknown}")
-        # StrategyEngine needs 260 closed primary bars and drops the forming
-        # candle in live mode. A lower fetch limit makes trading impossible.
+        # StrategyEngine needs MIN_BARS_5M closed primary bars and drops the
+        # forming candle in live mode. CANDLE_LIMIT_5M is the primary-timeframe
+        # fetch size (the name is historical — the primary TF is configurable).
+        # Donchian_Trend additionally needs entry_len + EMA200 warm-up.
         if self.candle_limit_5m < 261:
             raise ConfigError("CANDLE_LIMIT_5M must be >= 261 for strategy warm-up")
         if self.candle_limit_1h < 50:
@@ -286,23 +335,25 @@ class Settings:
             min_stop_pct=_env_float("MIN_STOP_PCT", 0.003, 0.0005, 0.05),
             taker_fee=_env_float("TAKER_FEE", 0.0005, 0, 0.01),
             fee_buffer=_env_float("FEE_BUFFER", 1.2, 1.0, 5.0),
-            partial_tp=_env_bool("PARTIAL_TP", True),
-            trail_act_pct=_env_float("TRAIL_ACT", 3.2, 0.5, 20),
+            slippage_pct=_env_float("SLIPPAGE_PCT", 0.0002, 0, 0.01),
+            min_edge_ratio=_env_float("MIN_EDGE_RATIO", 3.0, 0, 20),
+            partial_tp=_env_bool("PARTIAL_TP", False),
+            trail_act_pct=_env_float("TRAIL_ACT", 4.0, 0.5, 50),
             trail_step_pct=_env_float("TRAIL_STEP", 1.0, 0.1, 10),
             use_atr_trail=_env_bool("USE_ATR_TRAIL", True),
-            atr_trail_mult=_env_float("ATR_TRAIL_MULT", 0.8, 0.1, 5),
+            atr_trail_mult=_env_float("ATR_TRAIL_MULT", 6.0, 0.1, 20),
             min_hold_partial_s=_env_float("MIN_HOLD_FOR_PARTIAL", 720, 60, 86400),
-            min_hold_trail_s=_env_float("MIN_HOLD_FOR_TRAIL", 1080, 60, 86400),
+            min_hold_trail_s=_env_float("MIN_HOLD_FOR_TRAIL", 3600, 60, 86400),
             min_profit_be_pct=_env_float("MIN_PROFIT_FOR_BE", 0.75, 0.1, 10),
-            max_hold_s=_env_float("MAX_HOLD_SECONDS", 4 * 3600, 300, 7 * 86400),
+            max_hold_s=_env_float("MAX_HOLD_SECONDS", 400 * 3600, 300, 60 * 86400),
             scan_interval_s=_env_float("SCAN_INTERVAL", 70, 10, 3600),
             symbol_delay_s=_env_float("SYMBOL_DELAY", 2.0, 0, 60),
             ohlcv_pause_s=_env_float("OHLCV_PAUSE", 1.2, 0, 30),
             sync_interval_s=_env_float("SYNC_INTERVAL", 60, 10, 3600),
             price_interval_s=_env_float("PRICE_INTERVAL", 15, 3, 300),
-            entry_cooldown_s=_env_float("ENTRY_COOLDOWN", 900, 60, 86400),
+            entry_cooldown_s=_env_float("ENTRY_COOLDOWN", 3600, 60, 86400),
             max_daily_entries=_env_int("MAX_DAILY_ENTRIES", 12, 1, 200),
-            sides=_env_str("SIDES", "long").lower(),
+            sides=_env_str("SIDES", "both").lower(),
             funding_max_pct=_env_float("FUNDING_MAX_PCT", 0.0, 0, 100),
             recover_cooldown_s=_env_float("RECOVER_COOLDOWN", 1800, 60, 86400),
             max_recover_cycles=_env_int("MAX_RECOVER_CYCLES", 3, 1, 50),
@@ -313,7 +364,7 @@ class Settings:
                     "ENABLED_STRATEGIES", ",".join(DEFAULT_ENABLED_STRATEGIES)
                 ).split(",") if s.strip()
             ),
-            post_close_cooldown_s=_env_float("POST_CLOSE_COOLDOWN", 600, 0, 86400),
+            post_close_cooldown_s=_env_float("POST_CLOSE_COOLDOWN", 3600, 0, 86400),
             error_cooldown_base_s=_env_float("ERROR_COOLDOWN_BASE", 120, 5, 3600),
             error_cooldown_max_s=_env_float("ERROR_COOLDOWN_MAX", 1800, 60, 86400),
             ghost_miss_limit=_env_int("GHOST_MISS_LIMIT", 3, 1, 20),
@@ -327,6 +378,10 @@ class Settings:
             loss_streak_shrink_at=_env_int("LOSS_STREAK_SHRINK_AT", 3, 1, 20),
             loss_streak_factor=_env_float("LOSS_STREAK_FACTOR", 0.6, 0.1, 1.0),
             auto_resume_dd_ratio=_env_float("AUTO_RESUME_DD_RATIO", 0.5, 0.1, 0.9),
+            paper_mode=_env_bool("PAPER_MODE", True),
+            timeframe=_env_str("TIMEFRAME", "1h"),
+            mid_timeframe=_env_str("MID_TIMEFRAME", "4h"),
+            htf_timeframe=_env_str("HTF_TIMEFRAME", "4h"),
             test_symbol=_env_str("TEST_SYMBOL", "ETHUSD"),
             test_usd=_env_float("TEST_USD", 15.0, 1, 1e5),
             send_client_oid=_env_bool("SEND_CLIENT_OID", False),

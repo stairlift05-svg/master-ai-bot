@@ -33,6 +33,16 @@ RESAMPLE_N = {"15m": 3, "1h": 12}   # 5m bars per higher-TF bar
 WIN = {"5m": 400, "15m": 300, "1h": 300}   # max bars passed to the engine
 SIGNAL_EVERY_N = 3                  # evaluate signals every 3 bars (15m cadence)
 
+# v20.6: the base timeframe is configurable so the same engine can be
+# validated on real 1h history (analysis/data_1h) and not just 5m synthetic
+# data. ``bar_seconds`` drives every time-based rule (holds, cooldowns), and
+# the resample factors are expressed in base bars.
+TF_PRESETS = {
+    # base_tf: (bar_seconds, {"15m": n_base_bars, "1h": n_base_bars})
+    "5m": (300.0, {"15m": 3, "1h": 12}),
+    "1h": (3600.0, {"15m": 4, "1h": 24}),   # -> 4h context and 1d context
+}
+
 
 @dataclass
 class BacktestPosition:
@@ -131,10 +141,18 @@ class Backtester:
     """Event-driven simulation of the full decision pipeline."""
 
     def __init__(self, settings: Settings, initial_balance: float = 500.0,
-                 slippage_bps: float = 2.0) -> None:
+                 slippage_bps: Optional[float] = None,
+                 base_tf: str = "5m", min_bars: int = MIN_BARS,
+                 signal_every_n: int = SIGNAL_EVERY_N) -> None:
         self.settings = settings
+        self.bar_seconds, self.resample_n = TF_PRESETS[base_tf]
+        self.min_bars = min_bars
+        self.signal_every_n = signal_every_n
         self.initial_balance = float(initial_balance)
-        self.slippage = slippage_bps / 10000.0
+        # Default to the same slippage the strategy cost gate assumes, so the
+        # backtest can never be optimistic relative to the live cost model.
+        self.slippage = (slippage_bps / 10000.0) if slippage_bps is not None \
+            else settings.slippage_pct
         self.state = EngineState()
         self.state.set_many(
             balance=self.initial_balance, peak_balance=self.initial_balance,
@@ -170,10 +188,10 @@ class Backtester:
         symbols = list(market_5m.keys())
         n_bars = min(len(market_5m[s]) for s in symbols)
         htf_15: Dict[str, List[Candle]] = {
-            s: resample(market_5m[s], RESAMPLE_N["15m"]) for s in symbols
+            s: resample(market_5m[s], self.resample_n["15m"]) for s in symbols
         }
         htf_1: Dict[str, List[Candle]] = market_1h or {
-            s: resample(market_5m[s], RESAMPLE_N["1h"]) for s in symbols
+            s: resample(market_5m[s], self.resample_n["1h"]) for s in symbols
         }
         ready_15: Dict[str, List[Candle]] = {s: [] for s in symbols}
         ready_1: Dict[str, List[Candle]] = {s: [] for s in symbols}
@@ -181,10 +199,11 @@ class Backtester:
         idx_1: Dict[str, int] = {s: 0 for s in symbols}
 
         for i in range(n_bars):
-            self._sim_clock[0] = float(i * 300.0)
+            self._sim_clock[0] = float(i * self.bar_seconds)
             # Daily-loss circuit breaker: roll the day-start at each new day,
             # mirroring the live engine's restart-safe daily-PnL reset.
-            if i > 0 and i % 288 == 0:
+            bars_per_day = max(1, int(86400 // self.bar_seconds))
+            if i > 0 and i % bars_per_day == 0:
                 self.day_start = self.equity_history[-1] if self.equity_history \
                     else self.day_start
                 self.state.set("day_start_balance", self.day_start)
@@ -269,7 +288,7 @@ class Backtester:
 
     def _manage_position(self, pos: BacktestPosition, bar: Candle, i: int) -> None:
         s = self.settings
-        hold = (i - pos.opened_bar) * 300.0
+        hold = (i - pos.opened_bar) * self.bar_seconds
         buy = pos.side == "buy"
 
         # Partial take-profit.
@@ -362,16 +381,16 @@ class Backtester:
                           idx_15, idx_1, symbols, i) -> None:
         # Maintain ready 15m and 1h series (complete bars only).
         for sym in symbols:
-            if (i + 1) % RESAMPLE_N["15m"] == 0:
+            if (i + 1) % self.resample_n["15m"] == 0:
                 ready_15[sym].append(htf_15[sym][idx_15[sym]])
                 idx_15[sym] += 1
-            if (i + 1) % RESAMPLE_N["1h"] == 0:
+            if (i + 1) % self.resample_n["1h"] == 0:
                 ready_1[sym].append(htf_1[sym][idx_1[sym]])
                 idx_1[sym] += 1
 
-        if i < MIN_BARS or self.pending or len(self.positions) >= self.settings.max_positions:
+        if i < self.min_bars or self.pending or len(self.positions) >= self.settings.max_positions:
             return
-        if i % SIGNAL_EVERY_N != 0:
+        if i % self.signal_every_n != 0:
             return
         for sym in symbols:
             if sym in {p.symbol for p in self.positions}:
@@ -379,7 +398,7 @@ class Backtester:
             allowed, _ = self.risk.can_enter_symbol(sym)
             if not allowed:
                 continue
-            if i % SIGNAL_EVERY_N != 0:
+            if i % self.signal_every_n != 0:
                 continue
             window5 = CandleSeries(market[sym][max(0, i - WIN["5m"] + 1):i + 1])
             window15 = CandleSeries(ready_15[sym][-WIN["15m"]:]) if len(ready_15[sym]) > 30 \
@@ -426,7 +445,8 @@ class Backtester:
                 var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
                 if var > 1e-14:
                     # Annualise per-5m returns to a yearly Sharpe (365d).
-                    report.sharpe = (mean / math.sqrt(var)) * math.sqrt(288 * 365)
+                    bars_year = 86400 * 365 / self.bar_seconds
+                    report.sharpe = (mean / math.sqrt(var)) * math.sqrt(bars_year)
         report.exposure_pct = self.exposed_bars / n_bars * 100.0 if n_bars else 0.0
         report.halted_bars = self.halted_bars
 

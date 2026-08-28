@@ -21,6 +21,12 @@ services:
       # use validated code defaults to prevent dashboard configuration drift.
       - key: ARIAX_BASE
         value: https://dryclean-app-1.onrender.com
+      # SAFETY (v20.5): paper mode is ON. The engine runs the full pipeline
+      # but sends no orders to the exchange. Change this to "false" ONLY
+      # after a paper run demonstrates positive expectancy — see
+      # analysis/AUDIT_v20.5.md. No strategy here is proven profitable yet.
+      - key: PAPER_MODE
+        value: "true"
       # Optional operator overrides (safe defaults ship in app/config.py):
       #   FUNDING_MAX_PCT (0 = gate off — testnet placeholder funding data)
       #   ENABLED_STRATEGIES / SIDES (validated default: HTF_Breakout, long)
