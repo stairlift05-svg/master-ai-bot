@@ -300,7 +300,7 @@ class TestReporter(unittest.TestCase):
                 )
 
         state = EngineState()
-        state.record_fetch("ETHUSD", "5m", True)
+        state.record_fetch("ETHUSD", S.timeframe, True)
         report = asyncio.run(build_txt_report(state, FakeDatabase(), S, {}, {}))
         # v22.1: DATA labels follow the configured timeframes (1h/4h shipped)
         self.assertIn(f"{S.timeframe} 1/0", report)
