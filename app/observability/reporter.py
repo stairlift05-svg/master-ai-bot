@@ -69,9 +69,15 @@ async def build_txt_report(state: EngineState, db: Database, settings: Settings,
         # counter need not contain every key. Never index health counters
         # directly: Telegram report generation must remain total.
         s = st["fetch_stats"].get(sym, {})
+        # v22.2.1: counters are recorded under the REAL fetch labels
+        # (ok_<timeframe>), which for the shipped 1h/4h config are ok_1h /
+        # ok_4h. The legacy ok_5m/ok_1h keys made the primary column read
+        # 0/0 forever and showed the primary count under the HTF label.
+        pk, fk = f"ok_{settings.timeframe}", f"fail_{settings.timeframe}"
+        hk, hfk = f"ok_{settings.htf_timeframe}", f"fail_{settings.htf_timeframe}"
         lines.append(
-            f"│  {sym:<12} {settings.timeframe} {s.get('ok_5m', 0)}/{s.get('fail_5m', 0)}  "
-            f"{settings.htf_timeframe} {s.get('ok_1h', 0)}/{s.get('fail_1h', 0)}"
+            f"│  {sym:<12} {settings.timeframe} {s.get(pk, 0)}/{s.get(fk, 0)}  "
+            f"{settings.htf_timeframe} {s.get(hk, 0)}/{s.get(hfk, 0)}"
         )
     lines += ["└────────────────────────────────────────────────────────────────────────", "",
               "┌─ 4. CLOSED ────────────────────────────────────────────────────────────"]
