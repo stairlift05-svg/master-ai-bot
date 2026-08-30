@@ -704,10 +704,11 @@ class TestV206DonchianTrend(unittest.TestCase):
         from app.strategy.signals import build_strategy
         return build_strategy("Donchian_Trend", over or None)
 
-    def test_registered_and_is_the_shipped_default(self):
+    def test_registered_and_available_for_research(self):
         from app.strategy.signals import _STRATEGY_CLASSES
         self.assertIn("Donchian_Trend", _STRATEGY_CLASSES)
-        self.assertEqual(S.enabled_strategies, ("Donchian_Trend",))
+        # v23: Imba_Fib replaced Donchian_Trend as the shipped default.
+        self.assertEqual(S.enabled_strategies, ("Imba_Fib",))
 
     def test_breaks_out_long_above_channel(self):
         closes = [100.0] * 60 + [130.0]
