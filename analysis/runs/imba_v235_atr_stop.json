@@ -1,0 +1,145 @@
+{
+ "purpose": "v23.5 owner-requested test: ATR-based stop (2/2.5/3 x ATR) replacing the wide fibonacci channel-edge stop",
+ "baseline_shipped": "tp4=6 config",
+ "A_full": {
+  "BASELINE(shipped)": {
+   "over": {},
+   "n": 280,
+   "wr": 62.9,
+   "pf": 1.04,
+   "net": 11.63,
+   "ret": 1.18,
+   "maxdd": 3.98,
+   "exits": {
+    "Trail": 49,
+    "TP": 162,
+    "SL": 55,
+    "MaxHold": 11,
+    "EndOfTest": 3
+   }
+  },
+  "sl_atr_mult=2.0": {
+   "over": {
+    "sl_atr_mult": 2.0
+   },
+   "n": 729,
+   "wr": 34.6,
+   "pf": 0.99,
+   "net": -11.7,
+   "ret": -1.15,
+   "maxdd": 8.31,
+   "exits": {
+    "SL": 405,
+    "Trail": 86,
+    "TP": 235,
+    "MaxHold": 1,
+    "EndOfTest": 2
+   }
+  },
+  "sl_atr_mult=2.5": {
+   "over": {
+    "sl_atr_mult": 2.5
+   },
+   "n": 613,
+   "wr": 39.5,
+   "pf": 0.96,
+   "net": -32.81,
+   "ret": -3.26,
+   "maxdd": 8.17,
+   "exits": {
+    "SL": 304,
+    "Trail": 82,
+    "TP": 224,
+    "MaxHold": 1,
+    "EndOfTest": 2
+   }
+  },
+  "sl_atr_mult=3.0": {
+   "over": {
+    "sl_atr_mult": 3.0
+   },
+   "n": 540,
+   "wr": 43.3,
+   "pf": 0.91,
+   "net": -49.62,
+   "ret": -4.95,
+   "maxdd": 9.08,
+   "exits": {
+    "SL": 249,
+    "Trail": 72,
+    "TP": 216,
+    "MaxHold": 1,
+    "EndOfTest": 2
+   }
+  }
+ },
+ "B_full": {
+  "BASELINE(shipped)": {
+   "over": {},
+   "n": 243,
+   "wr": 59.3,
+   "pf": 1.22,
+   "net": 50.79,
+   "ret": 5.09,
+   "maxdd": 4.84,
+   "exits": {
+    "TP": 121,
+    "Trail": 56,
+    "SL": 54,
+    "MaxHold": 10,
+    "EndOfTest": 2
+   }
+  },
+  "sl_atr_mult=2.0": {
+   "over": {
+    "sl_atr_mult": 2.0
+   },
+   "n": 680,
+   "wr": 30.3,
+   "pf": 0.99,
+   "net": -4.9,
+   "ret": -0.48,
+   "maxdd": 9.66,
+   "exits": {
+    "TP": 172,
+    "SL": 424,
+    "Trail": 82,
+    "EndOfTest": 2
+   }
+  },
+  "sl_atr_mult=2.5": {
+   "over": {
+    "sl_atr_mult": 2.5
+   },
+   "n": 536,
+   "wr": 33.4,
+   "pf": 0.96,
+   "net": -29.05,
+   "ret": -2.91,
+   "maxdd": 10.27,
+   "exits": {
+    "TP": 151,
+    "SL": 310,
+    "Trail": 75
+   }
+  },
+  "sl_atr_mult=3.0": {
+   "over": {
+    "sl_atr_mult": 3.0
+   },
+   "n": 483,
+   "wr": 37.5,
+   "pf": 0.99,
+   "net": -7.13,
+   "ret": -0.71,
+   "maxdd": 9.51,
+   "exits": {
+    "TP": 153,
+    "SL": 253,
+    "Trail": 75,
+    "EndOfTest": 2
+   }
+  }
+ },
+ "verdict": "REJECTED ON BOTH WINDOWS. A: +11.63 -> -11.7/-32.8/-49.6; B: +50.79 -> -4.9/-29.1/-7.1. Win rate collapses ~60% -> 30-43% and maxDD doubles. Mechanism (exit counts): SL exits explode (A: 55 -> 405 at 2xATR) because IMBA enters at channel extremes where noise is maximal \u2014 a tight stop there is systematically eaten, and faster closes double trade count (more fees). CONCLUSION: the wide fib stop is load-bearing, not a flaw; the shipped config (fib stop + tp4=6) is a two-window local optimum. sl_atr_mult stays in code default 0 as a research knob."
+}

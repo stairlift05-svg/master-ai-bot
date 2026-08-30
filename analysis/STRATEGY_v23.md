@@ -102,3 +102,21 @@ Shipped change: `tp4 = 6.0` (single parameter). The improvement direction
 is anti-overfit: it trades some in-sample performance for a large gain on
 the unseen window. Charts: `analysis/charts_imba_eth_b.png` (strategy on
 chart), `charts_imba_tp4_upgrade.png` (equity before/after).
+
+## v23.5 — ATR-stop hypothesis tested and REJECTED (2026-08-30)
+
+The committee's own proposal (tighten the ~10–15% fib stop to 2–3×ATR to
+lift realised R:R) was tested on both windows against the shipped baseline
+(tp4=6). Result (`analysis/runs/imba_v235_atr_stop.json`):
+
+| Config | A net | B net | B WR | B maxDD |
+|---|---|---|---|---|
+| shipped (fib stop) | +11.63 | **+50.79** | 59.3% | 4.84% |
+| sl_atr_mult 2.0 | −11.70 | −4.90 | 30.3% | 9.66% |
+| sl_atr_mult 2.5 | −32.81 | −29.05 | 33.4% | 10.27% |
+| sl_atr_mult 3.0 | −49.62 | −7.13 | 37.5% | 9.51% |
+
+**Rejected on both windows.** The wide fibonacci stop is load-bearing:
+IMBA enters at channel extremes where noise is maximal, so a tight stop
+is systematically eaten (SL exits: 55 → 405 on A) and win rate collapses.
+The knob stays in code (`sl_atr_mult`, default 0) as documented research.
