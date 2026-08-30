@@ -1,0 +1,80 @@
+{
+ "purpose": "v23 IMBA ALGO (Imba_Fib) two-window validation \u2014 owner-directed strategy replacement",
+ "protocol": "identical to validate_v21_final.py: A=data_1h (14mo Binance), B=data_1h_oos (16mo OKX unseen), live-equivalent engine (per-bar 1h cadence, live fee model, fill re-anchering)",
+ "config": {
+  "sensitivity": 18,
+  "use_filters": true,
+  "ema_len": 200,
+  "rsi_guards": [
+   72,
+   28
+  ],
+  "tp_ladder_pct": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "stop": "fib edge (0.786 long / 0.236 short)"
+ },
+ "A_full": {
+  "window": "A_full",
+  "seconds": 48.0,
+  "n": 334,
+  "n_long": 133,
+  "n_short": 201,
+  "ret_pct": 3.23,
+  "wr": 78.7,
+  "pf": 1.12,
+  "max_dd": 3.18,
+  "net": 32.17,
+  "long": -10.56,
+  "short": 42.73,
+  "avg_pnl": 0.096,
+  "exits": {
+   "TP": 257,
+   "SL": 57,
+   "MaxHold": 13,
+   "Trail": 4,
+   "EndOfTest": 3
+  }
+ },
+ "B_full": {
+  "window": "B_full",
+  "seconds": 58.1,
+  "n": 319,
+  "n_long": 128,
+  "n_short": 191,
+  "ret_pct": -0.52,
+  "wr": 70.8,
+  "pf": 0.98,
+  "max_dd": 6.76,
+  "net": -5.23,
+  "long": 1.35,
+  "short": -6.58,
+  "avg_pnl": -0.016,
+  "exits": {
+   "TP": 223,
+   "SL": 79,
+   "Trail": 4,
+   "MaxHold": 11,
+   "EndOfTest": 2
+  }
+ },
+ "comparison": {
+  "note": "previous shipped strategy (Donchian_Trend v22) on identical windows",
+  "A_donchian": {
+   "net": 70.55,
+   "n": 114,
+   "pf": 1.41,
+   "max_dd": 3.91
+  },
+  "B_donchian": {
+   "net": 70.64,
+   "n": 160,
+   "pf": 1.3,
+   "max_dd": 6.15
+  }
+ },
+ "verdict": "IMBA trades very often (334/319) with high win-rate (78.7/70.8%) but thin per-trade edge; window A nets +$32.17 (PF 1.12) and the UNSEEN window B is net NEGATIVE (-$5.23, PF 0.98, maxDD 6.76%). Shipped anyway per explicit owner directive 2026-08-29; the bot runs PAPER_MODE=true so no real funds are exposed. Rollback = set ENABLED_STRATEGIES=Donchian_Trend."
+}
