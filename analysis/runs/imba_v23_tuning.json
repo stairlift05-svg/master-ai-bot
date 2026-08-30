@@ -1,0 +1,179 @@
+{
+ "purpose": "v23.2 owner-requested simple optimization of Imba_Fib \u2014 one-factor tests of three quality filters on BOTH real-data windows",
+ "rule": "ship ONLY if window B turns clearly positive while window A stays positive (owner condition: positive & acceptable real-market backtest)",
+ "baseline": {
+  "A_full": {
+   "net": 32.17,
+   "n": 334,
+   "pf": 1.12
+  },
+  "B_full": {
+   "net": -5.23,
+   "n": 319,
+   "pf": 0.98
+  }
+ },
+ "results": {
+  "A_full": {
+   "break_margin_atr=0.25": {
+    "over": {
+     "break_margin_atr": 0.25
+    },
+    "n": 329,
+    "nL": 136,
+    "nS": 193,
+    "wr": 78.4,
+    "pf": 1.09,
+    "net": 23.76,
+    "long": -4.2,
+    "short": 27.96
+   },
+   "break_margin_atr=0.5": {
+    "over": {
+     "break_margin_atr": 0.5
+    },
+    "n": 318,
+    "nL": 140,
+    "nS": 178,
+    "wr": 78.3,
+    "pf": 1.11,
+    "net": 25.33,
+    "long": -5.33,
+    "short": 30.66
+   },
+   "break_margin_atr=1.0": {
+    "over": {
+     "break_margin_atr": 1.0
+    },
+    "n": 291,
+    "nL": 134,
+    "nS": 157,
+    "wr": 77.7,
+    "pf": 0.97,
+    "net": -8.0,
+    "long": -8.15,
+    "short": 0.15
+   },
+   "min_ema_dist_atr=0.5": {
+    "over": {
+     "min_ema_dist_atr": 0.5
+    },
+    "n": 334,
+    "nL": 133,
+    "nS": 201,
+    "wr": 78.7,
+    "pf": 1.12,
+    "net": 32.17,
+    "long": -10.56,
+    "short": 42.73
+   },
+   "min_ema_dist_atr=1.0": {
+    "over": {
+     "min_ema_dist_atr": 1.0
+    },
+    "n": 333,
+    "nL": 132,
+    "nS": 201,
+    "wr": 78.7,
+    "pf": 1.12,
+    "net": 30.07,
+    "long": -12.5,
+    "short": 42.58
+   },
+   "htf_align=1": {
+    "over": {
+     "htf_align": 1
+    },
+    "n": 300,
+    "nL": 126,
+    "nS": 174,
+    "wr": 75.0,
+    "pf": 0.97,
+    "net": -7.01,
+    "long": -24.16,
+    "short": 17.16
+   }
+  },
+  "B_full": {
+   "break_margin_atr=0.25": {
+    "over": {
+     "break_margin_atr": 0.25
+    },
+    "n": 313,
+    "nL": 129,
+    "nS": 184,
+    "wr": 69.6,
+    "pf": 0.98,
+    "net": -6.48,
+    "long": 5.25,
+    "short": -11.73
+   },
+   "break_margin_atr=0.5": {
+    "over": {
+     "break_margin_atr": 0.5
+    },
+    "n": 311,
+    "nL": 132,
+    "nS": 179,
+    "wr": 70.4,
+    "pf": 0.96,
+    "net": -10.87,
+    "long": 6.76,
+    "short": -17.64
+   },
+   "break_margin_atr=1.0": {
+    "over": {
+     "break_margin_atr": 1.0
+    },
+    "n": 273,
+    "nL": 109,
+    "nS": 164,
+    "wr": 71.8,
+    "pf": 1.01,
+    "net": 3.19,
+    "long": 0.58,
+    "short": 2.62
+   },
+   "min_ema_dist_atr=0.5": {
+    "over": {
+     "min_ema_dist_atr": 0.5
+    },
+    "n": 319,
+    "nL": 128,
+    "nS": 191,
+    "wr": 70.8,
+    "pf": 0.98,
+    "net": -5.23,
+    "long": 1.35,
+    "short": -6.58
+   },
+   "min_ema_dist_atr=1.0": {
+    "over": {
+     "min_ema_dist_atr": 1.0
+    },
+    "n": 319,
+    "nL": 128,
+    "nS": 191,
+    "wr": 70.8,
+    "pf": 0.98,
+    "net": -5.22,
+    "long": 1.35,
+    "short": -6.57
+   },
+   "htf_align=1": {
+    "over": {
+     "htf_align": 1
+    },
+    "n": 278,
+    "nL": 106,
+    "nS": 172,
+    "wr": 70.1,
+    "pf": 0.96,
+    "net": -11.92,
+    "long": 36.59,
+    "short": -48.5
+   }
+  }
+ },
+ "verdict": "NOT SHIPPED \u2014 no candidate passes. break_margin hurts A monotonically (the only B-improving cell, margin=1.0, collapses A to -$8.00: single-window overfit; its B net +$3.19 is PF 1.01 dust). min_ema_dist filters zero trades (band entries are never EMA-hugging). htf_align hurts both windows (-$7.01 / -$11.92). IMBA's thin edge is structural (fee load of ~1.1 trades/day vs 4% targets on wide-fib-stop sizing), not an entry-quality problem. Filters remain in code, default OFF, as documented research knobs."
+}
