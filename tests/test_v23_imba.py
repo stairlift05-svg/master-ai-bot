@@ -35,8 +35,8 @@ class TestImbaEntries(unittest.TestCase):
         self.assertIsNotNone(sig)
         self.assertEqual(sig.side, "buy")
         self.assertAlmostEqual(sig.sl, 94.28, places=1)     # fib stop
-        self.assertAlmostEqual(sig.tp, 108.0 * 1.04, places=1)  # tp4 = 4%
-        self.assertAlmostEqual(sig.tp1, 108.0 * 1.01, places=1)  # tp1 = 1%
+        self.assertAlmostEqual(sig.tp, 108.0 * 1.06, places=1)  # tp4 = 6 (v23.4)
+        self.assertAlmostEqual(sig.tp1, 108.0 * 1.01, places=1)  # tp1 = 1
 
     def test_short_in_bottom_band_with_filters(self):
         closes, hs, ls = _market(92.0)
@@ -44,7 +44,7 @@ class TestImbaEntries(unittest.TestCase):
         self.assertIsNotNone(sig)
         self.assertEqual(sig.side, "sell")
         self.assertAlmostEqual(sig.sl, 105.28, places=1)    # fib236 stop
-        self.assertAlmostEqual(sig.tp, 92.0 * 0.96, places=1)
+        self.assertAlmostEqual(sig.tp, 92.0 * 0.94, places=1)
 
     def test_mid_channel_is_no_signal(self):
         closes, hs, ls = _market(103.0)   # above fib50, below fib236
@@ -71,10 +71,10 @@ class TestImbaEntries(unittest.TestCase):
         self.assertIn("Imba_Fib", _STRATEGY_CLASSES)
         self.assertEqual(Settings().enabled_strategies, ("Imba_Fib",))
 
-    def test_module_defaults_untouched(self):
+    def test_shipped_defaults(self):
         p = Settings().strategy_params["Imba_Fib"]
         self.assertEqual(p["sensitivity"], 18)
-        self.assertEqual(p["tp4"], 4.0)
+        self.assertEqual(p["tp4"], 6.0)  # v23.4 two-window validated runner
         self.assertEqual(p["rsi_long_guard"], 72.0)
 
 

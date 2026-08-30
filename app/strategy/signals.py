@@ -586,13 +586,19 @@ class ImbaFib(BaseStrategyV2):
                 rsi=t5.rsi, atr=t5.atr, htf=ctx.tf1.label, confidence=0.6,
             )
 
+        # v23.4: stop placement as a channel fraction. Defaults are the
+        # module's exact levels (long 0.786 / short 0.236 — NOT complements);
+        # e.g. a tighter pair is 0.618/0.382 -> larger risk-sized position
+        # -> more dollars per winner.
+        sl_long = hh - rng * p.get("stop_fib_long", 0.786)
+        sl_short = hh - rng * p.get("stop_fib_short", 0.236)
         if (long_ok and htf_long_ok and price >= fib50
                 and price >= fib236 + margin):
-            return _mk("buy", fib786,
+            return _mk("buy", sl_long,
                        f"IMBA: top band (>=fib236) + EMA200 up + RSI {t5.rsi:.0f}")
         if (short_ok and htf_short_ok and price <= fib50
                 and price <= fib786 - margin):
-            return _mk("sell", fib236,
+            return _mk("sell", sl_short,
                        f"IMBA: bottom band (<=fib786) + EMA200 dn + RSI {t5.rsi:.0f}")
         return None
 
@@ -731,14 +737,18 @@ DEFAULT_V2_PARAMS: Dict[str, Dict[str, float]] = {
     # Golden EMA-cross strategy (v23.3) — Pine defaults, untouched.
     "EmaCross_Trend": {"fast_len": 9, "slow_len": 21, "ema_len": 200,
                        "adx_threshold": 25.0, "sl_pct": 1.0, "tp_pct": 2.0},
-    # IMBA ALGO final stack (v23) — module defaults, untouched.
+    # IMBA ALGO final stack (v23). v23.4: tp4 4% -> 6% ("let winners run"),
+    # the only trick that passed BOTH windows (A +$11.63 / B +$50.79 vs
+    # baseline +$32.17 / -$5.23; total 30mo +$62 vs +$27). See
+    # analysis/runs/imba_v234_tricks.json before touching anything else.
     "Imba_Fib": {"sensitivity": 18, "use_filters": 1, "ema_len": 200,
                  "rsi_long_guard": 72.0, "rsi_short_guard": 28.0,
-                 "tp1": 1.0, "tp2": 2.0, "tp3": 3.0, "tp4": 4.0,
+                 "tp1": 1.0, "tp2": 2.0, "tp3": 3.0, "tp4": 6.0,
                  # v23.2 quality filters — defaults ship OFF until a value
                  # passes the two-window rule (see STRATEGY_v23.md).
                  "break_margin_atr": 0.0, "min_ema_dist_atr": 0.0,
-                 "htf_align": 0},
+                 "htf_align": 0, "stop_fib_long": 0.786,
+                 "stop_fib_short": 0.236},
     # Validated plateau centre (analysis/STRATEGY_v20.6.md). break_atr is the
     # single most important parameter: it rejects marginal pokes through the
     # channel, which were the bulk of the losing trades.

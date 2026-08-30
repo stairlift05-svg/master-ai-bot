@@ -52,3 +52,20 @@ class TestImbaFilters(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStopFib(unittest.TestCase):
+
+    def test_default_matches_module_stop(self):
+        from app.config import Settings
+        prm = Settings().strategy_params["Imba_Fib"]
+        self.assertEqual(prm["stop_fib_long"], 0.786)
+        self.assertEqual(prm["stop_fib_short"], 0.236)
+
+    def test_tighter_stop_moves_sl_closer(self):
+        closes, hs, ls = _market(108.0)  # hh=110 ll=90 rng=20
+        base = build_strategy("Imba_Fib").propose(_ctx(closes, hs, ls, rsi=60.0))
+        tight = build_strategy("Imba_Fib", {"stop_fib_long": 0.618}).propose(
+            _ctx(closes, hs, ls, rsi=60.0))
+        self.assertAlmostEqual(base.sl, 110 - 20 * 0.786, places=1)   # 94.28
+        self.assertAlmostEqual(tight.sl, 110 - 20 * 0.618, places=1)  # 97.64
