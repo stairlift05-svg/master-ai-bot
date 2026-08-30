@@ -39,3 +39,23 @@ A +$70.55 (PF 1.41), B +$70.64 (PF 1.30).
 Watch the 6h Telegram reports: trade frequency should jump to ~1/day
 (vs ~0.3/day), win-rate should print high (≈7 in 10) while net PnL
 meanders. Re-evaluate after ≥50 paper trades against the B-window profile.
+
+## v23.2 tuning cycle (2026-08-30) — owner-requested, evidence-vetoed
+
+Owner directive: improve the strategy with simple tools/combos, but ship
+ONLY what validates positively on real-market backtests. Three quality
+filters were implemented and tested one-factor-at-a-time on BOTH windows
+(`analysis/runs/imba_v23_tuning.json`):
+
+| Candidate | A (base +$32.17) | B (base −$5.23) | Shipped? |
+|---|---|---|---|
+| break_margin_atr 0.25 / 0.5 / 1.0 | +23.76 / +25.33 / **−8.00** | −6.48 / −10.87 / +3.19 | ✗ |
+| min_ema_dist_atr 0.5 / 1.0 | +32.17 / +30.07 | −5.23 / −5.22 | ✗ (no effect) |
+| htf_align 4h | **−7.01** | **−11.92** | ✗ |
+
+**Decision: no change shipped** — the owner's own condition was not met by
+any candidate. The only B-improving cell (margin=1.0) destroys window A,
+which is the single-window overfit this repo's protocol exists to catch.
+Diagnosis: IMBA's thin post-cost edge is structural (trade frequency vs
+target size), not an entry-quality problem, so entry filters cannot fix it.
+The three parameters stay in the code, default OFF, as research knobs.

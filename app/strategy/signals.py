@@ -538,6 +538,28 @@ class ImbaFib(BaseStrategyV2):
         else:
             long_ok = short_ok = True
 
+        # ---- v23.2 candidate quality filters (default OFF = module-exact) ----
+        # break_margin_atr: the close must clear the OUTER band edge by this
+        #   many ATR — rejects marginal pokes (the same lesson that turned
+        #   Donchian_Trend profitable: break_atr was its #1 parameter).
+        # min_ema_dist_atr: price must stand at least this many ATR away from
+        #   the EMA200 in the trade direction — no entries hugging the mean.
+        # htf_align: the HTF (4h) trend must agree with the trade direction.
+        margin = t5.atr * p.get("break_margin_atr", 0.0)
+        min_dist = t5.atr * p.get("min_ema_dist_atr", 0.0)
+        if p.get("htf_align", 0) > 0:
+            if ctx.tf1.trend == "bullish":
+                htf_long_ok, htf_short_ok = True, False
+            elif ctx.tf1.trend == "bearish":
+                htf_long_ok, htf_short_ok = False, True
+            else:
+                htf_long_ok = htf_short_ok = False
+        else:
+            htf_long_ok = htf_short_ok = True
+        if use_filters and min_dist > 0 and ema_slow:
+            long_ok = long_ok and (price - ema_slow) >= min_dist
+            short_ok = short_ok and (ema_slow - price) >= min_dist
+
         tp_mults = [p.get("tp1", 1.0), p.get("tp2", 2.0),
                     p.get("tp3", 3.0), p.get("tp4", 4.0)]
         floor = price * ctx.min_stop_pct
@@ -564,10 +586,12 @@ class ImbaFib(BaseStrategyV2):
                 rsi=t5.rsi, atr=t5.atr, htf=ctx.tf1.label, confidence=0.6,
             )
 
-        if long_ok and price >= fib50 and price >= fib236:
+        if (long_ok and htf_long_ok and price >= fib50
+                and price >= fib236 + margin):
             return _mk("buy", fib786,
                        f"IMBA: top band (>=fib236) + EMA200 up + RSI {t5.rsi:.0f}")
-        if short_ok and price <= fib50 and price <= fib786:
+        if (short_ok and htf_short_ok and price <= fib50
+                and price <= fib786 - margin):
             return _mk("sell", fib236,
                        f"IMBA: bottom band (<=fib786) + EMA200 dn + RSI {t5.rsi:.0f}")
         return None
@@ -591,7 +615,11 @@ DEFAULT_V2_PARAMS: Dict[str, Dict[str, float]] = {
     # IMBA ALGO final stack (v23) — module defaults, untouched.
     "Imba_Fib": {"sensitivity": 18, "use_filters": 1, "ema_len": 200,
                  "rsi_long_guard": 72.0, "rsi_short_guard": 28.0,
-                 "tp1": 1.0, "tp2": 2.0, "tp3": 3.0, "tp4": 4.0},
+                 "tp1": 1.0, "tp2": 2.0, "tp3": 3.0, "tp4": 4.0,
+                 # v23.2 quality filters — defaults ship OFF until a value
+                 # passes the two-window rule (see STRATEGY_v23.md).
+                 "break_margin_atr": 0.0, "min_ema_dist_atr": 0.0,
+                 "htf_align": 0},
     # Validated plateau centre (analysis/STRATEGY_v20.6.md). break_atr is the
     # single most important parameter: it rejects marginal pokes through the
     # channel, which were the bulk of the losing trades.
