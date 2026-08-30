@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: master-ai-bot
+    name: imba-algo-trader
     runtime: python
     plan: free
     autoDeploy: true
@@ -28,7 +28,9 @@ services:
       # GO_LIVE_CHECKLIST.md (≥50 positive paper trades, REAL TEST verified,
       # secret-header probe, credential rotation).
       - key: PAPER_MODE
-        value: "true"
+        # 2026-08-30 owner directive: real orders ON (AriaX is a testnet —
+        # real orders, test funds). GO_LIVE_CHECKLIST gates waived by owner.
+        value: "false"
       # Optional operator overrides (safe defaults ship in app/config.py):
       #   FUNDING_MAX_PCT (0 = gate off — testnet placeholder funding data)
       #   ENABLED_STRATEGIES / SIDES (validated default: Donchian_Trend, both)

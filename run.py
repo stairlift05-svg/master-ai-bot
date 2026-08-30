@@ -86,7 +86,7 @@ def main() -> int:
         return 2
 
     setup_logging(settings.log_level, settings.log_file or None)
-    log.info("=== Master Quant v22 (AriaX Testnet, Professional) starting ===")
+    log.info("=== IMBA ALGO Engine v23 (AriaX) starting ===")
     log.info("base=%s symbols=%s", settings.arlax_base, list(settings.symbols))
 
     state = EngineState()

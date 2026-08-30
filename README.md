@@ -1,4 +1,8 @@
-# Master Quant Engine v22 — AriaX Testnet (Professional Edition)
+# IMBA ALGO Engine — AriaX (v23)
+
+> **Renamed 2026-08-30 by owner directive** (formerly "Master Quant Engine").
+> Live strategy: IMBA ALGO final stack (`Imba_Fib`). Orders are sent for real
+> to the **AriaX testnet exchange** (`PAPER_MODE=false` on the deployment).
 
 **موتور معاملاتی ماژولار برای صرافی آزمایشی AriaX** — بازطراحی کامل از نسخه تک‌فایلی v19.3 به یک سیستم ۱۰ ماژول حرفه‌ای با خودترمیمی، مدیریت ریسک سخت‌گیرانه و هارنس بک‌تست/استرس.
 

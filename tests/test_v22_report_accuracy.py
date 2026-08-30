@@ -59,7 +59,8 @@ class TestReportHeader(unittest.TestCase):
 
         txt = asyncio.run(build_txt_report(
             EngineState(), _FakeDB(), Settings(), {}, {}))
-        self.assertIn("MASTER QUANT ENGINE v22", txt)
+        self.assertIn("IMBA ALGO ENGINE v23", txt)
+        self.assertIn("Mode:", txt)
         self.assertNotIn("v20", txt.split("\n")[2])
 
 

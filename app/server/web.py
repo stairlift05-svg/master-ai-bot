@@ -24,7 +24,7 @@ log = logging.getLogger("quant.web")
 _DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="fa" dir="rtl"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Quant v22 — AriaX Testnet</title>
+<title>IMBA ALGO Engine — AriaX</title>
 <style>
   body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#0d1117;
        color:#c9d1d9;margin:0;padding:24px}
@@ -50,7 +50,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   .mono{font-family:ui-monospace,Menlo,monospace;font-size:.78rem}
   .halo{color:#d29922;font-weight:600}
 </style></head><body>
-<h1>🚀 Quant v22 — AriaX Testnet (Professional)</h1>
+<h1>🚀 IMBA ALGO Engine — AriaX</h1>
 <div class="sub" id="last">loading…</div>
 <div class="grid">
   <div class="card"><div class="label">Total Equity</div><div class="value" id="bal">—</div></div>
@@ -161,7 +161,7 @@ def create_app(state: EngineState, db: Database, settings=None) -> Flask:
 
     @app.route("/health")
     def health():
-        return jsonify({"ok": True, "service": "quant-engine-v22"})
+        return jsonify({"ok": True, "service": "imba-algo-engine"})
 
     @app.route("/api/status")
     def api_status():

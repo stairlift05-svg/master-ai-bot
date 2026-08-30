@@ -1,3 +1,9 @@
+> ⚠️ **LIVE WAIVER — 2026-08-30:** the owner directed switching this
+> deployment to real orders (`PAPER_MODE=false`) before the gates below were
+> met. The exchange is the AriaX **testnet** (real orders, test funds), so no
+> external funds are exposed. The gates remain mandatory for any future
+> move to a production exchange.
+
 # GO-LIVE CHECKLIST — switching `PAPER_MODE` to `false`
 
 > **Status: NOT CLEARED.** The v21 strategy has a validated post-cost edge on
