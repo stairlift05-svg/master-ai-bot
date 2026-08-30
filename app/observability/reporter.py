@@ -35,8 +35,8 @@ async def build_txt_report(state: EngineState, db: Database, settings: Settings,
 
     lines = [
         "=" * 78,
-        "     MASTER QUANT ENGINE v22  |  ARIAX TESTNET (PROFESSIONAL)",
-        f"     Generated: {_fmt_utc()}",
+        "     IMBA ALGO ENGINE v23  |  ARIAX",
+        f"     Mode: {'PAPER (simulated)' if settings.paper_mode else 'LIVE ORDERS (real)'}  |  Generated: {_fmt_utc()}",
         "=" * 78, "",
         "┌─ 1. SUMMARY ───────────────────────────────────────────────────────────",
         f"│  Total ${st['balance']:,.2f}  Free ${st['free_balance']:,.2f}",
