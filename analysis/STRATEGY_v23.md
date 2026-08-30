@@ -59,3 +59,25 @@ which is the single-window overfit this repo's protocol exists to catch.
 Diagnosis: IMBA's thin post-cost edge is structural (trade frequency vs
 target size), not an entry-quality problem, so entry filters cannot fix it.
 The three parameters stay in the code, default OFF, as research knobs.
+
+## v23.3 proposed addition — the Pine "golden strategy" (evidence-vetoed)
+
+Owner supplied a Pine strategy (EMA9/21 crossover on 4H + EMA200 regime +
+ADX(14)>25 + fixed SL1%/TP2%) titled "PF>2". Ported faithfully as
+`EmaCross_Trend` (Wilder ADX, crossover on the closed 4H bar, 4h context
+slot for live/backtest parity) and tested solo AND combined with Imba_Fib
+on both windows (`analysis/runs/emacross_v23_validation.json`):
+
+| Configuration | A net (PF) | B net (PF) | B WR |
+|---|---|---|---|
+| EmaCross_Trend solo | **−$21.04** (0.86) | **−$58.31** (0.66) | 28.8% |
+| Imba_Fib solo (reference) | +$32.17 (1.12) | −$5.23 (0.98) | 70.8% |
+| Imba_Fib + EmaCross_Trend | +$30.83 (1.12) | **−$24.32** (0.92) | 66.3% |
+
+**Decision: NOT enabled** — negative solo on both windows, and the combo is
+strictly worse than Imba_Fib alone on both windows. A 1:2 bracket needs
+>33.3% win-rate before costs; measured 28.8–34.5%. The Pine "PF>2" claim
+does not survive multi-symbol real data with real costs (typical origin:
+single symbol, hand-picked date range, TV's fill model). The strategy
+remains registered (`build_strategy("EmaCross_Trend")`) with unit tests,
+default OFF.
