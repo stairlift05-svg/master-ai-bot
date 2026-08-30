@@ -592,6 +592,14 @@ class ImbaFib(BaseStrategyV2):
         # -> more dollars per winner.
         sl_long = hh - rng * p.get("stop_fib_long", 0.786)
         sl_short = hh - rng * p.get("stop_fib_short", 0.236)
+        # v23.5 research knob: ATR-based stop instead of the wide channel
+        # edge. sl_atr_mult > 0 replaces BOTH fib stops with
+        # entry -/+ mult*ATR (tighter stop -> larger risk-sized position
+        # -> realised R:R rises from ~0.33 toward ~1).
+        atr_mult = p.get("sl_atr_mult", 0.0)
+        if atr_mult > 0 and t5.atr > 0:
+            sl_long = price - t5.atr * atr_mult
+            sl_short = price + t5.atr * atr_mult
         if (long_ok and htf_long_ok and price >= fib50
                 and price >= fib236 + margin):
             return _mk("buy", sl_long,
@@ -748,7 +756,7 @@ DEFAULT_V2_PARAMS: Dict[str, Dict[str, float]] = {
                  # passes the two-window rule (see STRATEGY_v23.md).
                  "break_margin_atr": 0.0, "min_ema_dist_atr": 0.0,
                  "htf_align": 0, "stop_fib_long": 0.786,
-                 "stop_fib_short": 0.236},
+                 "stop_fib_short": 0.236, "sl_atr_mult": 0.0},
     # Validated plateau centre (analysis/STRATEGY_v20.6.md). break_atr is the
     # single most important parameter: it rejects marginal pokes through the
     # channel, which were the bulk of the losing trades.

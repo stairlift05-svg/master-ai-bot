@@ -69,3 +69,19 @@ class TestStopFib(unittest.TestCase):
             _ctx(closes, hs, ls, rsi=60.0))
         self.assertAlmostEqual(base.sl, 110 - 20 * 0.786, places=1)   # 94.28
         self.assertAlmostEqual(tight.sl, 110 - 20 * 0.618, places=1)  # 97.64
+
+
+class TestAtrStop(unittest.TestCase):
+
+    def test_default_off_uses_fib_stop(self):
+        from app.config import Settings
+        self.assertEqual(
+            Settings().strategy_params["Imba_Fib"]["sl_atr_mult"], 0.0)
+
+    def test_atr_mult_replaces_stop_distance(self):
+        closes, hs, ls = _market(108.0)  # hh=110 ll=90 rng=20, fib stop 94.28
+        fib = build_strategy("Imba_Fib").propose(_ctx(closes, hs, ls, rsi=60.0, atr=2.0))
+        atr = build_strategy("Imba_Fib", {"sl_atr_mult": 2.5}).propose(
+            _ctx(closes, hs, ls, rsi=60.0, atr=2.0))
+        self.assertAlmostEqual(fib.sl, 94.28, places=1)
+        self.assertAlmostEqual(atr.sl, 108.0 - 2.5 * 2.0, places=6)  # 103.0
