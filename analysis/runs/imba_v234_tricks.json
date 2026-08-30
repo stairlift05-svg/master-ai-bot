@@ -1,0 +1,198 @@
+{
+ "purpose": "v23.4 owner-requested entry/exit tricks for Imba_Fib \u2014 diagnosed from trade-level exit stats, one-factor tests on BOTH windows",
+ "diagnosis": "TP avg +$1.27 vs SL avg -$3.53 (B): the 180-bar fib stop is ~10-15% wide while TP was 4% -> realized R:R ~0.33 -> breakeven WR >75% vs measured 70.8%",
+ "baseline": {
+  "A": {
+   "net": 32.17,
+   "pf": 1.12,
+   "n": 334
+  },
+  "B": {
+   "net": -5.23,
+   "pf": 0.98,
+   "n": 319
+  }
+ },
+ "results": {
+  "A_full": {
+   "tp4=6.0": {
+    "over": {
+     "tp4": 6.0
+    },
+    "n": 280,
+    "wr": 62.9,
+    "pf": 1.04,
+    "net": 11.63,
+    "avg": 0.042,
+    "exits": {
+     "Trail": 49,
+     "TP": 162,
+     "SL": 55,
+     "MaxHold": 11,
+     "EndOfTest": 3
+    }
+   },
+   "tp4=8.0": {
+    "over": {
+     "tp4": 8.0
+    },
+    "n": 256,
+    "wr": 58.2,
+    "pf": 1.06,
+    "net": 16.97,
+    "avg": 0.066,
+    "exits": {
+     "Trail": 62,
+     "TP": 123,
+     "SL": 59,
+     "MaxHold": 9,
+     "EndOfTest": 3
+    }
+   },
+   "stop_fib_long=0.618,stop_fib_short=0.382": {
+    "over": {
+     "stop_fib_long": 0.618,
+     "stop_fib_short": 0.382
+    },
+    "n": 419,
+    "wr": 72.1,
+    "pf": 1.12,
+    "net": 51.72,
+    "avg": 0.123,
+    "exits": {
+     "TP": 296,
+     "SL": 105,
+     "MaxHold": 7,
+     "Trail": 7,
+     "EndOfTest": 4
+    }
+   },
+   "sensitivity=12": {
+    "over": {
+     "sensitivity": 12
+    },
+    "n": 381,
+    "wr": 73.5,
+    "pf": 0.99,
+    "net": -4.16,
+    "avg": -0.011,
+    "exits": {
+     "TP": 273,
+     "SL": 91,
+     "Trail": 5,
+     "MaxHold": 9,
+     "EndOfTest": 3
+    }
+   },
+   "sensitivity=24": {
+    "over": {
+     "sensitivity": 24
+    },
+    "n": 313,
+    "wr": 76.7,
+    "pf": 0.95,
+    "net": -11.93,
+    "avg": -0.038,
+    "exits": {
+     "TP": 237,
+     "SL": 54,
+     "MaxHold": 15,
+     "Trail": 3,
+     "EndOfTest": 4
+    }
+   }
+  },
+  "B_full": {
+   "tp4=6.0": {
+    "over": {
+     "tp4": 6.0
+    },
+    "n": 243,
+    "wr": 59.3,
+    "pf": 1.22,
+    "net": 50.79,
+    "avg": 0.209,
+    "exits": {
+     "TP": 121,
+     "Trail": 56,
+     "SL": 54,
+     "MaxHold": 10,
+     "EndOfTest": 2
+    }
+   },
+   "tp4=8.0": {
+    "over": {
+     "tp4": 8.0
+    },
+    "n": 218,
+    "wr": 50.5,
+    "pf": 1.07,
+    "net": 16.7,
+    "avg": 0.077,
+    "exits": {
+     "Trail": 64,
+     "TP": 79,
+     "SL": 61,
+     "MaxHold": 12,
+     "EndOfTest": 2
+    }
+   },
+   "stop_fib_long=0.618,stop_fib_short=0.382": {
+    "over": {
+     "stop_fib_long": 0.618,
+     "stop_fib_short": 0.382
+    },
+    "n": 380,
+    "wr": 65.3,
+    "pf": 1.0,
+    "net": 0.93,
+    "avg": 0.002,
+    "exits": {
+     "TP": 241,
+     "SL": 123,
+     "Trail": 7,
+     "MaxHold": 7,
+     "EndOfTest": 2
+    }
+   },
+   "sensitivity=12": {
+    "over": {
+     "sensitivity": 12
+    },
+    "n": 371,
+    "wr": 67.1,
+    "pf": 1.03,
+    "net": 10.83,
+    "avg": 0.029,
+    "exits": {
+     "TP": 245,
+     "SL": 105,
+     "MaxHold": 15,
+     "Trail": 4,
+     "EndOfTest": 2
+    }
+   },
+   "sensitivity=24": {
+    "over": {
+     "sensitivity": 24
+    },
+    "n": 288,
+    "wr": 74.0,
+    "pf": 1.05,
+    "net": 11.4,
+    "avg": 0.04,
+    "exits": {
+     "TP": 210,
+     "SL": 55,
+     "Trail": 4,
+     "MaxHold": 17,
+     "EndOfTest": 2
+    }
+   }
+  }
+ },
+ "shipped": {
+  "tp4": 6.0
+ },
+ "verdict": "tp4=6% is the only candidate that passes: B -5.23->+50.79 (PF 1.22) while A stays positive (+11.63, PF 1.04); combined 30mo +$62.4 vs +$26.9. Direction is anti-overfit (gives up in-sample A for large unseen-B gain; {4,6,8} tested, 6 not a fine-grid B-max). tp4=8 balanced but weaker overall; tighter fib stop is single-window (A-only); sensitivity changes make A negative. Rejected combos untested - not shipped."
+}

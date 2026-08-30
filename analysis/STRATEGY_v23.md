@@ -81,3 +81,24 @@ does not survive multi-symbol real data with real costs (typical origin:
 single symbol, hand-picked date range, TV's fill model). The strategy
 remains registered (`build_strategy("EmaCross_Trend")`) with unit tests,
 default OFF.
+
+## v23.4 — entry/exit trick cycle (2026-08-30): "let winners run" SHIPPED
+
+Diagnosis from trade-level stats: TP winners averaged +$1.27 while SL
+losers averaged −$3.53 — the 180-bar fibonacci stop is ~10–15% wide, so
+risk-sized positions are small and the 4% cap made the realized R:R ~0.33
+(breakeven needs WR > 75%; measured 70.8%).
+
+One-factor tests on both windows (`analysis/runs/imba_v234_tricks.json`):
+
+| Trick | A | B (unseen) | Shipped? |
+|---|---|---|---|
+| **tp4 4% → 6%** | +11.63 (PF 1.04) | **+50.79 (PF 1.22)** | ✅ |
+| tp4 8% | +16.97 | +16.70 | ✗ (weaker total) |
+| tighter fib stop .618/.382 | +51.72 | +0.93 | ✗ (A-only) |
+| sensitivity 12 / 24 | −4.16 / −11.93 | +10.8 / +11.4 | ✗ (A negative) |
+
+Shipped change: `tp4 = 6.0` (single parameter). The improvement direction
+is anti-overfit: it trades some in-sample performance for a large gain on
+the unseen window. Charts: `analysis/charts_imba_eth_b.png` (strategy on
+chart), `charts_imba_tp4_upgrade.png` (equity before/after).
