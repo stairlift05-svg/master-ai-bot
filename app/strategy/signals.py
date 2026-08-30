@@ -598,10 +598,126 @@ class ImbaFib(BaseStrategyV2):
 
 
 # ---------------------------------------------------------------------------
+# Agent I — EmaCross_Trend (v23.3, owner addition 2026-08-30)
+# ---------------------------------------------------------------------------
+def _ema_series(vals: List[float], period: int) -> List[float]:
+    """Full EMA series (Wilder-style seeding with the SMA of the first period)."""
+    if len(vals) < period:
+        return []
+    k = 2.0 / (period + 1.0)
+    out = [sum(vals[:period]) / period]
+    for v in vals[period:]:
+        out.append(v * k + out[-1] * (1.0 - k))
+    return out
+
+
+def _adx(h: List[float], l: List[float], c: List[float],
+         di_len: int = 14, adx_len: int = 14) -> Optional[float]:
+    """Wilder ADX — equivalent of Pine ta.dmi(14, 14) > threshold."""
+    n = len(c)
+    if n < di_len * 2 + adx_len + 1:
+        return None
+    trs, pdms, ndms = [], [], []
+    for i in range(1, n):
+        up, dn = h[i] - h[i - 1], l[i - 1] - l[i]
+        pdm = up if (up > dn and up > 0) else 0.0
+        ndm = dn if (dn > up and dn > 0) else 0.0
+        trs.append(max(h[i] - l[i], abs(h[i] - c[i - 1]), abs(l[i] - c[i - 1])))
+        pdms.append(pdm)
+        ndms.append(ndm)
+    atr = float(sum(trs[:di_len]))
+    pdm = float(sum(pdms[:di_len]))
+    ndm = float(sum(ndms[:di_len]))
+    dxs: List[float] = []
+    for i in range(di_len, len(trs)):
+        atr += trs[i] - trs[i - di_len] if i >= di_len else 0.0
+        pdm += pdms[i] - pdms[i - di_len]
+        ndm += ndms[i] - ndms[i - di_len]
+        pdi = 100.0 * pdm / atr if atr > 0 else 0.0
+        ndi = 100.0 * ndm / atr if atr > 0 else 0.0
+        dxs.append(100.0 * abs(pdi - ndi) / (pdi + ndi) if pdi + ndi > 0 else 0.0)
+    if len(dxs) < adx_len:
+        return None
+    adx = sum(dxs[:adx_len]) / adx_len
+    for dx in dxs[adx_len:]:
+        adx = (adx * (adx_len - 1) + dx) / adx_len
+    return adx
+
+
+class EmaCrossTrend(BaseStrategyV2):
+    """The owner-supplied Pine 'golden strategy' — faithful port, 4H only.
+
+    Logic (all on the HTF/4h slot, exactly like the Pine running on a 4H
+    chart): EMA9/EMA21 crossover + close vs EMA200 regime + ADX(14) > 25.
+    Exits: fixed 1% stop / 2% target from entry (Pine strategy.exit).
+    Translation notes (documented divergences):
+      * Pine reverses on the opposite cross; this engine keeps ONE position
+        per symbol and exits on SL/TP — with a 1%/2% bracket the position
+        is almost always resolved long before the next cross.
+      * Pine sizes 2% of equity; the engine keeps its risk-based sizer
+        (0.4% risk / 1% stop distance -> ~40% of free margin, capped at
+        MAX_NOTIONAL_USD) — portfolio-consistent.
+    """
+
+    name = "EmaCross_Trend"
+    priority = 10
+
+    def evaluate(self, ctx: HtfContext) -> Optional[Signal]:
+        p = self.params
+        t4 = ctx.tf1  # the 4h slot (live and backtest build it identically)
+        closes, highs, lows = t4.closes, t4.highs, t4.lows
+        need = max(int(p.get("ema_len", 200)), int(p.get("slow_len", 21)) * 4, 60)
+        if len(closes) < need + 2:
+            return None
+        fast = _ema_series(closes, int(p.get("fast_len", 9)))
+        slow = _ema_series(closes, int(p.get("slow_len", 21)))
+        ema_trend = _ema_series(closes, int(p.get("ema_len", 200)))
+        if not (fast and slow and ema_trend):
+            return None
+        # crossover on the last CLOSED bar (series already forming-dropped)
+        x_up = fast[-1] > slow[-1] and fast[-2] <= slow[-2]
+        x_dn = fast[-1] < slow[-1] and fast[-2] >= slow[-2]
+        price = closes[-1]
+        adx = _adx(highs, lows, closes, 14, 14)
+        strong = adx is not None and adx > p.get("adx_threshold", 25.0)
+        if not strong:
+            return None
+
+        sl_pct = p.get("sl_pct", 1.0) / 100.0
+        tp_pct = p.get("tp_pct", 2.0) / 100.0
+        floor = price * ctx.min_stop_pct
+
+        def _mk(side: str) -> Signal:
+            sign = 1.0 if side == "buy" else -1.0
+            sl_dist = max(price * sl_pct, floor)
+            tp_dist = price * tp_pct
+            cost_dist = price * ctx.round_trip_cost_pct
+            if cost_dist > 0 and ctx.min_edge_ratio > 0:
+                required = cost_dist * ctx.min_edge_ratio
+                if required > tp_dist * 2.0:
+                    raise _SignalTooSmall("2% target below cost floor")
+                tp_dist = max(tp_dist, required)
+            return Signal(
+                side=side, strategy=self.name,
+                reason=f"EMA{int(p.get('fast_len', 9))}/EMA{int(p.get('slow_len', 21))} cross + EMA200 + ADX {adx:.0f}",
+                entry=price, sl=price - sign * sl_dist,
+                tp1=price + sign * tp_dist, tp=price + sign * tp_dist,
+                rsi=t4.rsi, atr=t4.atr, htf=t4.label, confidence=0.6,
+            )
+
+        if x_up and price > ema_trend[-1]:
+            return _mk("buy")
+        if x_dn and price < ema_trend[-1]:
+            return _mk("sell")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 _STRATEGY_CLASSES: Dict[str, type] = {
     "Imba_Fib": ImbaFib,
+    "EmaCross_Trend": EmaCrossTrend,
     "Donchian_Trend": DonchianTrend,
     "TrendPullback_HTF": TrendPullbackHTF,
     "HTF_Breakout": HTFBreakout,
@@ -612,6 +728,9 @@ _STRATEGY_CLASSES: Dict[str, type] = {
 }
 
 DEFAULT_V2_PARAMS: Dict[str, Dict[str, float]] = {
+    # Golden EMA-cross strategy (v23.3) — Pine defaults, untouched.
+    "EmaCross_Trend": {"fast_len": 9, "slow_len": 21, "ema_len": 200,
+                       "adx_threshold": 25.0, "sl_pct": 1.0, "tp_pct": 2.0},
     # IMBA ALGO final stack (v23) — module defaults, untouched.
     "Imba_Fib": {"sensitivity": 18, "use_filters": 1, "ema_len": 200,
                  "rsi_long_guard": 72.0, "rsi_short_guard": 28.0,

@@ -1,0 +1,75 @@
+{
+ "purpose": "v23.3 owner-proposed addition: Pine 'golden strategy' (EMA9/21 4H + EMA200 + ADX>25, SL1%/TP2%) \u2014 solo and combined with Imba_Fib, both real-data windows",
+ "claim": "Pine title asserts PF>2 (4H)",
+ "solo": {
+  "A_full": {
+   "enabled": [
+    "EmaCross_Trend"
+   ],
+   "secs": 136,
+   "n": 252,
+   "wr": 34.5,
+   "pf": 0.86,
+   "net": -21.04,
+   "ret_pct": -2.1,
+   "max_dd": 2.18,
+   "avg": -0.083
+  },
+  "B_full": {
+   "enabled": [
+    "EmaCross_Trend"
+   ],
+   "secs": 140,
+   "n": 264,
+   "wr": 28.8,
+   "pf": 0.66,
+   "net": -58.31,
+   "ret_pct": -5.83,
+   "max_dd": 6.76,
+   "avg": -0.221
+  }
+ },
+ "combo_with_imba": {
+  "A_full": {
+   "enabled": [
+    "Imba_Fib",
+    "EmaCross_Trend"
+   ],
+   "secs": 61,
+   "n": 344,
+   "wr": 77.0,
+   "pf": 1.12,
+   "net": 30.83,
+   "ret_pct": 3.1,
+   "max_dd": 3.18,
+   "avg": 0.09
+  },
+  "B_full": {
+   "enabled": [
+    "Imba_Fib",
+    "EmaCross_Trend"
+   ],
+   "secs": 73,
+   "n": 344,
+   "wr": 66.3,
+   "pf": 0.92,
+   "net": -24.32,
+   "ret_pct": -2.43,
+   "max_dd": 6.91,
+   "avg": -0.071
+  }
+ },
+ "reference_imba_solo": {
+  "A_full": {
+   "net": 32.17,
+   "n": 334,
+   "pf": 1.12
+  },
+  "B_full": {
+   "net": -5.23,
+   "n": 319,
+   "pf": 0.98
+  }
+ },
+ "verdict": "NOT ENABLED. The PF>2 claim does not replicate: solo is negative on BOTH windows (A -$21.04 PF 0.86, B -$58.31 PF 0.66 \u2014 28.8% WR where a 1:2 bracket needs >33.3% just to break even). Adding it to Imba_Fib makes the portfolio STRICTLY WORSE on both windows (A 32.17->30.83, B -5.23->-24.32). Likely origin of the Pine claim: single-symbol, hand-picked range, TradingView cost model. Strategy stays registered as a research knob."
+}
