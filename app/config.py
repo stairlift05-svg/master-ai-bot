@@ -66,7 +66,10 @@ DEFAULT_STRATEGY_PARAMS: Dict[str, Dict[str, float]] = {
 #     walk-forward  3 of 4 sequential quarters positive
 # It sits on a broad parameter plateau (see analysis/STRATEGY_v20.6.md), not a
 # single lucky cell, which is the main reason to believe it generalises.
-DEFAULT_ENABLED_STRATEGIES: tuple = ("Donchian_Trend",)
+# v23 (owner directive 2026-08-29): IMBA ALGO final stack replaces
+# Donchian_Trend as the live strategy. Donchian_Trend stays registered for
+# research and is one ENABLED_STRATEGIES edit away.
+DEFAULT_ENABLED_STRATEGIES: tuple = ("Imba_Fib",)
 
 
 def _env_str(name: str, default: str = "") -> str:

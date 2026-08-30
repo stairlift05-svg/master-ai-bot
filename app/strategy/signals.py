@@ -483,9 +483,101 @@ class DonchianTrend(BaseStrategyV2):
 
 
 # ---------------------------------------------------------------------------
+# Agent H — ImbaFib (v23, owner directive 2026-08-29)
+# ---------------------------------------------------------------------------
+class ImbaFib(BaseStrategyV2):
+    """IMBA ALGO final stack — faithful port of the supplied Python module.
+
+    Entry (long): close in the top band of the ``sensitivity*10``-bar
+    fibonacci channel (>= fib236, which implies >= fib50) + STACK filters
+    (close above EMA200 and RSI < rsi_long_guard).
+    Entry (short): symmetric bottom band (<= fib786) + close below EMA200
+    and RSI > rsi_short_guard.
+    Stop: the far channel edge (fib786 long / fib236 short) — the module's
+    fibonacci stop, NOT an ATR stop.
+    Targets: fixed ladder 1/2/3/4% (tp1/tp2/tp3/tp4); the engine books the
+    final target at tp4 and shows tp1. Break-even after TP1 and the 10/10/
+    10/70 scale-out ladder of the original are approximated by the engine's
+    existing BE move (min_profit_be_pct) — the live executor has a single
+    partial, so the ladder is documented rather than replicated.
+
+    The Signal is built directly (not via _build) so the module's fixed
+    percent targets survive: _build forces tp >= 1.5 x stop, which would
+    silently rewrite IMBA's 4% runner into a 1.5x-fib-stop target. The
+    shared cost gate is applied manually below.
+    """
+
+    name = "Imba_Fib"
+    priority = 0
+
+    def evaluate(self, ctx: HtfContext) -> Optional[Signal]:
+        p = self.params
+        t5 = ctx.tf5
+        look = max(1, int(p.get("sensitivity", 18)) * 10)
+        closes, highs, lows = t5.closes, t5.highs, t5.lows
+        if len(closes) < max(look + 1, 205):
+            return None
+        price = closes[-1]
+        hh, ll = max(highs[-look:]), min(lows[-look:])
+        rng = hh - ll
+        if rng <= 0 or price <= 0:
+            return None
+        fib236 = hh - rng * 0.236
+        fib50 = hh - rng * 0.50
+        fib786 = hh - rng * 0.786
+
+        use_filters = p.get("use_filters", 1) > 0
+        if use_filters:
+            ema_slow = t5.ema200 if t5.ema200 else t5.ema50
+            if not ema_slow or ema_slow <= 0:
+                return None
+            long_ok = (price > ema_slow
+                       and t5.rsi < p.get("rsi_long_guard", 72.0))
+            short_ok = (price < ema_slow
+                        and t5.rsi > p.get("rsi_short_guard", 28.0))
+        else:
+            long_ok = short_ok = True
+
+        tp_mults = [p.get("tp1", 1.0), p.get("tp2", 2.0),
+                    p.get("tp3", 3.0), p.get("tp4", 4.0)]
+        floor = price * ctx.min_stop_pct
+
+        def _mk(side: str, sl_raw: float, reason: str) -> Signal:
+            sign = 1.0 if side == "buy" else -1.0
+            sl_dist = max(abs(price - sl_raw), floor)
+            tp_dist = price * tp_mults[3] / 100.0
+            tp1_dist = price * tp_mults[0] / 100.0
+            # shared cost gate (same rule as BaseStrategyV2._build)
+            cost_dist = price * ctx.round_trip_cost_pct
+            if cost_dist > 0 and ctx.min_edge_ratio > 0:
+                required = cost_dist * ctx.min_edge_ratio
+                if required > tp_dist * 2.0:
+                    raise _SignalTooSmall(
+                        f"target {tp_dist / price * 100:.2f}% below "
+                        f"cost floor {required / price * 100:.2f}%")
+                tp_dist = max(tp_dist, required)
+                tp1_dist = max(tp1_dist, cost_dist * 1.5)
+            sl = price - sl_dist if side == "buy" else price + sl_dist
+            return Signal(
+                side=side, strategy=self.name, reason=reason, entry=price,
+                sl=sl, tp1=price + sign * tp1_dist, tp=price + sign * tp_dist,
+                rsi=t5.rsi, atr=t5.atr, htf=ctx.tf1.label, confidence=0.6,
+            )
+
+        if long_ok and price >= fib50 and price >= fib236:
+            return _mk("buy", fib786,
+                       f"IMBA: top band (>=fib236) + EMA200 up + RSI {t5.rsi:.0f}")
+        if short_ok and price <= fib50 and price <= fib786:
+            return _mk("sell", fib236,
+                       f"IMBA: bottom band (<=fib786) + EMA200 dn + RSI {t5.rsi:.0f}")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 _STRATEGY_CLASSES: Dict[str, type] = {
+    "Imba_Fib": ImbaFib,
     "Donchian_Trend": DonchianTrend,
     "TrendPullback_HTF": TrendPullbackHTF,
     "HTF_Breakout": HTFBreakout,
@@ -496,6 +588,10 @@ _STRATEGY_CLASSES: Dict[str, type] = {
 }
 
 DEFAULT_V2_PARAMS: Dict[str, Dict[str, float]] = {
+    # IMBA ALGO final stack (v23) — module defaults, untouched.
+    "Imba_Fib": {"sensitivity": 18, "use_filters": 1, "ema_len": 200,
+                 "rsi_long_guard": 72.0, "rsi_short_guard": 28.0,
+                 "tp1": 1.0, "tp2": 2.0, "tp3": 3.0, "tp4": 4.0},
     # Validated plateau centre (analysis/STRATEGY_v20.6.md). break_atr is the
     # single most important parameter: it rejects marginal pokes through the
     # channel, which were the bulk of the losing trades.
