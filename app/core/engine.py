@@ -641,23 +641,30 @@ class QuantEngine:
         await self.smart_sync()
         await self.tg.send("🔄 Sync done", self.tg.menu())
 
-    async def _tg_report(self) -> None:
-        open_times = {pid: p.opened_at for pid, p in self.state.positions().items()}
+    async def _send_report(self, caption: str) -> None:
+        """Build + ship the txt report (shared by /report and the 6h loop).
+
+        v23.6 regression fix: open_times must be built from
+        state.positions() (Position objects). The previous _report_round
+        iterated state.snapshot()["active_positions"], whose values are
+        to_dict() dicts — 'dict' object has no attribute 'opened_at' —
+        so every scheduled 6h round crashed while a position was open
+        and owners only ever received on-demand /report output.
+        """
+        open_times = {pid: p.opened_at
+                      for pid, p in self.state.positions().items()}
         report = await build_txt_report(self.state, self.db, self.settings,
                                         self.prices, open_times)
         with open("report.txt", "w", encoding="utf-8") as handle:
             handle.write(report)
-        await self.tg.send_document("report.txt", "📄 IMBA ALGO Engine report")
+        await self.tg.send_document("report.txt", caption)
+
+    async def _tg_report(self) -> None:
+        await self._send_report("📄 IMBA ALGO Engine report")
 
     async def _report_round(self) -> None:
         """Periodic autonomous report (v22.2) — same payload as /report."""
-        open_times = {pid: p.opened_at
-                      for pid, p in self.state.snapshot()["active_positions"].items()}
-        report = await build_txt_report(self.state, self.db, self.settings,
-                                        self.prices, open_times)
-        with open("report.txt", "w", encoding="utf-8") as handle:
-            handle.write(report)
-        await self.tg.send_document("report.txt", "📄 IMBA ALGO — 6h report")
+        await self._send_report("📄 IMBA ALGO — 6h report")
 
     async def _tg_rejections(self) -> None:
         decisions = await self.db.get_recent_decisions(12)

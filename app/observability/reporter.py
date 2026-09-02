@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 from typing import Dict
 
 from app.config import Settings
-from app.models import Position
 from app.persistence.database import Database
 from app.state import EngineState
 
@@ -52,7 +51,7 @@ async def build_txt_report(state: EngineState, db: Database, settings: Settings,
         "└────────────────────────────────────────────────────────────────────────", "",
         "┌─ 2. OPEN ──────────────────────────────────────────────────────────────",
     ]
-    active: Dict[str, Position] = st["active_positions"]
+    active: Dict[str, dict] = st["active_positions"]  # snapshot = to_dict()s
     if not active:
         lines.append("│  (flat)")
     else:
