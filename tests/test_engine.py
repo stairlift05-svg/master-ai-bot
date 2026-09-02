@@ -145,8 +145,14 @@ class TestRiskGates(unittest.TestCase):
         self.assertEqual(err, "")
         self.assertIn("already open",
                       limits.would_exceed({"ETHUSD"}, 1, "ETHUSD", 100.0, 50.0))
+        # v23.7: default max_positions raised 5 -> 8; assert against the
+        # setting itself so the test tracks config instead of hard-coding.
         self.assertIn("max positions",
-                      limits.would_exceed(set(), 5, "SOLUSD", 100.0, 50.0))
+                      limits.would_exceed(set(), S.max_positions,
+                                          "SOLUSD", 100.0, 50.0))
+        self.assertEqual(
+            "", limits.would_exceed(set(), S.max_positions - 1,
+                                    "SOLUSD", 100.0, 50.0))
 
     def test_adaptive_risk(self):
         state = EngineState()

@@ -120,3 +120,47 @@ lift realised R:R) was tested on both windows against the shipped baseline
 IMBA enters at channel extremes where noise is maximal, so a tight stop
 is systematically eaten (SL exits: 55 → 405 on A) and win rate collapses.
 The knob stays in code (`sl_atr_mult`, default 0) as documented research.
+
+## v23.7 committee review (2026-09-02) — 'ICT Validated SMC v1.8' → REJECTED
+
+Owner submitted a 2,000-line Pine v6 ICT/SMC indicator (order blocks, FVGs,
+OTE fib zones, breakers, structure BOS/CHoCH, HTF alignment, killzones,
+confluence scoring ≥4/11, cooldown 10 bars) with the directive: review via
+the committee protocol and add to the bot **only if profitable**.
+
+Port: `analysis/scripts/ict_validation.py` — full signal engine (the
+panel/drawing layers are irrelevant to trading), evaluated on the two-window
+protocol with the live-equivalent engine (1h cadence, fees+slippage,
+risk sizing, engine exits). Harness calibration: Imba tp4=6 reproduces the
+recorded B-window (+53.6 vs +50.8); A runs hotter than the recorded harness
+(+104 vs +11.6), so absolute numbers carry a band — every comparison below
+is same-harness.
+
+| Test | A (14mo) | B (16mo, unseen) | Verdict |
+|---|---|---|---|
+| ICT solo (defaults) | n=2069, WR 46.5%, PF 0.89, **−$249.5**, DD 20.2% | n=2513, WR 48.7%, PF 0.90, **−$262.5**, DD 20.5% | ✗✗ |
+| ICT solo, before fees | gross ≈ −$56 | gross ≈ −$23 | no alpha at all |
+| ICT strict score ≥5 / ≥6 | PF 0.84 / 0.81 | PF 0.89 / 0.80 | ✗ (worse) |
+| Combo ICT-first | +$42.4 (vs Imba solo +$104) | +$57.6 (vs +$53.6) | ✗ degrades A |
+| Combo Imba-first | +$26.9, ICT leg −$44.3 | +$11.0, ICT leg −$15.1 | ✗ degrades both |
+
+**Committee verdict: REJECT — do not add.** Negative on both windows solo,
+negative before fees (so it is not a fee-tuning problem), every combination
+ordering leaves the portfolio below Imba-solo on at least one window, and
+stricter confluence scores make it *worse*. Root cause: on liquid 1h crypto
+the zone-touch conditions fire ~5-7×/day/symbol; the "validated" OB/FVG/OTE
+touches are noise, not institutional footprints. Artifact:
+`analysis/runs/ict_v237_validation.json`.
+
+## v23.7 capacity expansion (2026-09-02) — SHIPPED
+
+Second half of the same owner directive (more pairs, more trades):
+
+* Symbols 8 → **12**: +BTCUSD (part of both validation windows), +BCHUSD,
+  +LTCUSD, +TRXUSD (AriaX-listed majors, no dedicated backtest coverage —
+  flagged honestly). Remaining AriaX headroom: AAVE, UNI, XLM.
+* `MAX_POS` 5 → **8** and `MAX_AGG_NOTIONAL_USD` 400 → **640** (8 × $80).
+  Side effect: the AVAX "max positions reached" rejection spam disappears
+  (3 slots of headroom instead of 0).
+* Per-trade risk unchanged (0.4%, $80 notional cap, 5x) — margin impact
+  ≈ $128 worst case on a $39.9k balance.
