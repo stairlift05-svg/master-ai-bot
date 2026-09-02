@@ -219,5 +219,69 @@
   },
   "note": "stricter confluence makes it WORSE — high-score zones are not better entries"
  },
- "committee_verdict": "REJECT on every axis (owner rule 'only if profitable'): solo negative on both windows before and after fees; both combo orderings degrade vs Imba-solo; stricter scoring does not rescue. NOT added to the bot. Capacity expansion (12 symbols, MAX_POS 8, agg $640) shipped separately."
+ "committee_verdict": "REJECT on every axis (owner rule 'only if profitable'): solo negative on both windows before and after fees; both combo orderings degrade vs Imba-solo; stricter scoring does not rescue. NOT added to the bot. Capacity expansion (12 symbols, MAX_POS 8, agg $640) shipped separately.",
+ "ict_star_ob_review": {
+  "trigger": "owner follow-up: 5-star OB signals look completely successful on the chart",
+  "test": "entries ONLY at OB touches with creation confluence score >=7 (5 stars) / >=6 (4+ stars); SL beyond OB, TP nearest swing, cooldown 10, HTF required, full cost model",
+  "ob_score>=7": {
+   "A": {
+    "n": 449,
+    "wr": 49.0,
+    "pf": 0.84,
+    "net": -69.61,
+    "dd": 6.11,
+    "gross": -27.52,
+    "fees": -42.09,
+    "long": 263,
+    "short": 186
+   },
+   "B": {
+    "n": 551,
+    "wr": 53.4,
+    "pf": 1.03,
+    "net": -18.37,
+    "dd": 2.58,
+    "gross": 34.24,
+    "fees": -52.61,
+    "long": 286,
+    "short": 265
+   }
+  },
+  "ob_score>=6": {
+   "A": {
+    "n": 606,
+    "wr": 47.9,
+    "pf": 0.86,
+    "net": -86.25,
+    "dd": 9.19,
+    "gross": -29.69,
+    "fees": -56.56,
+    "long": 370,
+    "short": 236
+   },
+   "B": {
+    "n": 717,
+    "wr": 50.3,
+    "pf": 0.95,
+    "net": -55.49,
+    "dd": 6.43,
+    "gross": 12.92,
+    "fees": -68.41,
+    "long": 381,
+    "short": 336
+   }
+  },
+  "verdict": "FAIL again, with an honest nuance: 5-star on window B is gross-positive (+$34.2) — the closest any ICT variant came to an edge, consistent with the owner's visual impression on recent charts — but it dies after fees (-$18.4) and window A is negative even gross (-$27.5). Gradient note: higher stars did help on B (5star gross +34 vs 4star +13), but nothing survives costs on both windows.",
+  "why_charts_look_better": [
+   "survivorship/hindsight: the eye anchors on successful touches at reversals; failed touches and repeat-touch failures are forgotten",
+   "chart signals carry no fees/slippage (best variant: gross +34 -> net -18 after 52 fees)",
+   "stars measure confluence at zone CREATION, not forward return",
+   "historical drawings render in final state (repaint subtlety)"
+  ],
+  "external_evidence": {
+   "luxalgo": "no rigorous public evidence that the full SMC framework carries an edge by itself",
+   "test-max": "no published, audited performance record for the methodology; YouTube results are survivorship-biased by construction",
+   "atas": "can be profitable with defined rules + risk management — does not make money on its own"
+  }
+ }
 }

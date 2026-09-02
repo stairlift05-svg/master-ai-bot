@@ -566,11 +566,16 @@ def ict_signals(series, **kw):
         def zone_touch_long():
             sl = None
             sc = 0
+            thr = p.get("entry_filter_ob_score", 0)
             for ob in reversed(obs[-10:]):
                 if not ob.mitigated and ob.isBullish and l <= ob.top and c > ob.bottom:
+                    if thr and ob.score < thr:
+                        continue
                     sc += 2
                     sl = ob.bottom if sl is None else min(sl, ob.bottom)
                     break
+            if thr:
+                return sc, sl   # star-filter mode: OB touches only
             for f in reversed(fvgs[-10:]):
                 if not f.mitigated and f.isBullish and l <= f.top and c > f.bottom:
                     sc += 1
@@ -594,11 +599,16 @@ def ict_signals(series, **kw):
         def zone_touch_short():
             sl = None
             sc = 0
+            thr = p.get("entry_filter_ob_score", 0)
             for ob in reversed(obs[-10:]):
                 if not ob.mitigated and not ob.isBullish and h >= ob.bottom and c < ob.top:
+                    if thr and ob.score < thr:
+                        continue
                     sc += 2
                     sl = ob.top if sl is None else max(sl, ob.top)
                     break
+            if thr:
+                return sc, sl   # star-filter mode: OB touches only
             for f in reversed(fvgs[-10:]):
                 if not f.mitigated and not f.isBullish and h >= f.bottom and c < f.top:
                     sc += 1
