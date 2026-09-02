@@ -1,0 +1,223 @@
+{
+ "cal_imba_tp4=4": {
+  "A": {
+   "window": "A",
+   "n": 523,
+   "n_long": 248,
+   "n_short": 275,
+   "wr": 74.8,
+   "pf": 1.07,
+   "net": 23.55,
+   "max_dd": 4.32,
+   "avg": 0.045,
+   "exits": {
+    "TP": 388,
+    "SL": 107,
+    "MaxHold": 23,
+    "EndOfTest": 5
+   }
+  },
+  "B": {
+   "window": "B",
+   "n": 542,
+   "n_long": 253,
+   "n_short": 289,
+   "wr": 70.1,
+   "pf": 1.07,
+   "net": 27.88,
+   "max_dd": 7.15,
+   "avg": 0.051,
+   "exits": {
+    "TP": 377,
+    "SL": 136,
+    "MaxHold": 24,
+    "EndOfTest": 5
+   }
+  }
+ },
+ "cal_tp4=6": {
+  "A": {
+   "window": "A",
+   "n": 414,
+   "n_long": 202,
+   "n_short": 212,
+   "wr": 64.7,
+   "pf": 1.25,
+   "net": 104.04,
+   "max_dd": 10.44,
+   "avg": 0.251,
+   "exits": {
+    "TP": 252,
+    "SL": 90,
+    "MaxHold": 24,
+    "TrailStop": 43,
+    "EndOfTest": 5
+   }
+  },
+  "B": {
+   "window": "B",
+   "n": 419,
+   "n_long": 206,
+   "n_short": 213,
+   "wr": 60.1,
+   "pf": 1.13,
+   "net": 53.64,
+   "max_dd": 9.5,
+   "avg": 0.128,
+   "exits": {
+    "TP": 219,
+    "MaxHold": 31,
+    "SL": 115,
+    "TrailStop": 49,
+    "EndOfTest": 5
+   }
+  }
+ },
+ "ict_solo": {
+  "A": {
+   "window": "A",
+   "n": 2069,
+   "n_long": 1062,
+   "n_short": 1007,
+   "wr": 46.5,
+   "pf": 0.89,
+   "net": -249.52,
+   "max_dd": 20.15,
+   "avg": -0.121,
+   "exits": {
+    "TP": 957,
+    "SL": 1099,
+    "TrailStop": 8,
+    "MaxHold": 3,
+    "EndOfTest": 2
+   },
+   "verdict": "FAIL — PF 0.89, net -249.52, DD 20.15%"
+  },
+  "B": {
+   "window": "B",
+   "n": 2513,
+   "n_long": 1313,
+   "n_short": 1200,
+   "wr": 48.7,
+   "pf": 0.9,
+   "net": -262.53,
+   "max_dd": 20.51,
+   "avg": -0.104,
+   "exits": {
+    "SL": 1280,
+    "TP": 1219,
+    "TrailStop": 11,
+    "EndOfTest": 3
+   },
+   "verdict": "FAIL — PF 0.90, net -262.53, DD 20.51%"
+  }
+ },
+ "ict_combo": {
+  "A": {
+   "window": "A",
+   "n": 210,
+   "n_long": 99,
+   "n_short": 111,
+   "wr": 58.6,
+   "pf": 1.28,
+   "net": 42.43,
+   "max_dd": 4.92,
+   "avg": 0.202,
+   "exits": {
+    "TP": 119,
+    "SL": 69,
+    "MaxHold": 11,
+    "TrailStop": 11
+   }
+  },
+  "B": {
+   "window": "B",
+   "n": 207,
+   "n_long": 135,
+   "n_short": 72,
+   "wr": 62.3,
+   "pf": 1.35,
+   "net": 57.57,
+   "max_dd": 5.32,
+   "avg": 0.278,
+   "exits": {
+    "TP": 117,
+    "MaxHold": 6,
+    "SL": 65,
+    "TrailStop": 19
+   }
+  },
+  "ict_contrib": {
+   "A": {
+    "n": 90,
+    "pnl": 3.01
+   },
+   "B": {
+    "n": 68,
+    "pnl": 19.26
+   }
+  }
+ },
+ "purpose": "v23.7 committee review — 'ICT Validated SMC v1.8' (Pine v6) ported as candidate strategy; owner rule: ship only if profitable (solo+combined, both windows)",
+ "harness_note": "Rebuilt harness (prior /tmp script lost). Calibration anchor: Imba tp4=6 on window B +53.64 vs recorded +50.79 (n 419 vs 319); A overstates (+104 vs +11.63) — absolute nets carry a harness-uncertainty band, all comparisons are same-harness (ICT vs Imba on this engine).",
+ "ict_fee_decomposition": {
+  "A": {
+   "gross": -56,
+   "fees": -194
+  },
+  "B": {
+   "gross": -23,
+   "fees": -240
+  },
+  "note": "negative BEFORE fees — no alpha, not merely a fee problem"
+ },
+ "ict_combo_imba_first": {
+  "A": {
+   "n": 627,
+   "net": 26.87,
+   "pf": 1.07,
+   "ict_contrib": {
+    "n": 224,
+    "pnl": -44.27
+   }
+  },
+  "B": {
+   "n": 654,
+   "net": 11.04,
+   "pf": 1.05,
+   "ict_contrib": {
+    "n": 262,
+    "pnl": -15.14
+   }
+  },
+  "note": "ICT slots crowd out Imba entries; total below Imba-solo on BOTH windows"
+ },
+ "ict_strict_min_sig": {
+  "5": {
+   "A": {
+    "n": 1530,
+    "pf": 0.84,
+    "net": -246.27
+   },
+   "B": {
+    "n": 1740,
+    "pf": 0.89,
+    "net": -198.68
+   }
+  },
+  "6": {
+   "A": {
+    "n": 870,
+    "pf": 0.81,
+    "net": -154.45
+   },
+   "B": {
+    "n": 1078,
+    "pf": 0.8,
+    "net": -175.12
+   }
+  },
+  "note": "stricter confluence makes it WORSE — high-score zones are not better entries"
+ },
+ "committee_verdict": "REJECT on every axis (owner rule 'only if profitable'): solo negative on both windows before and after fees; both combo orderings degrade vs Imba-solo; stricter scoring does not rescue. NOT added to the bot. Capacity expansion (12 symbols, MAX_POS 8, agg $640) shipped separately."
+}

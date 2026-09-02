@@ -32,6 +32,14 @@ SYMBOL_MAP: Dict[str, str] = {
     "LINKUSD": "LINK/USDT",
     "ADAUSD": "ADA/USDT",
     "DOGEUSD": "DOGE/USDT",
+    # v23.7 owner-directed capacity expansion (2026-09-02). BTC was part of
+    # both validation windows (analysis/data_1h & _oos); BCH/LTC/TRX are new
+    # (AriaX-listed majors, no dedicated backtest coverage). Remaining
+    # AriaX headroom if ever needed: AAVE, UNI, XLM.
+    "BTCUSD": "BTC/USDT",
+    "BCHUSD": "BCH/USDT",
+    "LTCUSD": "LTC/USDT",
+    "TRXUSD": "TRX/USDT",
 }
 # AriaX symbol -> Bybit-style v5 symbol (ETHUSD -> ETHUSDT) for the public
 # /v5/market/kline endpoint served by the exchange itself.
@@ -157,14 +165,16 @@ class Settings:
 
     # ---- Risk management (#01) -------------------------------------------
     leverage: int = 5
-    max_positions: int = 5
+    # v23.7: 8 concurrent slots for 12 symbols (owner-directed capacity
+    # expansion). Aggregate notional headroom grows to 8 x $80 = $640.
+    max_positions: int = 8
     max_dd_pct: float = 10.0
     max_daily_loss_pct: float = 5.0
     risk_pct: float = 0.40
     max_notional_usd: float = 80.0
     # Five $80 slots require $400 aggregate capacity. The old $240 default
     # silently limited MAX_POS=5 to only three fully-sized positions.
-    max_agg_notional_usd: float = 400.0
+    max_agg_notional_usd: float = 640.0
     min_order_usd: float = 8.0
     min_free_margin: float = 15.0
     margin_util_cap: float = 0.85
