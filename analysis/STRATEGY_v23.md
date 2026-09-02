@@ -164,3 +164,36 @@ Second half of the same owner directive (more pairs, more trades):
   (3 slots of headroom instead of 0).
 * Per-trade risk unchanged (0.4%, $80 notional cap, 5x) — margin impact
   ≈ $128 worst case on a $39.9k balance.
+
+## v23.8 follow-up review (2026-09-02) — five-star OBs + SMC کلیات
+
+Owner pushback (fair): on the chart the indicator's five-star (★) OB signals
+look completely successful. Re-tested specifically that claim — entries ONLY
+at OB touches whose creation confluence score ≥7 (5★) / ≥6 (4★+), SL beyond
+the OB, TP at nearest swing, cooldown, HTF gate, full cost model:
+
+| Variant | A | B |
+|---|---|---|
+| 5★ OBs (score≥7) | n=449, WR 49.0%, PF 0.84, net **−$69.6** (gross −$27.5) | n=551, WR 53.4%, PF 1.03, net **−$18.4** (gross **+$34.2**) |
+| 4★+ OBs (score≥6) | n=606, PF 0.86, net −$86.3 | n=717, PF 0.95, net −$55.5 |
+
+Honest nuance: 5★ on the unseen window B is gross-positive — the closest any
+ICT variant came to an edge, which matches the owner's visual impression on
+recent charts. But it dies after fees and window A is negative even gross.
+**Committee verdict stands: not shippable.**
+
+Why charts look better than the backtest: (1) survivorship/hindsight — the
+eye anchors on successful touches, forgets failed ones and repeat-touch
+failures; (2) chart arrows carry no fees/slippage; (3) ★ measures confluence
+at zone creation, not forward return; (4) historical drawings render in
+their final state (repaint subtlety).
+
+External review (کلیات SMC): SMC is largely a rebranding of Wyckoff-era
+supply/demand and stop-run observations; the *observations* are often real
+(liquidity clusters, imbalances refill, session timing), but no rigorous
+public study or audited record shows the framework itself carries an edge
+(LuxAlgo library; test-max 2026 review). Rule-based backtests of SMC entries
+report WR 50-65% / PF >1.5 only on selected markets (e.g. DXY forex) with
+defined rules and risk management — consistent with our finding: the raw
+signal engine is noise; only a fully-specified, cost-aware variant on the
+right market could work, and on 1h crypto it does not.
