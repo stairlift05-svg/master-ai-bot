@@ -179,6 +179,7 @@ def create_app(state: EngineState, db: Database, settings=None,
         snap["paper_mode"] = bool(getattr(settings, "paper_mode", False))
         snap["enabled_strategies"] = list(
             getattr(settings, "enabled_strategies", ()) or ())
+        snap["max_same_side"] = getattr(settings, "max_same_side", 0)
         return jsonify(snap)
 
     @app.route("/api/positions")

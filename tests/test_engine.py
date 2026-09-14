@@ -154,6 +154,28 @@ class TestRiskGates(unittest.TestCase):
             "", limits.would_exceed(set(), S.max_positions - 1,
                                     "SOLUSD", 100.0, 50.0))
 
+    def test_same_side_cap(self):
+        """v24 sprint 3: same-direction concentration cap."""
+        import dataclasses
+        off = PortfolioLimits(dataclasses.replace(S, max_same_side=0))
+        self.assertEqual("", off.would_exceed(
+            {"ETHUSD", "SOLUSD"}, 2, "XRPUSD", 100.0, 50.0,
+            side="sell", open_sides=("buy", "buy")))
+        on = PortfolioLimits(dataclasses.replace(S, max_same_side=2))
+        # two sells already open -> a third sell is blocked
+        self.assertIn("max same-side",
+                      on.would_exceed(
+                          {"ETHUSD", "SOLUSD"}, 2, "XRPUSD", 100.0, 50.0,
+                          side="sell", open_sides=("sell", "sell")))
+        # the opposite side is unaffected
+        self.assertEqual("", on.would_exceed(
+            {"ETHUSD", "SOLUSD"}, 2, "XRPUSD", 100.0, 50.0,
+            side="buy", open_sides=("sell", "sell")))
+        # below the cap is fine
+        self.assertEqual("", on.would_exceed(
+            {"ETHUSD"}, 1, "XRPUSD", 100.0, 50.0,
+            side="sell", open_sides=("sell",)))
+
     def test_adaptive_risk(self):
         state = EngineState()
         state.set("current_dd", 8.0)

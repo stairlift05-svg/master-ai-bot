@@ -88,6 +88,36 @@ SuperTrend — the popular choice — is firmly negative after costs.
 Also shipped: `analysis/live_reports/` — full live-performance archive
 (27 Telegram reports + the Persian review log), per the same owner directive.
 
+
+### Sprint 3 (2026-09-14) — portfolio risk control ✅ SHIPPED
+
+Chair decision (owner delegated): the same-direction exposure cap study —
+the direct lesson of the live incident — plus a Donchian parameter plateau
+check (artifact `analysis/runs/v24_sprint3.json`).
+
+**A) Same-side cap** (concurrent same-direction positions, Donchian, both
+windows; baseline peak same-side was 4):
+
+| Cap | A net | B net | Verdict |
+|---|---|---|---|
+| none | +160.79 | +125.66 | baseline |
+| 2 | +114.24 (−29%) | +78.39 (−38%) | veto — DD gain not worth the net loss |
+| 3 | +160.78 | +106.86 (−15%) | veto — B degraded |
+| **4** | **+163.87** | **+141.75** | **SHIP — improves BOTH windows** |
+
+Shipped: `MAX_SAME_SIDE=4` (config default + env knob, 0=off). It blocks a
+fully one-sided book — the exact Sep 8-14 pattern (6 correlated shorts into
+a bullish grind) — while leaving the trend-following cluster (≤4) intact.
+
+**B) Parameter plateau** (one-factor sweeps around the shipped centre):
+every neighbour holds the centre (entry_len 50 is +7%/+13% but below the
+>10%-both-windows ship bar, and raises A's DD — watch item, not a change).
+No parameter change shipped — the centre is a plateau, not a peak.
+
+Also: MAX_POS env default aligned with the class default (8; was an
+inconsistent 5 left over from v23.7). `/api/status` now exposes
+`max_same_side`. Tests 120/120.
+
 ## Backlog (priority order)
 
 1. **S2 — Walk-forward re-validation of Donchian parameters** (entry_len,
