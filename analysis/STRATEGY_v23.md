@@ -230,3 +230,22 @@ No strategy change made (two-window rule; htf_align already vetoed v23.2).
 Owner decisions requested: (a) fresh GitHub token, (b) ride vs pause vs
 rollback (Donchian env one-liner), (c) trim the 4 new symbols?, (d) Render
 paid upgrade vs 10-min ping.
+
+## v23.9.1 owner decision (2026-09-14 20:42 UTC) — ROLLBACK TO DONCHIAN_TREND
+
+Owner verdict (after reviewing the 24-trade live record, PF 0.36): the
+losses come from the strategy, not the sleep incident. Decision menu
+presented; owner selected **return to Donchian_Trend**.
+
+Executed per the standing rollback procedure: Render env
+`ENABLED_STRATEGIES=Donchian_Trend` + explicit deploy (`5aef37a`).
+Verified live: enabled_strategies=['Donchian_Trend'], health ok,
+2 positions recovered (TRX buy, BCH sell).
+
+Reference — Donchian_Trend v22 two-window validation (the strategy the
+bot returns to): **A +$70.55 (PF 1.41) / B +$70.64 (PF 1.30)**, vs Imba_Fib
+A +$32.17 / B −$5.23 (pre-tp4-fix). Honest flags:
+* Donchian's validation windows covered 5 symbols (BNB/BTC/DOGE/ETH/SOL);
+  the bot now scans 12. The 4 v23.7 additions (BCH/LTC/TRX) remain
+  unvalidated for Donchian too — trimming is a standing owner option.
+* Imba_Fib stays registered (one env var away, research mode).
