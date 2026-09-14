@@ -220,6 +220,14 @@ class _Ctx:
         self.volumes = [0.0] * len(closes)
         self.atr, self.rsi, self.ema200 = atr, rsi, ema200
         self.ema50 = ema200 or 0.0
+        self.ema20 = ema200 or 0.0
+        self.hh = max(highs) if highs else 0.0
+        self.ll = min(lows) if lows else 0.0
+        self.trend = "sideways"
+        self.strength = 0.0
+        self.mid = closes[-1] if closes else 0.0
+        self.bb_upper = self.mid
+        self.bb_lower = self.mid
 
 
 class _Htf:

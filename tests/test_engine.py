@@ -474,7 +474,7 @@ class TestV204Regressions(unittest.TestCase):
                 return {"retCode": 0, "result": {"list": rows}}
 
         cl = PagingClient()
-        candles = asyncio.run(cl.fetch_klines("ADAUSD", "1h", 220))
+        candles = asyncio.run(cl.fetch_klines("DOTUSD", "1h", 220))
         self.assertGreaterEqual(len(candles), 100)   # assembled via paging
         self.assertLessEqual(len(cl.calls), 4)
         ts = [c.ts for c in candles]

@@ -30,16 +30,19 @@ SYMBOL_MAP: Dict[str, str] = {
     "AVAXUSD": "AVAX/USDT",
     "DOTUSD": "DOT/USDT",
     "LINKUSD": "LINK/USDT",
-    "ADAUSD": "ADA/USDT",
     "DOGEUSD": "DOGE/USDT",
-    # v23.7 owner-directed capacity expansion (2026-09-02). BTC was part of
-    # both validation windows (analysis/data_1h & _oos); BCH/LTC/TRX are new
-    # (AriaX-listed majors, no dedicated backtest coverage). Remaining
-    # AriaX headroom if ever needed: AAVE, UNI, XLM.
+    # v24 sprint 1 (2026-09-14, specialist working group): symbol set is now
+    # evidence-based. Each scanned symbol was validated solo for Donchian_Trend
+    # on two independent 8-month halves of OKX 1h data
+    # (analysis/runs/v24_sprint1.json):
+    #   PASS  -> XRP, AVAX, DOT, LINK (positive on both halves)
+    #   MIXED -> BCH (H1 -6.9 / H2 +28.1 — kept, recent half strong)
+    #   FAIL  -> ADA (H2 -34.8), LTC (both halves negative) — REMOVED.
+    # TRX failed too (H2 -14.6, and its candle feed is broken) but a live
+    # position is open; it will be removed in the next change once flat.
     "BTCUSD": "BTC/USDT",
     "BCHUSD": "BCH/USDT",
-    "LTCUSD": "LTC/USDT",
-    "TRXUSD": "TRX/USDT",
+    "TRXUSD": "TRX/USDT",   # PENDING REMOVAL — see comment above
 }
 # AriaX symbol -> Bybit-style v5 symbol (ETHUSD -> ETHUSDT) for the public
 # /v5/market/kline endpoint served by the exchange itself.
