@@ -197,3 +197,36 @@ report WR 50-65% / PF >1.5 only on selected markets (e.g. DXY forex) with
 defined rules and risk management — consistent with our finding: the raw
 signal engine is noise; only a fully-specified, cost-aware variant on the
 right market could work, and on 1h crypto it does not.
+
+## v23.9 live performance review (2026-09-14) — 12 days of real trading
+
+Owner report: "عملکرد ربات کاملا ضرر ده". Committee analysis of 24 real
+closed trades (Sep 8-14 era) + 27 Telegram reports:
+
+| Metric | Live (24 trades) | Validated profile (B, tp4=6) |
+|---|---|---|
+| Net | **−$10.71** realized (−$19.8 balance incl. floating) | +$0.12/trade |
+| WR | **29.2%** (p=0.003 vs 59% — not chance) | 58.6% |
+| PF | **0.36** | 1.22 |
+| Avg loss/win | −$1.17 / +$0.79 | — |
+
+Dollar impact tiny (0.05% of balance) thanks to $80 notional caps, but the
+edge is negative in this regime. Three causes, ranked:
+
+1. **Service slept Sep 3-8 (free tier)** with live positions open and
+   engine-side stops offline — 5-day gap in Telegram reports; DB/stats wiped
+   on wake (token rotated). Positions survived by luck. Fixed in v23.9:
+   watchdog keep-alive ping every 10 min (pending: GitHub token expired,
+   push blocked).
+2. **Regime mismatch**: Sep 8-14 was a mild bullish grind (ETH +1.7%, XRP
+   +2.3%, BTC +0.1%, SOL −1.0%) while the book ran ~6 shorts; shorts stopped
+   out serially. The validated edge was earned shorting a bear leg.
+3. **Unvalidated symbols over-represented in losses**: BTC/BCH/TRX/LTC took
+   ~37% of trades but ~57% of losses (−$5.8 of −$10.1 identifiable).
+   TRX feed is dead inside the bot (1h cache = 2 candles) — open position
+   managed via tickers only.
+
+No strategy change made (two-window rule; htf_align already vetoed v23.2).
+Owner decisions requested: (a) fresh GitHub token, (b) ride vs pause vs
+rollback (Donchian env one-liner), (c) trim the 4 new symbols?, (d) Render
+paid upgrade vs 10-min ping.
