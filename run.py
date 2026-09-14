@@ -34,9 +34,9 @@ import logging
 log = logging.getLogger("quant.main")
 
 
-def run_web(settings: Settings, state: EngineState, db) -> None:
+def run_web(settings: Settings, state: EngineState, db, closer=None) -> None:
     """Run the Flask dashboard in a daemon thread."""
-    app = create_app(state, db, settings)
+    app = create_app(state, db, settings, closer=closer)
     log.info("Flask dashboard on 0.0.0.0:%d", settings.port)
     app.run(host="0.0.0.0", port=settings.port, debug=False,
             use_reloader=False, threaded=True)
@@ -44,9 +44,25 @@ def run_web(settings: Settings, state: EngineState, db) -> None:
 
 async def _amain(settings: Settings, state: EngineState) -> None:
     engine = QuantEngine(settings, state)
+    loop = asyncio.get_running_loop()
+
+    def _api_close(pid: str):
+        """Thread-safe bridge: Flask thread -> engine loop -> executor."""
+        pos = state.position(pid)
+        if pos is None:
+            return {"error": f"position {pid} not found"}, 404
+        fut = asyncio.run_coroutine_threadsafe(
+            engine.executor.close(pos, "Manual_API"), loop)
+        try:
+            res = fut.result(timeout=90)
+        except Exception as exc:  # noqa: BLE001
+            log.error("api close %s failed: %s", pid, exc)
+            return {"error": str(exc)}, 500
+        return {"closed": pid,
+                "detail": str(getattr(res, "reason", res) or "ok")}, 200
 
     web_thread = threading.Thread(
-        target=run_web, args=(settings, state, engine.db), daemon=True,
+        target=run_web, args=(settings, state, engine.db, _api_close), daemon=True,
         name="flask-dashboard",
     )
     web_thread.start()
