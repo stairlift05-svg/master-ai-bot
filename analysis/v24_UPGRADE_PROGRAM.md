@@ -57,6 +57,37 @@ final: 9 symbols), operator close endpoint POST /api/close/<pid> (PR #24,
 token-gated, engine-loop bridge; live-verified 404 path), tests 119/119,
 this charter.
 
+
+### Sprint 2 (2026-09-14) — strategy screening for addition ✅
+
+Owner directive: review other strategies that could be added. Ten candidates
+through the live-equivalent two-window harness (artifact
+`analysis/runs/v24_sprint2.json`; context builder mirrors the engine's
+_tf_context):
+
+| Candidate | A (net / PF) | B (net / PF) | Solo both? | Combo vs Donchian |
+|---|---|---|---|---|
+| TrendPullback_HTF | −336 / 0.89 | −209 / 0.95 | ✗ | — |
+| **HTF_Breakout** | +82 / 1.17 | +14 / 1.07 | ✓ (weak B) | **degrades B** (leg −44) |
+| MomentumRetrace_RSI | −153 / 0.82 | −79 / 0.96 | ✗ | — |
+| MeanReversion_BB | −71 / 0.37 | −14 / 0.97 | ✗ | — |
+| VolatilityExpansion | N/A (volume-gated; windows are price-only) | | — | — |
+| SwingPullback_1h | −301 / 0.93 | −347 / 0.92 | ✗ | — |
+| EmaCross_Trend | −69 / 0.93 | −32 / 1.02 | ✗ | — |
+| Imba_Fib tp4=6 (ref) | +104 / 1.25 | +54 / 1.13 | ✓ | live-rejected 2026-09-14 |
+| SuperTrend 3×ATR10 | −112 / 0.87 | −52 / 0.96 | ✗ | — |
+| **Keltner 2×ATR** | +106 / 1.14 | +84 / 1.13 | ✓ | substitutes, not complements |
+
+**Verdict: no addition.** Donchian_Trend (A +161 / PF 1.74, B +126 / PF 1.44)
+remains strictly best on both windows. The two solo-passers fail the
+combination test for opposite reasons: HTF_Breakout's overlapping entries
+actively degrade the unseen window; Keltner fires so often it crowd-outs the
+incumbent (combo ≡ Keltner solo, which is worse than Donchian solo).
+SuperTrend — the popular choice — is firmly negative after costs.
+
+Also shipped: `analysis/live_reports/` — full live-performance archive
+(27 Telegram reports + the Persian review log), per the same owner directive.
+
 ## Backlog (priority order)
 
 1. **S2 — Walk-forward re-validation of Donchian parameters** (entry_len,
