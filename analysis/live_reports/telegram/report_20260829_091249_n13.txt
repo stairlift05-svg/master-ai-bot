@@ -1,0 +1,64 @@
+==============================================================================
+     MASTER QUANT ENGINE v22  |  ARIAX TESTNET (PROFESSIONAL)
+     Generated: 2026-08-29 09:12:49 UTC
+==============================================================================
+
+┌─ 1. SUMMARY ───────────────────────────────────────────────────────────
+│  Total $39,855.47  Free $355.47
+│  Risk 0.4% (adaptive x1.0)  MaxNotional $80  Lev 5x
+│  DD 0.00%  Open 0/5
+│  Trades 0  WR 0.0%  PF 0.0  Exp $0.0000
+│  Net PnL $+0.00  MaxDD 0.00%  Sharpe 0.0
+│  Scan 09:12:38  Sync 09:12:49  LossStreak 0
+└────────────────────────────────────────────────────────────────────────
+
+┌─ 2. OPEN ──────────────────────────────────────────────────────────────
+│  (flat)
+└────────────────────────────────────────────────────────────────────────
+
+┌─ 3. DATA (candles: AriaX -> Bybit -> OKX -> Binance) ───────────────
+│  ETHUSD       1h 0/0  4h 618/0
+│  SOLUSD       1h 0/0  4h 618/0
+│  XRPUSD       1h 0/0  4h 618/0
+│  AVAXUSD      1h 0/0  4h 617/0
+│  DOTUSD       1h 0/0  4h 617/0
+│  LINKUSD      1h 0/0  4h 617/0
+│  ADAUSD       1h 0/0  4h 617/0
+│  DOGEUSD      1h 0/0  4h 617/0
+└────────────────────────────────────────────────────────────────────────
+
+┌─ 4. CLOSED ────────────────────────────────────────────────────────────
+│  (none)
+└────────────────────────────────────────────────────────────────────────
+
+┌─ 5. DECISIONS ─────────────────────────────────────────────────────────
+│  Total 200 | Sig 0 | Rej 200
+│      25 x no signal (4h RSI=41.8, 4h bullish)
+│      25 x no signal (4h RSI=56.6, 4h bullish)
+│      25 x no signal (4h RSI=44.1, 4h bullish)
+│      25 x no signal (4h RSI=39.2, 4h sideways)
+│      25 x no signal (4h RSI=35.8, 4h sideways)
+│      25 x no signal (4h RSI=43.4, 4h bullish)
+│      25 x no signal (4h RSI=38.3, 4h sideways)
+│      25 x no signal (4h RSI=43.3, 4h bullish)
+└────────────────────────────────────────────────────────────────────────
+
+┌─ 6. GAPS / ERRORS ─────────────────────────────────────────────────────
+│  (none)
+└────────────────────────────────────────────────────────────────────────
+
+┌─ 7. LATEST DECISIONS ──────────────────────────────────────────────────
+│  [REJ] 2026-08-29 09:12:46 XRPUSD       no signal (4h RSI=41.8, 4h bullish)
+│  [REJ] 2026-08-29 09:12:43 SOLUSD       no signal (4h RSI=56.6, 4h bullish)
+│  [REJ] 2026-08-29 09:12:39 ETHUSD       no signal (4h RSI=44.1, 4h bullish)
+│  [REJ] 2026-08-29 09:12:11 DOGEUSD      no signal (4h RSI=39.2, 4h sideways)
+│  [REJ] 2026-08-29 09:12:07 ADAUSD       no signal (4h RSI=35.8, 4h sideways)
+│  [REJ] 2026-08-29 09:11:59 LINKUSD      no signal (4h RSI=43.4, 4h bullish)
+│  [REJ] 2026-08-29 09:11:51 DOTUSD       no signal (4h RSI=38.3, 4h sideways)
+│  [REJ] 2026-08-29 09:11:44 AVAXUSD      no signal (4h RSI=43.3, 4h bullish)
+│  [REJ] 2026-08-29 09:11:36 XRPUSD       no signal (4h RSI=41.8, 4h bullish)
+│  [REJ] 2026-08-29 09:11:33 SOLUSD       no signal (4h RSI=56.6, 4h bullish)
+│  [REJ] 2026-08-29 09:11:29 ETHUSD       no signal (4h RSI=44.1, 4h bullish)
+│  [REJ] 2026-08-29 09:11:02 DOGEUSD      no signal (4h RSI=39.2, 4h sideways)
+└────────────────────────────────────────────────────────────────────────
+==============================================================================

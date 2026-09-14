@@ -1,0 +1,99 @@
+==============================================================================
+     IMBA ALGO ENGINE v23  |  ARIAX
+     Mode: LIVE ORDERS (real)  |  Generated: 2026-09-09 07:40:21 UTC
+==============================================================================
+
+┌─ 1. SUMMARY ───────────────────────────────────────────────────────────
+│  Total $39,851.05  Free $321.26
+│  Risk 0.4% (adaptive x0.6)  MaxNotional $80  Lev 5x
+│  DD 0.02%  Open 7/8
+│  Trades 15  WR 33.3%  PF 0.7  Exp $-0.1505
+│  Net PnL $-2.26  MaxDD 0.03%  Sharpe -4.67
+│  Scan 07:40:14  Sync 07:39:31  LossStreak 3
+└────────────────────────────────────────────────────────────────────────
+
+┌─ 2. OPEN ──────────────────────────────────────────────────────────────
+│  ETHUSD BUY Imba_Fib $-0.001 129.7h
+│  BTCUSD BUY Imba_Fib $-0.968 128.7h
+│  XRPUSD BUY Imba_Fib $-0.102 128.7h
+│  SOLUSD BUY Imba_Fib $-0.229 59.1h
+│  AVAXUSD BUY Imba_Fib $-0.025 42.4h
+│  BCHUSD BUY Imba_Fib $-0.252 38.4h
+│  TRXUSD BUY Imba_Fib $+0.166 24.6h
+└────────────────────────────────────────────────────────────────────────
+
+┌─ 3. DATA (candles: AriaX -> Bybit -> OKX -> Binance) ───────────────
+│  ETHUSD       1h 334/0  4h 668/0
+│  SOLUSD       1h 4986/0  4h 9972/0
+│  XRPUSD       1h 489/0  4h 978/0
+│  AVAXUSD      1h 3694/0  4h 7388/0
+│  DOTUSD       1h 3323/0  4h 6646/0
+│  LINKUSD      1h 3518/0  4h 7036/0
+│  ADAUSD       1h 4270/0  4h 8540/0
+│  DOGEUSD      1h 6933/0  4h 13866/0
+│  BTCUSD       1h 372/0  4h 744/0
+│  BCHUSD       1h 2/0  4h 4/0
+│  LTCUSD       1h 5781/0  4h 11562/0
+│  TRXUSD       1h 2/0  4h 4/0
+└────────────────────────────────────────────────────────────────────────
+
+┌─ 4. CLOSED ────────────────────────────────────────────────────────────
+│  [LOSS] ADAUSD       $-0.141  TrailStop
+│  [LOSS] TRXUSD       $-1.345  SL
+│  [LOSS] BCHUSD       $-1.343  SL
+│  [WIN] DOTUSD       $+0.582  TP
+│  [WIN] AVAXUSD      $+1.811  TP
+│  [WIN] LINKUSD      $+0.834  TP
+│  [WIN] DOTUSD       $+1.172  TP
+│  [WIN] LTCUSD       $+0.926  TP
+│  [LOSS] DOGEUSD      $-1.347  SL
+│  [LOSS] BTCUSD       $-1.508  SL
+└────────────────────────────────────────────────────────────────────────
+
+┌─ 5. DECISIONS ─────────────────────────────────────────────────────────
+│  Total 200 | Sig 40 | Rej 160
+│      40 x no signal (4h RSI=48.1, 4h bullish)
+│      40 x no signal (4h RSI=53.7, 4h bullish)
+│      40 x no signal (4h RSI=48.6, 4h bullish)
+│      40 x no signal (4h RSI=49.5, 4h bullish)
+└────────────────────────────────────────────────────────────────────────
+
+┌─ 6. GAPS / ERRORS ─────────────────────────────────────────────────────
+│  07:18:10 DOTUSD Imba_Fib -> notional $3.67 < min $8.00
+│  07:19:19 DOTUSD Imba_Fib -> notional $3.66 < min $8.00
+│  07:20:30 DOTUSD Imba_Fib -> notional $3.66 < min $8.00
+│  07:21:41 DOTUSD Imba_Fib -> notional $3.65 < min $8.00
+│  07:22:50 DOTUSD Imba_Fib -> notional $3.65 < min $8.00
+│  07:24:00 DOTUSD Imba_Fib -> notional $3.66 < min $8.00
+│  07:25:10 DOTUSD Imba_Fib -> notional $3.65 < min $8.00
+│  07:26:20 DOTUSD Imba_Fib -> notional $3.65 < min $8.00
+│  07:27:29 DOTUSD Imba_Fib -> notional $3.65 < min $8.00
+│  07:28:40 DOTUSD Imba_Fib -> notional $3.64 < min $8.00
+│  07:29:50 DOTUSD Imba_Fib -> notional $3.64 < min $8.00
+│  07:30:59 DOTUSD Imba_Fib -> notional $3.63 < min $8.00
+│  07:32:10 DOTUSD Imba_Fib -> notional $3.64 < min $8.00
+│  07:33:20 DOTUSD Imba_Fib -> notional $3.64 < min $8.00
+│  07:34:30 DOTUSD Imba_Fib -> notional $3.64 < min $8.00
+│  07:35:40 DOTUSD Imba_Fib -> notional $3.64 < min $8.00
+│  07:36:51 DOTUSD Imba_Fib -> notional $3.65 < min $8.00
+│  07:38:00 DOTUSD Imba_Fib -> notional $3.65 < min $8.00
+│  07:39:10 DOTUSD Imba_Fib -> notional $3.65 < min $8.00
+│  07:40:20 DOTUSD Imba_Fib -> notional $3.65 < min $8.00
+│  ERR 06:27:58 markets: AriaXAPIError(status=502): HTTP 502 on /api/markets | raw={'raw': '<!DOCTYPE html>\n<html lang="en">\n  <head>\
+└────────────────────────────────────────────────────────────────────────
+
+┌─ 7. LATEST DECISIONS ──────────────────────────────────────────────────
+│  [SIG] 2026-09-09 07:40:20 DOTUSD       IMBA: top band (>=fib236) + EMA200 up + 
+│  [REJ] 2026-09-09 07:39:36 LTCUSD       no signal (4h RSI=48.1, 4h bullish)
+│  [REJ] 2026-09-09 07:39:28 DOGEUSD      no signal (4h RSI=53.7, 4h bullish)
+│  [REJ] 2026-09-09 07:39:25 ADAUSD       no signal (4h RSI=48.6, 4h bullish)
+│  [REJ] 2026-09-09 07:39:18 LINKUSD      no signal (4h RSI=49.5, 4h bullish)
+│  [SIG] 2026-09-09 07:39:10 DOTUSD       IMBA: top band (>=fib236) + EMA200 up + 
+│  [REJ] 2026-09-09 07:38:28 LTCUSD       no signal (4h RSI=48.1, 4h bullish)
+│  [REJ] 2026-09-09 07:38:20 DOGEUSD      no signal (4h RSI=53.7, 4h bullish)
+│  [REJ] 2026-09-09 07:38:16 ADAUSD       no signal (4h RSI=48.6, 4h bullish)
+│  [REJ] 2026-09-09 07:38:08 LINKUSD      no signal (4h RSI=49.5, 4h bullish)
+│  [SIG] 2026-09-09 07:38:00 DOTUSD       IMBA: top band (>=fib236) + EMA200 up + 
+│  [REJ] 2026-09-09 07:37:18 LTCUSD       no signal (4h RSI=48.1, 4h bullish)
+└────────────────────────────────────────────────────────────────────────
+==============================================================================

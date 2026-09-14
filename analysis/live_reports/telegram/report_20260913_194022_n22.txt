@@ -1,0 +1,100 @@
+==============================================================================
+     IMBA ALGO ENGINE v23  |  ARIAX
+     Mode: LIVE ORDERS (real)  |  Generated: 2026-09-13 19:40:22 UTC
+==============================================================================
+
+┌─ 1. SUMMARY ───────────────────────────────────────────────────────────
+│  Total $39,842.35  Free $312.20
+│  Risk 0.4% (adaptive x1.0)  MaxNotional $80  Lev 5x
+│  DD 0.04%  Open 8/8
+│  Trades 22  WR 31.8%  PF 0.43  Exp $-0.3687
+│  Net PnL $-8.11  MaxDD 0.04%  Sharpe -6.27
+│  Scan 19:39:57  Sync 19:39:32  LossStreak 0
+└────────────────────────────────────────────────────────────────────────
+
+┌─ 2. OPEN ──────────────────────────────────────────────────────────────
+│  AVAXUSD BUY Imba_Fib $-1.107 150.4h
+│  TRXUSD BUY Imba_Fib $+0.383 132.6h
+│  DOGEUSD SELL Imba_Fib $-0.032 78.7h
+│  BTCUSD SELL Imba_Fib $+0.000 77.7h
+│  LINKUSD SELL Imba_Fib $+0.194 75.7h
+│  ADAUSD SELL Imba_Fib $+0.007 74.7h
+│  BCHUSD SELL Imba_Fib $+0.110 48.7h
+│  SOLUSD SELL Imba_Fib $-0.216 10.7h
+└────────────────────────────────────────────────────────────────────────
+
+┌─ 3. DATA (candles: AriaX -> Bybit -> OKX -> Binance) ───────────────
+│  ETHUSD       1h 2790/0  4h 5580/0
+│  SOLUSD       1h 7164/0  4h 14328/0
+│  XRPUSD       1h 4314/0  4h 8628/0
+│  AVAXUSD      1h 3694/0  4h 7388/0
+│  DOTUSD       1h 8877/0  4h 17754/0
+│  LINKUSD      1h 5182/0  4h 10364/0
+│  ADAUSD       1h 5985/0  4h 11970/0
+│  DOGEUSD      1h 8443/0  4h 16886/0
+│  BTCUSD       1h 397/0  4h 794/0
+│  BCHUSD       1h 1482/0  4h 2964/0
+│  LTCUSD       1h 11336/0  4h 22672/0
+│  TRXUSD       1h 2/0  4h 4/0
+└────────────────────────────────────────────────────────────────────────
+
+┌─ 4. CLOSED ────────────────────────────────────────────────────────────
+│  [WIN] ETHUSD       $+0.092  TrailStop
+│  [LOSS] SOLUSD       $-1.360  SL
+│  [LOSS] XRPUSD       $-0.766  SL
+│  [WIN] BCHUSD       $+0.667  TP
+│  [LOSS] SOLUSD       $-1.291  SL
+│  [LOSS] BTCUSD       $-1.857  SL
+│  [LOSS] BCHUSD       $-1.340  SL
+│  [LOSS] ADAUSD       $-0.141  TrailStop
+│  [LOSS] TRXUSD       $-1.345  SL
+│  [LOSS] BCHUSD       $-1.343  SL
+└────────────────────────────────────────────────────────────────────────
+
+┌─ 5. DECISIONS ─────────────────────────────────────────────────────────
+│  Total 200 | Sig 0 | Rej 200
+│     100 x no signal (4h RSI=39.8, 4h sideways)
+│      50 x no signal (4h RSI=59.8, 4h bullish)
+│      50 x no signal (4h RSI=48.0, 4h bullish)
+└────────────────────────────────────────────────────────────────────────
+
+┌─ 6. GAPS / ERRORS ─────────────────────────────────────────────────────
+│  16:36:52 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:38:01 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:39:11 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:40:21 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:41:31 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:42:41 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:43:51 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:45:02 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:46:11 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:47:21 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:48:31 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:49:41 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:50:52 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:52:01 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:53:11 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:54:21 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:55:31 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:56:42 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:57:52 XRPUSD Imba_Fib -> max positions 8 reached
+│  16:59:02 XRPUSD Imba_Fib -> max positions 8 reached
+│  ERR 06:27:58 markets: AriaXAPIError(status=502): HTTP 502 on /api/markets | raw={'raw': '<!DOCTYPE html>\n<html lang="en">\n  <head>\
+│  ERR 17:52:26 markets: AriaXAPIError(status=520): HTTP 520 on /api/markets | raw={'type': 'https://developers.cloudflare.com/support/t
+└────────────────────────────────────────────────────────────────────────
+
+┌─ 7. LATEST DECISIONS ──────────────────────────────────────────────────
+│  [REJ] 2026-09-13 19:40:17 LTCUSD       no signal (4h RSI=59.8, 4h bullish)
+│  [REJ] 2026-09-13 19:40:09 DOTUSD       no signal (4h RSI=39.8, 4h sideways)
+│  [REJ] 2026-09-13 19:40:01 XRPUSD       no signal (4h RSI=39.8, 4h sideways)
+│  [REJ] 2026-09-13 19:39:58 ETHUSD       no signal (4h RSI=48.0, 4h bullish)
+│  [REJ] 2026-09-13 19:39:07 LTCUSD       no signal (4h RSI=59.8, 4h bullish)
+│  [REJ] 2026-09-13 19:38:59 DOTUSD       no signal (4h RSI=39.8, 4h sideways)
+│  [REJ] 2026-09-13 19:38:52 XRPUSD       no signal (4h RSI=39.8, 4h sideways)
+│  [REJ] 2026-09-13 19:38:48 ETHUSD       no signal (4h RSI=48.0, 4h bullish)
+│  [REJ] 2026-09-13 19:37:58 LTCUSD       no signal (4h RSI=59.8, 4h bullish)
+│  [REJ] 2026-09-13 19:37:49 DOTUSD       no signal (4h RSI=39.8, 4h sideways)
+│  [REJ] 2026-09-13 19:37:42 XRPUSD       no signal (4h RSI=39.8, 4h sideways)
+│  [REJ] 2026-09-13 19:37:38 ETHUSD       no signal (4h RSI=48.0, 4h bullish)
+└────────────────────────────────────────────────────────────────────────
+==============================================================================
