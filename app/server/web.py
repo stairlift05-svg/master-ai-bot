@@ -116,8 +116,16 @@ refresh(); setInterval(refresh, 5000);
 """
 
 
-def create_app(state: EngineState, db: Database, settings=None) -> Flask:
-    """Flask application factory (settings optional, for the DASH_TOKEN gate)."""
+def create_app(state: EngineState, db: Database, settings=None,
+               closer=None) -> Flask:
+    """Flask application factory (settings optional, for the DASH_TOKEN gate).
+
+    ``closer`` (v24 sprint 1.5): optional thread-safe callable ``pid -> (dict,
+    status)`` that closes a live position through the ENGINE's event loop
+    (executor.close). Wired in run.py via asyncio.run_coroutine_threadsafe —
+    the executor's aiohttp session is bound to the engine loop, so a plain
+    asyncio.run() from the Flask thread would corrupt it.
+    """
     # The schema is created idempotently so the dashboard works even if the
     # engine is still starting up (or for standalone dashboard runs).
     try:
@@ -193,5 +201,18 @@ def create_app(state: EngineState, db: Database, settings=None) -> Flask:
             return jsonify({"decisions": rows})
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": str(exc)}), 500
+
+    @app.route("/api/close/<pid>", methods=["POST"])
+    def api_close(pid: str):
+        """Operator close (v24 sprint 1.5): same path as the Telegram button.
+
+        Token-gated like every other route. ``closer`` returns a
+        (payload, status) tuple; 404 for unknown pids, 501 when the engine
+        loop is not wired (standalone dashboard runs).
+        """
+        if closer is None:
+            return jsonify({"error": "closer not wired (standalone dashboard)"}), 501
+        payload, status = closer(pid)
+        return jsonify(payload), status
 
     return app
