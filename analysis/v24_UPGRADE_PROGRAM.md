@@ -39,7 +39,7 @@ live-equivalent engine; artifact `analysis/runs/v24_sprint1.json`):
 | BCH | −6.87 | +28.14 (PF 1.88) | MIXED | keep (recent half strong) |
 | ADA | +27.68 | **−34.83 (PF 0.31)** | FAIL | **removed** |
 | LTC | −1.60 | −1.97 | FAIL | **removed** |
-| TRX | +2.31 | **−14.60 (PF 0.24)** | FAIL | remove once the open position closes |
+| TRX | +2.31 | **−14.60 (PF 0.24)** | FAIL | removed (owner closed the last position 21:10 UTC, +$0.14) |
 
 Core-5 reference on the same harness (existing windows): **A +160.8 (PF 1.74)
 / B +125.7 (PF 1.44)** — the live strategy's edge is intact on validated
@@ -52,8 +52,10 @@ Modest for Donchian's low frequency — parked in the backlog until the AriaX
 maker fee schedule is confirmed (if maker is actually 0%, the case grows to
 +$4.4/+$17).
 
-**Shipped this sprint:** SYMBOL_MAP evidence-based trim (−ADA, −LTC; TRX
-pending flat), tests 115/115, this charter.
+**Shipped this sprint:** SYMBOL_MAP evidence-based trim (−ADA, −LTC, −TRX —
+final: 9 symbols), operator close endpoint POST /api/close/<pid> (PR #24,
+token-gated, engine-loop bridge; live-verified 404 path), tests 119/119,
+this charter.
 
 ## Backlog (priority order)
 
