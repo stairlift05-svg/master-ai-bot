@@ -37,12 +37,11 @@ SYMBOL_MAP: Dict[str, str] = {
     # (analysis/runs/v24_sprint1.json):
     #   PASS  -> XRP, AVAX, DOT, LINK (positive on both halves)
     #   MIXED -> BCH (H1 -6.9 / H2 +28.1 — kept, recent half strong)
-    #   FAIL  -> ADA (H2 -34.8), LTC (both halves negative) — REMOVED.
-    # TRX failed too (H2 -14.6, and its candle feed is broken) but a live
-    # position is open; it will be removed in the next change once flat.
+    #   FAIL  -> ADA (H2 -34.8), LTC (both halves negative) — removed.
+    #   FAIL  -> TRX (H2 -14.6, dead candle feed) — removed 2026-09-14 after
+    #            the owner closed the last live TRX position from Telegram.
     "BTCUSD": "BTC/USDT",
     "BCHUSD": "BCH/USDT",
-    "TRXUSD": "TRX/USDT",   # PENDING REMOVAL — see comment above
 }
 # AriaX symbol -> Bybit-style v5 symbol (ETHUSD -> ETHUSDT) for the public
 # /v5/market/kline endpoint served by the exchange itself.
