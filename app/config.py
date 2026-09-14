@@ -170,6 +170,14 @@ class Settings:
     # v23.7: 8 concurrent slots for 12 symbols (owner-directed capacity
     # expansion). Aggregate notional headroom grows to 8 x $80 = $640.
     max_positions: int = 8
+    # v24 sprint 3 (2026-09-14): cap concurrent SAME-DIRECTION positions.
+    # Evidence (analysis/runs/v24_sprint3.json): with the 5-symbol validated
+    # windows the book never exceeded 4 same-side, and a cap of 4 improved
+    # BOTH windows (A +160.79 -> +163.87, B +125.66 -> +141.75) while
+    # blocking a fully one-sided book — the exact pattern of the Sep 8-14
+    # live incident (6 correlated shorts into a bullish grind). Tighter
+    # caps (2/3) were vetoed: they cut 15-38% of net. 0 disables.
+    max_same_side: int = 4
     max_dd_pct: float = 10.0
     max_daily_loss_pct: float = 5.0
     risk_pct: float = 0.40
@@ -365,7 +373,8 @@ class Settings:
                 },
             },
             leverage=_env_int("LEVERAGE", 5, 1, 100),
-            max_positions=_env_int("MAX_POS", 5, 1, 50),
+            max_positions=_env_int("MAX_POS", 8, 1, 50),
+            max_same_side=_env_int("MAX_SAME_SIDE", 4, 0, 50),
             max_dd_pct=_env_float("MAX_DD", 10.0, 0.5, 100),
             max_daily_loss_pct=_env_float("MAX_DAILY_LOSS", 5.0, 0.5, 100),
             risk_pct=_env_float("RISK_PCT", 0.40, 0.01, 10),

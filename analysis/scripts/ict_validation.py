@@ -76,12 +76,13 @@ class SimPos:
     trailed: bool = False
 
 
-def _walk(bars, signals_by_bar, label):
+def _walk(bars, signals_by_bar, label, max_same_side: int = 0):
     balance = START_BALANCE
     positions = {}
     closed = []
     # global timeline: map ts -> symbol bars
     timelines = {s: {b[0]: k for k, b in enumerate(series)} for s, series in bars.items()}
+    peak_same = 0
     all_ts = sorted({b[0] for series in bars.values() for b in series})
     for ts in all_ts:
         # ---- exits first ----
@@ -141,6 +142,13 @@ def _walk(bars, signals_by_bar, label):
             sig = sigs.get(k)
             if sig is None or k + 1 >= len(bars[sym]):
                 continue
+            if max_same_side:
+                same = sum(1 for p in positions.values() if p.side == sig.side)
+                if same >= max_same_side:
+                    continue
+            for p in positions.values():
+                same_n = sum(1 for q in positions.values() if q.side == p.side)
+                peak_same = max(peak_same, same_n)
             nxt = bars[sym][k + 1]
             fill = nxt[1] * ((1 + SLIP) if sig.side == "buy" else (1 - SLIP))
             sl_d = abs(sig.entry - sig.sl)
@@ -169,6 +177,9 @@ def _walk(bars, signals_by_bar, label):
             # fee only from now on; store fee_paid marker via strategy name
             positions[sym].highest_pnl_pct = 0.0
             positions[sym].trailed = False
+    for p in positions.values():
+        same_n = sum(1 for q in positions.values() if q.side == p.side)
+        peak_same = max(peak_same, same_n)
     # close remainder at last close
     for sym, p in positions.items():
         series = bars[sym]
@@ -180,7 +191,9 @@ def _walk(bars, signals_by_bar, label):
         closed.append(dict(sym=sym, side=p.side, strat=p.strategy,
                            entry=p.entry, exit=c, qty=p.qty, net=net,
                            reason="EndOfTest", ts=series[-1][0]))
-    return summarize(closed, balance, label)
+    r = summarize(closed, balance, label)
+    r['peak_same_side'] = peak_same
+    return r
 
 
 def summarize(closed, balance, label):

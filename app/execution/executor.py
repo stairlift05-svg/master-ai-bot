@@ -182,6 +182,8 @@ class OrderExecutor:
             {p.symbol for p in open_positions.values()}, len(open_positions),
             symbol, price, size.notional,
             open_notional=open_notional,
+            side=signal.side,
+            open_sides=tuple(p.side for p in open_positions.values()),
         )
         if cap_err:
             self._state.record_missed_signal(f"{symbol} {signal.strategy} -> {cap_err}")

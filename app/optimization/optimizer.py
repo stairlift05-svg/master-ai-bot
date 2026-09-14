@@ -70,7 +70,9 @@ class PortfolioLimits:
 
     def would_exceed(self, open_symbols: set, open_count: int, symbol: str,
                      price: float, proposed_notional: float,
-                     open_notional: float = 0.0) -> str:
+                     open_notional: float = 0.0,
+                     side: str = "",
+                     open_sides: tuple = ()) -> str:
         """Return an error string if the proposed trade breaks a cap.
 
         Args:
@@ -87,6 +89,14 @@ class PortfolioLimits:
             return f"symbol {symbol} already open"
         if open_count >= s.max_positions:
             return f"max positions {s.max_positions} reached"
+        # v24 sprint 3: same-direction concentration cap. Blocks a fully
+        # one-sided book (live incident 2026-09-08..14: six correlated
+        # shorts into a bullish grind). 0 = disabled.
+        if s.max_same_side and side and open_sides:
+            same = sum(1 for x in open_sides if x == side)
+            if same >= s.max_same_side:
+                return (f"max same-side {s.max_same_side} reached "
+                        f"({same} {side} open)")
         agg = open_notional + proposed_notional
         if agg > s.max_agg_notional_usd:
             return (f"aggregate notional ${agg:.2f} exceeds "
