@@ -1,8 +1,14 @@
-name: Watchdog (6h)
+name: Watchdog (10min keep-alive)
 
 on:
   schedule:
-    - cron: "0 */6 * * *"   # UTC — every 6 hours
+    # UTC — every 10 minutes. v23.9: the free-tier service slept for ~5 days
+    # (Sep 3-8 2026) with LIVE positions open and no local SL management
+    # (engine-side stops only run while the process is up). A ping every
+    # 10 min keeps the instance inside Render's 15-min idle window, so the
+    # bot — and its stop-losses — stay alive 24/7. Run cost ~20s each,
+    # ~1,400 Actions minutes/month, inside the 2,000 free private-repo quota.
+    - cron: "*/10 * * * *"
   workflow_dispatch:
 
 permissions:
