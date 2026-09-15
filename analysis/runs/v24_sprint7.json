@@ -1,0 +1,700 @@
+{
+ "candidates": {
+  "D": "Donchian_Trend",
+  "I": "Imba_Fib_tp4_6",
+  "T": "Turtle_1ATR",
+  "C": "Chandelier_4ATR",
+  "S": "Squeeze_rng125"
+ },
+ "cap": 4,
+ "reconstruction_notes": {
+  "T": "exact vs sprint-6 record (A 664/43.2/1.08/26.5, B 740/44.9/1.14/53.49)",
+  "C": "literal el=50 am=4 tp=30; fresh dual-positive, differs from lost round-2 exits",
+  "S": "confirm rule lost; rng>=1.25xATR representative, fresh dual-positive"
+ },
+ "solo_cap4": {
+  "D": {
+   "A": {
+    "n": 172,
+    "wr": 39.0,
+    "pf": 1.78,
+    "net": 163.56,
+    "max_dd": 16.46,
+    "peak_same_side": 3
+   },
+   "B": {
+    "n": 222,
+    "wr": 27.0,
+    "pf": 1.54,
+    "net": 143.06,
+    "max_dd": 14.69,
+    "peak_same_side": 3
+   }
+  },
+  "I": {
+   "A": {
+    "n": 372,
+    "wr": 62.6,
+    "pf": 1.12,
+    "net": 44.22,
+    "max_dd": 5.37,
+    "peak_same_side": 4
+   },
+   "B": {
+    "n": 393,
+    "wr": 58.8,
+    "pf": 1.1,
+    "net": 38.64,
+    "max_dd": 8.65,
+    "peak_same_side": 4
+   }
+  },
+  "T": {
+   "A": {
+    "n": 643,
+    "wr": 42.8,
+    "pf": 1.06,
+    "net": 12.07,
+    "max_dd": 5.36,
+    "peak_same_side": 3
+   },
+   "B": {
+    "n": 702,
+    "wr": 45.0,
+    "pf": 1.15,
+    "net": 54.33,
+    "max_dd": 7.38,
+    "peak_same_side": 3
+   }
+  },
+  "C": {
+   "A": {
+    "n": 384,
+    "wr": 36.7,
+    "pf": 1.16,
+    "net": 92.63,
+    "max_dd": 12.75,
+    "peak_same_side": 4
+   },
+   "B": {
+    "n": 404,
+    "wr": 34.7,
+    "pf": 1.18,
+    "net": 98.3,
+    "max_dd": 13.08,
+    "peak_same_side": 4
+   }
+  },
+  "S": {
+   "A": {
+    "n": 271,
+    "wr": 26.2,
+    "pf": 1.07,
+    "net": 13.09,
+    "max_dd": 7.93,
+    "peak_same_side": 4
+   },
+   "B": {
+    "n": 327,
+    "wr": 26.0,
+    "pf": 1.08,
+    "net": 12.92,
+    "max_dd": 4.86,
+    "peak_same_side": 3
+   }
+  }
+ },
+ "baseline_uncapped": {
+  "A": {
+   "n": 177,
+   "wr": 38.4,
+   "pf": 1.74,
+   "net": 160.47,
+   "max_dd": 16.53,
+   "peak_same_side": 4
+  },
+  "B": {
+   "n": 232,
+   "wr": 26.7,
+   "pf": 1.45,
+   "net": 126.97,
+   "max_dd": 13.47,
+   "peak_same_side": 4
+  }
+ },
+ "pairs": {
+  "D+I": {
+   "archB_waterfall": {
+    "A": {
+     "n": 402,
+     "wr": 57.5,
+     "pf": 1.17,
+     "net": 81.18,
+     "max_dd": 10.39,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 407,
+     "wr": 50.9,
+     "pf": 1.15,
+     "net": 74.94,
+     "max_dd": 8.81,
+     "peak_same_side": 4
+    },
+    "beats_both": false
+   },
+   "archA_indep_books": {
+    "A": {
+     "n": 440,
+     "wr": 54.1,
+     "pf": 1.14,
+     "net": 68.3,
+     "max_dd": 10.21,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 462,
+     "wr": 47.2,
+     "pf": 1.17,
+     "net": 89.44,
+     "max_dd": 11.49,
+     "peak_same_side": 4
+    },
+    "beats_both": false
+   }
+  },
+  "D+T": {
+   "archB_waterfall": {
+    "A": {
+     "n": 530,
+     "wr": 37.7,
+     "pf": 1.12,
+     "net": 49.38,
+     "max_dd": 6.44,
+     "peak_same_side": 3
+    },
+    "B": {
+     "n": 577,
+     "wr": 36.6,
+     "pf": 1.26,
+     "net": 122.32,
+     "max_dd": 13.36,
+     "peak_same_side": 3
+    },
+    "beats_both": false
+   },
+   "archA_indep_books": {
+    "A": {
+     "n": 629,
+     "wr": 39.4,
+     "pf": 1.2,
+     "net": 116.67,
+     "max_dd": 11.91,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 685,
+     "wr": 38.5,
+     "pf": 1.22,
+     "net": 110.33,
+     "max_dd": 11.66,
+     "peak_same_side": 4
+    },
+    "beats_both": false
+   }
+  },
+  "D+C": {
+   "archB_waterfall": {
+    "A": {
+     "n": 396,
+     "wr": 36.1,
+     "pf": 1.16,
+     "net": 94.73,
+     "max_dd": 12.57,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 413,
+     "wr": 33.9,
+     "pf": 1.18,
+     "net": 97.33,
+     "max_dd": 12.96,
+     "peak_same_side": 4
+    },
+    "beats_both": false
+   },
+   "archA_indep_books": {
+    "A": {
+     "n": 418,
+     "wr": 37.6,
+     "pf": 1.23,
+     "net": 145.77,
+     "max_dd": 16.72,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 456,
+     "wr": 33.1,
+     "pf": 1.21,
+     "net": 125.71,
+     "max_dd": 16.19,
+     "peak_same_side": 4
+    },
+    "beats_both": false
+   }
+  },
+  "D+S": {
+   "archB_waterfall": {
+    "A": {
+     "n": 365,
+     "wr": 28.5,
+     "pf": 1.19,
+     "net": 83.23,
+     "max_dd": 15.8,
+     "peak_same_side": 3
+    },
+    "B": {
+     "n": 439,
+     "wr": 27.1,
+     "pf": 1.31,
+     "net": 139.08,
+     "max_dd": 15.61,
+     "peak_same_side": 3
+    },
+    "beats_both": false
+   },
+   "archA_indep_books": {
+    "A": {
+     "n": 397,
+     "wr": 29.7,
+     "pf": 1.22,
+     "net": 107.92,
+     "max_dd": 15.67,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 463,
+     "wr": 26.8,
+     "pf": 1.26,
+     "net": 116.97,
+     "max_dd": 14.19,
+     "peak_same_side": 4
+    },
+    "beats_both": false
+   }
+  },
+  "I+T": {
+   "archB_waterfall": {
+    "A": {
+     "n": 525,
+     "wr": 55.2,
+     "pf": 1.1,
+     "net": 52.55,
+     "max_dd": 7.28,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 548,
+     "wr": 53.6,
+     "pf": 1.17,
+     "net": 86.94,
+     "max_dd": 9.07,
+     "peak_same_side": 4
+    },
+    "beats_both": false
+   },
+   "archA_indep_books": {
+    "A": {
+     "n": 737,
+     "wr": 52.1,
+     "pf": 1.1,
+     "net": 57.65,
+     "max_dd": 5.54,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 723,
+     "wr": 51.0,
+     "pf": 1.14,
+     "net": 77.31,
+     "max_dd": 8.54,
+     "peak_same_side": 4
+    },
+    "beats_both": false
+   }
+  },
+  "I+C": {
+   "archB_waterfall": {
+    "A": {
+     "n": 432,
+     "wr": 50.0,
+     "pf": 1.16,
+     "net": 91.9,
+     "max_dd": 11.22,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 432,
+     "wr": 41.9,
+     "pf": 1.11,
+     "net": 64.06,
+     "max_dd": 11.45,
+     "peak_same_side": 4
+    },
+    "beats_both": false
+   },
+   "archA_indep_books": {
+    "A": {
+     "n": 497,
+     "wr": 49.3,
+     "pf": 1.14,
+     "net": 91.2,
+     "max_dd": 10.62,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 505,
+     "wr": 43.0,
+     "pf": 1.14,
+     "net": 91.27,
+     "max_dd": 11.77,
+     "peak_same_side": 4
+    },
+    "beats_both": false
+   }
+  },
+  "I+S": {
+   "archB_waterfall": {
+    "A": {
+     "n": 389,
+     "wr": 60.9,
+     "pf": 1.08,
+     "net": 25.59,
+     "max_dd": 3.45,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 401,
+     "wr": 57.4,
+     "pf": 1.2,
+     "net": 84.14,
+     "max_dd": 7.91,
+     "peak_same_side": 4
+    },
+    "beats_both": false
+   },
+   "archA_indep_books": {
+    "A": {
+     "n": 484,
+     "wr": 53.1,
+     "pf": 1.1,
+     "net": 45.54,
+     "max_dd": 6.03,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 501,
+     "wr": 47.7,
+     "pf": 1.02,
+     "net": -3.5,
+     "max_dd": 9.27,
+     "peak_same_side": 4
+    },
+    "beats_both": false
+   }
+  },
+  "T+C": {
+   "archB_waterfall": {
+    "A": {
+     "n": 587,
+     "wr": 36.5,
+     "pf": 1.11,
+     "net": 79.74,
+     "max_dd": 9.18,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 615,
+     "wr": 39.2,
+     "pf": 1.08,
+     "net": 35.57,
+     "max_dd": 10.25,
+     "peak_same_side": 4
+    },
+    "beats_both": false
+   },
+   "archA_indep_books": {
+    "A": {
+     "n": 727,
+     "wr": 37.8,
+     "pf": 1.07,
+     "net": 34.72,
+     "max_dd": 8.07,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 773,
+     "wr": 38.8,
+     "pf": 1.07,
+     "net": 27.55,
+     "max_dd": 9.7,
+     "peak_same_side": 4
+    },
+    "beats_both": false
+   }
+  },
+  "T+S": {
+   "archB_waterfall": {
+    "A": {
+     "n": 709,
+     "wr": 36.7,
+     "pf": 1.06,
+     "net": 18.47,
+     "max_dd": 7.24,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 786,
+     "wr": 38.5,
+     "pf": 1.13,
+     "net": 56.12,
+     "max_dd": 9.5,
+     "peak_same_side": 4
+    },
+    "beats_both": false
+   },
+   "archA_indep_books": {
+    "A": {
+     "n": 799,
+     "wr": 37.2,
+     "pf": 1.06,
+     "net": 19.82,
+     "max_dd": 8.53,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 877,
+     "wr": 38.1,
+     "pf": 1.07,
+     "net": 10.37,
+     "max_dd": 6.87,
+     "peak_same_side": 4
+    },
+    "beats_both": false
+   }
+  },
+  "C+S": {
+   "archB_waterfall": {
+    "A": {
+     "n": 434,
+     "wr": 34.8,
+     "pf": 1.12,
+     "net": 69.67,
+     "max_dd": 10.87,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 459,
+     "wr": 34.4,
+     "pf": 1.19,
+     "net": 107.87,
+     "max_dd": 14.44,
+     "peak_same_side": 4
+    },
+    "beats_both": false
+   },
+   "archA_indep_books": {
+    "A": {
+     "n": 489,
+     "wr": 32.7,
+     "pf": 1.07,
+     "net": 39.34,
+     "max_dd": 9.14,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 539,
+     "wr": 31.9,
+     "pf": 1.15,
+     "net": 92.5,
+     "max_dd": 13.64,
+     "peak_same_side": 4
+    },
+    "beats_both": false
+   }
+  }
+ },
+ "decomposition_partner_vs_D": {
+  "I": {
+   "A": {
+    "same-bar": {
+     "n": 1,
+     "net": 3.11
+    },
+    "d-held": {
+     "n": 83,
+     "net": 3.14
+    },
+    "free": {
+     "n": 224,
+     "net": 1.26
+    }
+   },
+   "B": {
+    "same-bar": {
+     "n": 0,
+     "net": 0.0
+    },
+    "d-held": {
+     "n": 79,
+     "net": 42.77
+    },
+    "free": {
+     "n": 252,
+     "net": -65.99
+    }
+   }
+  },
+  "T": {
+   "A": {
+    "same-bar": {
+     "n": 119,
+     "net": 48.25
+    },
+    "d-held": {
+     "n": 41,
+     "net": 0.19
+    },
+    "free": {
+     "n": 300,
+     "net": -71.09
+    }
+   },
+   "B": {
+    "same-bar": {
+     "n": 114,
+     "net": 16.69
+    },
+    "d-held": {
+     "n": 47,
+     "net": 28.15
+    },
+    "free": {
+     "n": 313,
+     "net": -9.89
+    }
+   }
+  },
+  "C": {
+   "A": {
+    "same-bar": {
+     "n": 25,
+     "net": -0.66
+    },
+    "d-held": {
+     "n": 28,
+     "net": -1.13
+    },
+    "free": {
+     "n": 276,
+     "net": 128.75
+    }
+   },
+   "B": {
+    "same-bar": {
+     "n": 22,
+     "net": 0.54
+    },
+    "d-held": {
+     "n": 28,
+     "net": 79.87
+    },
+    "free": {
+     "n": 298,
+     "net": -22.28
+    }
+   }
+  },
+  "S": {
+   "A": {
+    "same-bar": {
+     "n": 0,
+     "net": 0.0
+    },
+    "d-held": {
+     "n": 16,
+     "net": -4.02
+    },
+    "free": {
+     "n": 229,
+     "net": -31.75
+    }
+   },
+   "B": {
+    "same-bar": {
+     "n": 1,
+     "net": -0.64
+    },
+    "d-held": {
+     "n": 24,
+     "net": 8.41
+    },
+    "free": {
+     "n": 267,
+     "net": 21.3
+    }
+   }
+  }
+ },
+ "flip_priority_waterfall": {
+  "note": "partner gets priority in the ARCH-B waterfall (closes the ordering gap)",
+  "I": {
+   "A": 81.67,
+   "B": 78.32,
+   "beats_both": false
+  },
+  "T": {
+   "A": 12.07,
+   "B": 54.33,
+   "beats_both": false,
+   "note": "Turtle fires so often it starves Donchian entirely; result == Turtle solo"
+  },
+  "C": {
+   "A": 91.73,
+   "B": 89.24,
+   "beats_both": false
+  },
+  "S": {
+   "A": 83.23,
+   "B": 139.08,
+   "beats_both": false
+  }
+ },
+ "engine_equivalence_check": "walk_indep(single strategy) == _walk cap4 exactly (A 163.56 / B 143.06)",
+ "verdict": {
+  "question": "owner 2026-09-15: run previous/new strategies INDEPENDENTLY (alone or with one partner) instead of fusing all signals",
+  "candidates_dual_positive_solo": [
+   "Donchian_Trend",
+   "Imba_Fib tp4=6",
+   "Turtle+1ATR",
+   "Chandelier 4xATR",
+   "Squeeze rng1.25 rep"
+  ],
+  "configurations_tested": "10 pairs x 2 architectures (waterfall, indep-books) + 4 flipped-priority waterfalls = 24",
+  "baseline": {
+   "A": 163.56,
+   "B": 143.06,
+   "note": "Donchian solo, cap=4 live config"
+  },
+  "result": "0 of 24 portfolio configurations beat Donchian solo on BOTH windows; every pair degrades at least one window",
+  "mechanism": "partner profitable trades coincide with Donchian already holding the symbol (same-bar / d-held); partners' genuinely independent ('free') trades are net-negative or window-inconsistent",
+  "decomposition_key_numbers": {
+   "Imba_free_trades": "A +1.26 (n=224) / B -65.99 (n=252) \u2014 Imba's edge IS Donchian-held periods",
+   "Turtle_free_trades": "A -71.09 / B -9.89",
+   "Chandelier_free_trades": "A +128.75 / B -22.28 (window-inconsistent)",
+   "Squeeze_free_trades": "A -31.75 / B +21.30 (window-inconsistent)"
+  },
+  "decision": "NO second strategy activated. Single-strategy Donchian_Trend stays. Bench (Turtle/Chandelier/Squeeze) stays research-only. Independent operation is now a TESTED dead end, not an assumption.",
+  "reopening_condition": "a strategy whose 'free' trades (no Donchian position on the symbol) are net-positive on BOTH windows \u2014 none of the 4 dual-positive candidates qualifies; requires a genuinely different edge/data source"
+ }
+}

@@ -215,6 +215,68 @@ bench** — ranked fallbacks (1. Turtle+1ATR, 2. Chandelier-4ATR,
 Portfolio-diversifying edges (cross-sectional momentum, carry/funding,
 volume-based) need data we do not carry — documented as reopening paths.
 
+
+### Sprint 7 (2026-09-15) — the independent-portfolio review: 24 configurations, 0 shipped
+
+Owner directive: "run the previous and new strategies independently — any
+that is profitable alone or alongside ONE other should trade on its own, not
+everything fused into one signal." Two independent-operation architectures,
+both live-faithful (shared balance, sizing, fees, engine exits, cap=4):
+
+- **ARCH-B waterfall** — one position per symbol, strategies tried in
+  priority order (what the live engine does today with two ENABLED_STRATEGIES).
+- **ARCH-A independent books** — one position per (strategy, symbol); two
+  strategies may hold the same symbol simultaneously; global same-side
+  cap shared. The owner's literal proposal. New harness `walk_indep`,
+  engine-equivalence-verified against `_walk` (single strategy reproduces
+  A +163.56 / B +143.06 exactly).
+
+Candidates = every strategy with a dual-window solo pass on record:
+Donchian_Trend (incumbent), Imba_Fib tp4=6 (A +44.2 / B +38.6 under cap —
+the only other repo strategy ever dual-positive), and the sprint-6 bench:
+Turtle+1ATR (exact reconstruction, bit-for-bit vs record), Chandelier-4ATR
+(literal el=50/am=4/tp=30, fresh A +92.6 / B +98.3), Squeeze rng≥1.25×ATR
+(representative; the exact round-2 confirm rule was lost with /tmp —
+caveated). Vetoed-on-record and NOT re-run: EmaCross_Trend, six legacy
+families, all SMC variants.
+
+| Pair | ARCH-B A / B | ARCH-A A / B | beats both? |
+|---|---|---|---|
+| D+I Imba_Fib | 81.2 / 74.9 | 68.3 / 89.4 | ✗ ✗ |
+| D+T Turtle | 49.4 / 122.3 | 116.7 / 110.3 | ✗ ✗ |
+| D+C Chandelier | 94.7 / 97.3 | 145.8 / 125.7 | ✗ ✗ |
+| D+S Squeeze | 83.2 / 139.1 | 107.9 / 117.0 | ✗ ✗ |
+| I+T / I+C / I+S | all ✗ | all ✗ | ✗ |
+| T+C / T+S / C+S | all ✗ | all ✗ | ✗ |
+
+Plus 4 flipped-priority waterfalls (partner first): all ✗ — Turtle-priority
+starves Donchian completely (result = Turtle solo). **0 of 24 portfolio
+configurations beat Donchian solo (A +163.56 / B +143.06) on both windows.**
+
+**The mechanism (decomposition of partner trades vs Donchian activity):**
+every partner's profitable trades are the ones where Donchian is ALREADY
+holding the symbol (same-bar or d-held). The partners' genuinely independent
+("free") trades — no Donchian position on that symbol — are net-negative or
+window-inconsistent:
+
+| Partner "free" trades | Window A | Window B |
+|---|---|---|
+| Imba_Fib | +1.26 (n=224) | **−65.99 (n=252)** |
+| Turtle+1ATR | −71.09 | −9.89 |
+| Chandelier-4ATR | +128.75 | −22.28 |
+| Squeeze rep | −31.75 | +21.30 |
+
+Even Imba_Fib — a different edge family (fib pullback, not breakout) — earns
+its B-window profit inside Donchian-held periods (+42.77 d-held) and loses
+−$66 on its independent trades. There is one edge in this data; the other
+strategies are slow mirrors of it.
+
+**Decision:** no second strategy activated. Single-strategy Donchian_Trend
+stays. Independent/portfolio operation is now a **tested** dead end, not an
+assumption — reopening requires a strategy whose free trades are net-positive
+on BOTH windows (i.e., a genuinely different edge or data source: volume,
+funding, cross-sectional). Artifact: `analysis/runs/v24_sprint7.json`.
+
 ## Backlog (priority order)
 
 1. **S2 — Walk-forward re-validation of Donchian parameters** (entry_len,
