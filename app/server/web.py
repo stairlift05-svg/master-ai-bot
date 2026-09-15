@@ -116,7 +116,7 @@ refresh(); setInterval(refresh, 5000);
 """
 
 
-def create_app(state: EngineState, db: Database, settings=None,
+def create_app(state: EngineState, db: Database, settings=None, funding=None,
                closer=None) -> Flask:
     """Flask application factory (settings optional, for the DASH_TOKEN gate).
 
@@ -180,6 +180,8 @@ def create_app(state: EngineState, db: Database, settings=None,
         snap["enabled_strategies"] = list(
             getattr(settings, "enabled_strategies", ()) or ())
         snap["max_same_side"] = getattr(settings, "max_same_side", 0)
+        # v24 sprint 8: live funding rates feeding the Donchian crowding gate.
+        snap["funding_rates"] = funding.snapshot() if funding is not None else {}
         return jsonify(snap)
 
     @app.route("/api/positions")

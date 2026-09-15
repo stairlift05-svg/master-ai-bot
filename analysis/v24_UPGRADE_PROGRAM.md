@@ -277,6 +277,61 @@ assumption — reopening requires a strategy whose free trades are net-positive
 on BOTH windows (i.e., a genuinely different edge or data source: volume,
 funding, cross-sectional). Artifact: `analysis/runs/v24_sprint7.json`.
 
+
+### Sprint 8 (2026-09-15) — the reopening path executed: NEW DATA (volume + funding) ✅ 1 gate shipped
+
+Owner directive: "apply the best and most successful option, zero to
+hundred." With strategy-space exhausted (sprints 5-7), the committee's
+documented best option was the reopening path: **different data**.
+
+New data: the **volume** column already in both window CSVs (first use in
+repo history) and **funding rates** — Binance USDT-M 8h events
+2024-03-01 → 2026-08-31 (2,742/symbol) fetched from the public
+data.binance.vision archive (Binance API itself is geo-blocked; OKX's own
+history only reaches ~2 months back — the Binance series is the documented
+proxy for window B, funding being arb-aligned across venues). Committed to
+`analysis/data_funding/`.
+
+Round 1 (artifact `analysis/runs/v24_sprint8.json`):
+
+| Test | A | B | Result |
+|---|---|---|---|
+| V1 vol>med100 gate | 163.56 | 143.06 | ✗ identical — **tautological** |
+| V4 vol<med100 ("quiet breakout") | 0 trades | 0 trades | ✗ no such bar exists |
+| FR2 skip crowded p90/10 | 155.26 | 160.59 | ✗ hurts A |
+| SV1 VolShock 3× (solo) | +183.13 | +28.81 | free trades B −$51 ✗ mirror |
+| SF1 FundTrap contrarian | −45.69 | −21.63 | ✗ loses outright |
+
+**The finding:** volume cannot gate this edge — every breakout bar already
+carries above-median volume (the breakout IS the volume event). Funding
+can. Round 2 found two both-window passes and a robustness grid confirmed
+a genuine plateau, not a peak:
+
+| Gate | A | B | vs baseline 163.56 / 143.06 |
+|---|---|---|---|
+| FR2b rolling p95 (p92-95 all pass) | +180.2 | +147.0 | ✓ (needs 90d history at runtime) |
+| **FR3b absolute ±0.01%/8h (0.010-0.020 all pass)** | **+188.3 PF 2.05** | **+147.1** | ✓ **shipped** |
+
+Standalone funding/volume strategies all failed the sprint-7 free-trade
+rule — there is no second independent edge in this data either; but funding
+works as a **gate on the incumbent**.
+
+**Shipped (full end-to-end):** the FR3b gate — skip a Donchian breakout
+entry when our side is the crowded, paying side of the funding market
+(long blocked if funding > +0.01%/8h, short mirrored; the threshold is the
+exchange-standard default rate). Stateless (current rate only —
+restart-proof), fail-open (a data outage never blocks trades), env
+kill-switch (`DONCHIAN_FUNDING_MAX_LONG/MIN_SHORT`, 0 = off). Wiring:
+`app/data/funding.py` FundingFeed (OKX public, 30min TTL) →
+`HtfContext.funding_rate` → `DonchianTrend.evaluate` gate (blocks logged)
+→ `/api/status` exposes `funding_rates`. 132/132 tests green. Gold parity
+check: the real class through the live code path reproduces the validated
+improvement (gate off A +163.9/B +141.8 → gate on **A +188.6 PF 2.06 /
+B +145.8**).
+
+Expected live effect vs the old behaviour: fewer crowded-side entries
+(~11% of window-A signals, ~1% of window-B), higher per-trade quality.
+
 ## Backlog (priority order)
 
 1. **S2 — Walk-forward re-validation of Donchian parameters** (entry_len,
