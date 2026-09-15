@@ -152,6 +152,38 @@ parameter churn.
 Backlog update: the program's active phase is now the live evaluation
 gate (~50 Donchian trades vs the B-window profile).
 
+
+### Sprint 5 (2026-09-15) — "SMC in combination" (owner challenge) ✅ nothing qualifies
+
+Owner: many traders profit from SMC *combined* with other tools — find that
+combination and prove it profitable. External consensus on the combination
+styles (LuxAlgo workflow, TradingView SMC scripts guidance, backtrex 2026):
+zones as confluence not standalone entries, HTF-trend agreement, liquidity
+targets, session timing, stacked setups.
+
+Eight fusion variants, two rounds, two-window rule
+(artifact `analysis/runs/v24_sprint5.json`):
+
+| Fusion | A | B | Verdict |
+|---|---|---|---|
+| F1 ICT 2022 model (sweep→displacement FVG→retest) | 0 trades | 0 trades | void (EMA filter kills sweeps) |
+| F1b same, no EMA filter | n=1 | n=1 | void — fires once per window |
+| F2 5★ OB + EMA trend + 3R targets | −18.9 (n=90) | −5.1 (n=40) | ✗ veto |
+| F3 5★ OB, killzone-only | −23.0 | +5.4 (PF 1.45) | ✗ — A negative |
+| F3b killzone + 5★ + trend | +7.8 | +1.0 | combo degrades B ✗ |
+| F4 Donchian × OB-confluence filter | n=1 | n=2 | structurally incompatible (breakouts leave zones behind) |
+| F4b Donchian × liquidity-pool (EQH/EQL) breakouts | n=3 | n=5 | void — subset of baseline |
+
+**Answer to the challenge:** the combination style could not be proven
+profitable — on this data, with this cost model, under the repo's two-window
+rule. Across 20+ SMC variants tested in v23.7/v23.8/v24-sprint5, exactly one
+element ever showed a whiff of edge (killzone gating, window B only) and it
+fails the other window. Claims of profitable SMC+X trading survive on
+survivorship, discretionary filtering, unbacktested discretion or markets we
+cannot test (volume/flow data). What WOULD reopen the case: (a) exact rules
+of a specific claimed-profitable system → tested here, (b) volume-bearing
+data, (c) a 4h-timeframe test — logged as backlog options.
+
 ## Backlog (priority order)
 
 1. **S2 — Walk-forward re-validation of Donchian parameters** (entry_len,
