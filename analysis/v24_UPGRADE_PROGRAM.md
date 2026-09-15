@@ -184,6 +184,37 @@ cannot test (volume/flow data). What WOULD reopen the case: (a) exact rules
 of a specific claimed-profitable system → tested here, (b) volume-bearing
 data, (c) a 4h-timeframe test — logged as backlog options.
 
+
+### Sprint 6 (2026-09-15) — the masters invent: 10 new styles ✅ 3 validated, 0 shipped
+
+Owner directive: use the council to invent or find NEW styles. Ten tested
+across two rounds (artifact `analysis/runs/v24_sprint6.json`):
+
+| Style (school) | A | B | Result |
+|---|---|---|---|
+| Turtle 20/10 (Dennis/Eckhardt) | −96.5 | −176.1 | ✗ fees vs frequency |
+| Turtle + 1×ATR margin | **+26.5** | **+53.5** | ✓ solo-pass |
+| Connors RSI-2 pullback | −173.1 | −154.2 | ✗ targets < fees |
+| TTM squeeze breakout | +110.9 | −7.4 | ✗ (round 1) |
+| Squeeze + ATR-expansion confirm | **+61.6** | **+21.3** | ✓ solo-pass |
+| Prior-day high/low break | −11.6 | −8.3 | ✗ |
+| Chandelier trail-only (LeBeau) | +88.3 | −22.9 | ✗ (round 1) |
+| Chandelier 4×ATR | **+71.8** | **+55.7** | ✓ solo-pass |
+| RSI divergence (strict / pure) | n=0 | n=0 / n=4 | void |
+
+**The finding:** three new both-window-positive styles exist — the first
+besides Donchian in this repo's history — but every combination with the
+incumbent degrades at least one window, and the decomposition shows their
+profitable entries are the SAME breakout bars Donchian already takes; their
+unique entries lose money. They are replicas of one edge (breakout momentum
++ regime), not independent edges.
+
+**Decision:** nothing ships. The three are recorded as the **validated
+bench** — ranked fallbacks (1. Turtle+1ATR, 2. Chandelier-4ATR,
+3. Squeeze+confirm) if Donchian_Trend ever fails its live evaluation gate.
+Portfolio-diversifying edges (cross-sectional momentum, carry/funding,
+volume-based) need data we do not carry — documented as reopening paths.
+
 ## Backlog (priority order)
 
 1. **S2 — Walk-forward re-validation of Donchian parameters** (entry_len,
