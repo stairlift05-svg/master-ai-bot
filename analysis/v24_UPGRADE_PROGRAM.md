@@ -118,6 +118,40 @@ Also: MAX_POS env default aligned with the class default (8; was an
 inconsistent 5 left over from v23.7). `/api/status` now exposes
 `max_same_side`. Tests 120/120.
 
+
+### Sprint 4 (2026-09-15) — council of trading masters ✅ (nothing shipped, by evidence)
+
+Owner complaint: the bot makes no trades; directive: convene a top-tier
+trading-masters council and upgrade the strategy.
+
+**Diagnosis first** (live): engine healthy, scanning every ~70s, zero
+halts, all decisions "no signal — 4h sideways" across all 9 symbols.
+Validated Donchian frequency is 0.42-0.48 trades/day → **P(no trade in
+18h) = 72%** — the flat gap was a normal draw from the strategy's own
+distribution, not a defect. Live trigger-distance scan: 4 symbols (ETH,
+BTC, DOGE, SOL) were sitting ON or past their 40-bar breakdown triggers
+with the EMA-regime filter short-enabled — the coil was already at the
+edge (entries imminent, no code change warranted).
+
+**Three classical master techniques, two-window tested**
+(artifact `analysis/runs/v24_sprint4.json`):
+
+| Technique | A (base +160.5) | B (base +127.0) | Verdict |
+|---|---|---|---|
+| Turtle-style breakout retest entry | +29.3 (n=76) | +47.7 (n=96) | ✗ veto — waiting for retests misses the best trends (they never look back) |
+| Volatility-regime gate (ATR pct ≥ 40/50/60%) | +133/+129/+126 | +112/+121/+139 | ✗ veto — every threshold trades away A's net for B's PF |
+| Per-side split (info only) | long +68 / short +101 | long +42 / short +96 | no action — longs positive in both windows; the N-04 long gate already handles the weak tail |
+
+**Council verdict:** the shipped Donchian configuration is already at a
+local optimum on this evidence. The live lesson of Sep 8-14 cuts both
+ways: the last time the bot traded *more*, it *lost* (Imba: 24 trades in
+6 days = −$10.7). Patience IS the edge; the remaining upside is
+structural (maker fees, disk persistence, live-sample gate), not
+parameter churn.
+
+Backlog update: the program's active phase is now the live evaluation
+gate (~50 Donchian trades vs the B-window profile).
+
 ## Backlog (priority order)
 
 1. **S2 — Walk-forward re-validation of Donchian parameters** (entry_len,
