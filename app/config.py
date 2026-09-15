@@ -49,6 +49,15 @@ V5_SYMBOL: Dict[str, str] = {k: k[:-3] + "USDT" for k in SYMBOL_MAP}
 # Our timeframe name -> Bybit v5 interval code.
 TF_V5: Dict[str, str] = {"1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240"}
 
+# v30 (2026-09-15, owner directive): distinct bot identity. Renamed from
+# "IMBA ALGO Engine" to DonchianGuard — the strategy it runs (Donchian_Trend)
+# plus its guard stack (EMA regime gate, long-distance gate, same-side
+# exposure cap MAX_SAME_SIDE=4, funding-crowding gate). Version numbering
+# jumps to 30 by owner decree; the internal research line stays v24-sprint
+# (see analysis/v24_UPGRADE_PROGRAM.md).
+BOT_NAME = "DonchianGuard"
+BOT_VERSION = "30"
+
 # Default strategy parameter sets (v20.1 high-timeframe family).
 DEFAULT_STRATEGY_PARAMS: Dict[str, Dict[str, float]] = {
     k: dict(v) for k, v in _V2_DEFAULTS.items()
@@ -127,6 +136,10 @@ def _env_bool(name: str, default: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
     """Immutable validated engine settings (built once at startup)."""
+
+    # ---- Identity (v30) --------------------------------------------------
+    bot_name: str = BOT_NAME
+    bot_version: str = BOT_VERSION
 
     # ---- Exchange / API layer (#08) -------------------------------------
     arlax_key: str = ""
@@ -347,6 +360,8 @@ class Settings:
     def from_env(cls) -> "Settings":
         """Build :class:`Settings` from the process environment."""
         return cls(
+            bot_name=_env_str("BOT_NAME") or BOT_NAME,
+            bot_version=_env_str("BOT_VERSION") or BOT_VERSION,
             arlax_key=_env_str("ARIAX_KEY"),
             arlax_secret=_env_str("ARIAX_SECRET"),
             arlax_base=_env_str("ARIAX_BASE", "https://dryclean-app-1.onrender.com"),
