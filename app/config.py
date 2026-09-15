@@ -370,6 +370,12 @@ class Settings:
                     **DEFAULT_STRATEGY_PARAMS["Donchian_Trend"],
                     "long_dist_atr": _env_float(
                         "DONCHIAN_LONG_DIST_ATR", 1.0, 0.0, 10.0),
+                    # v24 sprint 8: funding-crowding gate (dual-window pass,
+                    # analysis/runs/v24_sprint8.json). 0 disables each side.
+                    "funding_max_long": _env_float(
+                        "DONCHIAN_FUNDING_MAX_LONG", 0.0001, 0.0, 0.01),
+                    "funding_min_short": _env_float(
+                        "DONCHIAN_FUNDING_MIN_SHORT", -0.0001, -0.01, 0.0),
                 },
             },
             leverage=_env_int("LEVERAGE", 5, 1, 100),

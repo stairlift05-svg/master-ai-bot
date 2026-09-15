@@ -30,6 +30,7 @@ from app.api.signing import RequestSigner
 from app.capital.margin import MarginManager
 from app.config import Settings
 from app.data.feed import CandleFeed
+from app.data.funding import FundingFeed
 from app.errors import AriaXAPIError, ConfigError, DataUnavailableError
 from app.execution.executor import OrderExecutor
 from app.execution.watchdog import PositionWatchdog
@@ -63,6 +64,9 @@ class QuantEngine:
         self.client = client or AriaXClient(settings, self.signer)
         self.margin = MarginManager(settings, self.client, state)
         self.feed = CandleFeed(settings, self.client, state)
+        # v24 sprint 8: current funding rates for the Donchian crowding gate
+        # (fail-open: a fetch outage never blocks trades).
+        self.funding = FundingFeed()
 
         # Strategy + risk.
         self.strategy = StrategyEngine(settings, state)
@@ -133,6 +137,7 @@ class QuantEngine:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         await self.client.close()
         await self.feed.close()
+        await self.funding.close()
         await self.tg.close()
         log.info("Engine shut down cleanly")
 
@@ -287,8 +292,10 @@ class QuantEngine:
             self.prices[sym] = last_close
             self.last_price_ts[sym] = time.time()
 
+        funding_rate = await self.funding.get(sym)
         result = self.strategy.analyze(df5, df15, df1, symbol=sym,
-                                       drop_forming=True)
+                                       drop_forming=True,
+                                       funding_rate=funding_rate)
         await self.db.log_decision(
             sym, result.action, result.strategy, result.reason,
             self.prices.get(sym, 0.0), result.rsi, result.atr, result.htf,

@@ -49,7 +49,8 @@ class StrategyEngine:
 
     # ------------------------------------------------------------------
     def analyze(self, df5: CandleSeries, df15: CandleSeries, df1: CandleSeries,
-                symbol: str = "", drop_forming: bool = True) -> AnalysisResult:
+                symbol: str = "", drop_forming: bool = True,
+                funding_rate: Optional[float] = None) -> AnalysisResult:
         """Run the full multi-timeframe signal pipeline.
 
         Args:
@@ -59,6 +60,8 @@ class StrategyEngine:
             drop_forming: exclude the final bar of each series (live scans
                 often run mid-bar; the backtest passes False because bars
                 are already closed).
+            funding_rate: current perpetual funding rate (v24 sprint 8
+                crowding gate; None = unknown, gate stays inert).
         """
         if drop_forming:
             df5 = df5.without_last()
@@ -72,7 +75,8 @@ class StrategyEngine:
                 f"insufficient data ({len(closes5)}/{MIN_BARS_5M} bars)",
             )
 
-        ctx = self._build_context(symbol, df5, df15, df1)
+        ctx = self._build_context(symbol, df5, df15, df1,
+                                   funding_rate=funding_rate)
         self._state.record_trend_strength(symbol, ctx.tf1.strength)
 
         for strategy in self._strategies:
@@ -104,7 +108,8 @@ class StrategyEngine:
 
     # ------------------------------------------------------------------
     def _build_context(self, symbol: str, df5: CandleSeries,
-                       df15: CandleSeries, df1: CandleSeries) -> HtfContext:
+                       df15: CandleSeries, df1: CandleSeries,
+                       funding_rate: Optional[float] = None) -> HtfContext:
         # v22.1: label the context slots with the CONFIGURED timeframes, not
         # the historical "5m/15m/1h" names (the shipped config is 1h/4h/4h —
         # reports used to show a "15m RSI" that was really the 4h RSI).
@@ -122,6 +127,7 @@ class StrategyEngine:
             candle_bull_5m=len(closes) >= 2 and closes[-1] > closes[-2],
             candle_bear_5m=len(closes) >= 2 and closes[-1] < closes[-2],
             min_stop_pct=s.min_stop_pct,
+            funding_rate=funding_rate,
             round_trip_cost_pct=round_trip,
             min_edge_ratio=s.min_edge_ratio,
         )

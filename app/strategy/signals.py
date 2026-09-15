@@ -28,12 +28,15 @@ Each family is the responsibility of one think-tank specialist agent:
 """
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from app.models import Signal
 from app.strategy import indicators as ind
+
+log = logging.getLogger("quant.signals")
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +88,10 @@ class HtfContext:
     # edge per trade (+$0.02) smaller than cost per trade (~$0.14).
     round_trip_cost_pct: float = 0.0
     min_edge_ratio: float = 0.0
+    # v24 sprint 8: current perpetual funding rate for the symbol (fraction
+    # per 8h, e.g. 0.0001 = 0.01%). Crowding signal for the Donchian funding
+    # gate. None (default) = unknown -> any funding gate stays inert.
+    funding_rate: Optional[float] = None
 
 
 class _SignalTooSmall(Exception):
@@ -468,13 +475,37 @@ class DonchianTrend(BaseStrategyV2):
         # slow EMA by that many ATR before it is taken. Shorts are untouched.
         long_gate = atr * p.get("long_dist_atr", 0.0)
 
+        # v24 sprint 8 (dual-window validated: A +$188.26 / B +$147.10 vs
+        # baseline +$163.56 / +$143.06; plateau 0.010%-0.020%; artifact
+        # analysis/runs/v24_sprint8.json): the funding-crowding gate. When
+        # longs are paying an above-standard funding rate the long side is
+        # crowded and breakout longs underperform; mirrored for shorts.
+        # Threshold 0.0001 = 0.01%/8h, the exchange-standard default rate.
+        # 0 disables the gate; a None rate (data unavailable) leaves it
+        # inert — a data outage can never block trades.
+        fr = getattr(ctx, "funding_rate", None)
+        fmax_long = float(p.get("funding_max_long", 0.0) or 0.0)
+        fmin_short = float(p.get("funding_min_short", 0.0) or 0.0)
+        long_funding_ok = fr is None or fmax_long <= 0 or fr <= fmax_long
+        short_funding_ok = fr is None or fmin_short >= 0 or fr >= fmin_short
+
         if (price > hh + margin and slope_ok_up
                 and (price - ema_slow) >= long_gate):
+            if not long_funding_ok:
+                log.info(
+                    "%s: funding gate blocked long breakout (rate %.4f%% > %.4f%%)",
+                    ctx.symbol, fr * 100, fmax_long * 100)
+                return None
             return self._build(
                 ctx, "buy", f"{entry_len}-bar channel breakout (trend up)",
                 sl_dist=sl_dist, tp_dist=tp_dist, confidence=0.7,
             )
         if price < ll - margin and slope_ok_dn:
+            if not short_funding_ok:
+                log.info(
+                    "%s: funding gate blocked short breakdown (rate %.4f%% < %.4f%%)",
+                    ctx.symbol, fr * 100, fmin_short * 100)
+                return None
             return self._build(
                 ctx, "sell", f"{entry_len}-bar channel breakdown (trend down)",
                 sl_dist=sl_dist, tp_dist=tp_dist, confidence=0.7,
@@ -765,8 +796,16 @@ DEFAULT_V2_PARAMS: Dict[str, Dict[str, float]] = {
     # OOS window B improves +$4.01 net with window A unchanged; every value
     # >= 1.5 collapses the OOS window, so do NOT raise it without a new
     # two-window validation).
+    # funding_max_long/min_short (v24 sprint 8): skip a breakout entry when
+    # the perpetual funding rate says our side is the crowded, paying side
+    # (long blocked if funding > +0.01%/8h, short if < -0.01%/8h — the
+    # exchange-standard rate; plateau 0.010-0.020% all passes both windows,
+    # analysis/runs/v24_sprint8.json: A +$188.26/B +$147.10 vs baseline
+    # +$163.56/+$143.06, PF 2.05/1.56). 0 disables; None data = inert.
     "Donchian_Trend": {"entry_len": 40, "sl_m": 2.5, "tp_m": 20.0,
-                       "break_atr": 1.5, "long_dist_atr": 1.0},
+                       "break_atr": 1.5, "long_dist_atr": 1.0,
+                       "funding_max_long": 0.0001,
+                       "funding_min_short": -0.0001},
     "TrendPullback_HTF": {"sl_m": 2.0, "tp_m": 3.0, "trend_min": 0.03},
     "HTF_Breakout": {"sl_m": 2.0, "tp_m": 4.0, "trend_min": 0.015, "break_tol": 0.002},
     "MomentumRetrace_RSI": {"sl_m": 2.0, "tp_m": 2.2, "trend_min": 0.02,

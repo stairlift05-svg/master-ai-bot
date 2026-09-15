@@ -34,9 +34,10 @@ import logging
 log = logging.getLogger("quant.main")
 
 
-def run_web(settings: Settings, state: EngineState, db, closer=None) -> None:
+def run_web(settings: Settings, state: EngineState, db, closer=None,
+            funding=None) -> None:
     """Run the Flask dashboard in a daemon thread."""
-    app = create_app(state, db, settings, closer=closer)
+    app = create_app(state, db, settings, closer=closer, funding=funding)
     log.info("Flask dashboard on 0.0.0.0:%d", settings.port)
     app.run(host="0.0.0.0", port=settings.port, debug=False,
             use_reloader=False, threaded=True)
@@ -62,7 +63,8 @@ async def _amain(settings: Settings, state: EngineState) -> None:
                 "detail": str(getattr(res, "reason", res) or "ok")}, 200
 
     web_thread = threading.Thread(
-        target=run_web, args=(settings, state, engine.db, _api_close), daemon=True,
+        target=run_web, args=(settings, state, engine.db, _api_close,
+                              engine.funding), daemon=True,
         name="flask-dashboard",
     )
     web_thread.start()

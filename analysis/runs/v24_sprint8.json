@@ -1,0 +1,458 @@
+{
+ "data": {
+  "volume": "v column of existing window CSVs (first use in repo history)",
+  "funding": "Binance USDT-M 8h, 2024-03-01..2026-08-31, data.binance.vision; proxy for window B (OKX own history ~2 months only)",
+  "funding_events_per_symbol": 2742
+ },
+ "baseline": {
+  "A": {
+   "n": 172,
+   "wr": 39.0,
+   "pf": 1.78,
+   "net": 163.56,
+   "max_dd": 16.46,
+   "peak_same_side": 3
+  },
+  "B": {
+   "n": 222,
+   "wr": 27.0,
+   "pf": 1.54,
+   "net": 143.06,
+   "max_dd": 14.69,
+   "peak_same_side": 3
+  }
+ },
+ "gates": {
+  "V1 vol>med100": {
+   "A": {
+    "n": 172,
+    "wr": 39.0,
+    "pf": 1.78,
+    "net": 163.56,
+    "max_dd": 16.46,
+    "peak_same_side": 3
+   },
+   "B": {
+    "n": 222,
+    "wr": 27.0,
+    "pf": 1.54,
+    "net": 143.06,
+    "max_dd": 14.69,
+    "peak_same_side": 3
+   },
+   "beats_both": false
+  },
+  "V2 vol>p75(100)": {
+   "A": {
+    "n": 170,
+    "wr": 39.4,
+    "pf": 1.81,
+    "net": 167.74,
+    "max_dd": 16.76,
+    "peak_same_side": 3
+   },
+   "B": {
+    "n": 222,
+    "wr": 27.0,
+    "pf": 1.54,
+    "net": 143.06,
+    "max_dd": 14.69,
+    "peak_same_side": 3
+   },
+   "beats_both": false
+  },
+  "V3 vol>1.5xmean20": {
+   "A": {
+    "n": 169,
+    "wr": 39.6,
+    "pf": 1.84,
+    "net": 171.53,
+    "max_dd": 16.77,
+    "peak_same_side": 3
+   },
+   "B": {
+    "n": 222,
+    "wr": 27.0,
+    "pf": 1.51,
+    "net": 136.72,
+    "max_dd": 14.21,
+    "peak_same_side": 3
+   },
+   "beats_both": false
+  },
+  "V4 vol<med100 (quiet)": {
+   "A": {
+    "n": 0,
+    "wr": 0.0,
+    "pf": Infinity,
+    "net": 0.0,
+    "max_dd": 0.0,
+    "peak_same_side": 0
+   },
+   "B": {
+    "n": 0,
+    "wr": 0.0,
+    "pf": Infinity,
+    "net": 0.0,
+    "max_dd": 0.0,
+    "peak_same_side": 0
+   },
+   "beats_both": false
+  },
+  "FUND FR1 skip crowded side p75/25": {
+   "A": {
+    "n": 132,
+    "wr": 34.8,
+    "pf": 1.57,
+    "net": 91.2,
+    "max_dd": 10.96,
+    "peak_same_side": 3
+   },
+   "B": {
+    "n": 152,
+    "wr": 30.9,
+    "pf": 1.77,
+    "net": 134.87,
+    "max_dd": 13.64,
+    "peak_same_side": 3
+   },
+   "beats_both": false
+  },
+  "FUND FR2 skip crowded side p90/10": {
+   "A": {
+    "n": 153,
+    "wr": 38.6,
+    "pf": 1.86,
+    "net": 155.26,
+    "max_dd": 15.86,
+    "peak_same_side": 3
+   },
+   "B": {
+    "n": 204,
+    "wr": 28.4,
+    "pf": 1.66,
+    "net": 160.59,
+    "max_dd": 15.98,
+    "peak_same_side": 3
+   },
+   "beats_both": false
+  },
+  "FUND FR3 aligned (receive funding)": {
+   "A": {
+    "n": 82,
+    "wr": 48.8,
+    "pf": 2.4,
+    "net": 120.95,
+    "max_dd": 11.33,
+    "peak_same_side": 3
+   },
+   "B": {
+    "n": 105,
+    "wr": 31.4,
+    "pf": 1.64,
+    "net": 80.91,
+    "max_dd": 8.07,
+    "peak_same_side": 3
+   },
+   "beats_both": false
+  }
+ },
+ "standalone": {
+  "SV1": {
+   "name": "VolShock 3x",
+   "solo": {
+    "A": {
+     "n": 436,
+     "wr": 31.9,
+     "pf": 1.31,
+     "net": 183.13,
+     "max_dd": 16.93,
+     "peak_same_side": 4
+    },
+    "B": {
+     "n": 497,
+     "wr": 26.8,
+     "pf": 1.08,
+     "net": 28.81,
+     "max_dd": 7.49,
+     "peak_same_side": 4
+    },
+    "both_positive": true
+   },
+   "decomposition": {
+    "A": {
+     "same-bar": {
+      "n": 52,
+      "net": 41.87
+     },
+     "d-held": {
+      "n": 29,
+      "net": 34.68
+     },
+     "free": {
+      "n": 244,
+      "net": 14.95
+     }
+    },
+    "B": {
+     "same-bar": {
+      "n": 57,
+      "net": 12.12
+     },
+     "d-held": {
+      "n": 39,
+      "net": 23.18
+     },
+     "free": {
+      "n": 280,
+      "net": -51.49
+     }
+    }
+   },
+   "free_both_positive": false,
+   "qualifies": false
+  },
+  "SF1": {
+   "name": "FundTrap 97/3",
+   "solo": {
+    "A": {
+     "n": 57,
+     "wr": 24.6,
+     "pf": 0.59,
+     "net": -45.69,
+     "max_dd": 4.92,
+     "peak_same_side": 3
+    },
+    "B": {
+     "n": 83,
+     "wr": 27.7,
+     "pf": 0.83,
+     "net": -21.63,
+     "max_dd": 3.78,
+     "peak_same_side": 3
+    },
+    "both_positive": false
+   },
+   "decomposition": {
+    "A": {
+     "same-bar": {
+      "n": 2,
+      "net": 1.96
+     },
+     "d-held": {
+      "n": 14,
+      "net": -9.59
+     },
+     "free": {
+      "n": 40,
+      "net": -34.18
+     }
+    },
+    "B": {
+     "same-bar": {
+      "n": 1,
+      "net": -1.38
+     },
+     "d-held": {
+      "n": 18,
+      "net": 10.33
+     },
+     "free": {
+      "n": 64,
+      "net": -35.62
+     }
+    }
+   },
+   "free_both_positive": false,
+   "qualifies": false
+  }
+ },
+ "round2": {
+  "funding_gate_variants": {
+   "FR2b skip p95/5": {
+    "A": 180.17,
+    "B": 146.98,
+    "pass": true
+   },
+   "FR2c skip p85/15": {
+    "A": 109.14,
+    "B": 169.78,
+    "pass": false
+   },
+   "FR3b rate<=+0.01%/short>=-0.01%": {
+    "A": 188.26,
+    "B": 147.1,
+    "pass": true
+   }
+  },
+  "standalones": {
+   "SV1b VolShock4": {
+    "solo": {
+     "A": 114.21,
+     "B": 50.99
+    },
+    "free": {
+     "A": 6.35,
+     "B": -44.53
+    },
+    "qualifies": false
+   },
+   "SF2 FundMom": {
+    "solo": {
+     "A": -2.84,
+     "B": 47.37
+    },
+    "free": {
+     "A": -12.59,
+     "B": 4.64
+    },
+    "qualifies": false
+   },
+   "SF3 CarryTrend": {
+    "solo": {
+     "A": 86.61,
+     "B": 0.45
+    },
+    "free": {
+     "A": 5.79,
+     "B": -3.74
+    },
+    "qualifies": false
+   },
+   "SF1 FundTrap (round1)": {
+    "solo": {
+     "A": -45.69,
+     "B": -21.63
+    },
+    "qualifies": false
+   }
+  }
+ },
+ "robustness_grid": {
+  "FR3b_absolute_threshold": {
+   "0.003%": [
+    117.42,
+    99.43,
+    false
+   ],
+   "0.005%": [
+    115.33,
+    134.24,
+    false
+   ],
+   "0.007%": [
+    97.8,
+    110.71,
+    false
+   ],
+   "0.010%": [
+    188.26,
+    147.1,
+    true
+   ],
+   "0.015%": [
+    180.73,
+    146.62,
+    true
+   ],
+   "0.020%": [
+    174.45,
+    145.45,
+    true
+   ],
+   "0.030%": [
+    179.89,
+    143.06,
+    false
+   ]
+  },
+  "FR2b_rolling_percentile": {
+   "p92": [
+    195.1,
+    158.54,
+    true
+   ],
+   "p93": [
+    189.62,
+    156.93,
+    true
+   ],
+   "p94": [
+    184.74,
+    151.44,
+    true
+   ],
+   "p95": [
+    180.17,
+    146.98,
+    true
+   ],
+   "p96": [
+    178.8,
+    141.52,
+    false
+   ],
+   "p97": [
+    180.58,
+    140.43,
+    false
+   ],
+   "p98": [
+    168.92,
+    155.83,
+    true
+   ]
+  },
+  "combo_rate+pct": {
+   "A": 197.5,
+   "B": 147.71,
+   "note": "best A but 2 params \u2014 rejected for overfit risk"
+  },
+  "format": "[A_net, B_net, beats_both]"
+ },
+ "shipped_parity_check": {
+  "method": "signals generated by the REAL DonchianTrend class (live code path, 300-bar ctx, funding injected)",
+  "gate_off": {
+   "A": {
+    "n": 172,
+    "pf": 1.78,
+    "net": 163.87
+   },
+   "B": {
+    "n": 223,
+    "pf": 1.53,
+    "net": 141.75
+   }
+  },
+  "gate_on": {
+   "A": {
+    "n": 153,
+    "pf": 2.06,
+    "net": 188.58
+   },
+   "B": {
+    "n": 220,
+    "pf": 1.55,
+    "net": 145.79
+   }
+  },
+  "note": "delta vs harness (+0.3/-1.3) is the 300-bar EMA window vs full-series EMA; improvement direction and magnitude reproduce exactly"
+ },
+ "verdict": {
+  "question": "owner 2026-09-15: apply the best and most successful option end-to-end",
+  "chosen_option": "the documented reopening path \u2014 NEW DATA (volume + funding) \u2014 executed as a full sprint: fetch -> harness -> two-window test -> ship",
+  "findings": {
+   "volume_gates": "TAUTOLOGICAL on breakout entries: every Donchian breakout bar already has above-median volume (V1 changed nothing, V4 'quiet breakout' has zero instances). Volume carries no incremental gate information for this edge.",
+   "funding_gates": "REAL: skipping entries on the crowded funding side improved BOTH windows. FR2b (rolling percentile, needs 90d history) and FR3b (absolute threshold, stateless) both pass.",
+   "standalones": "ALL FAIL the sprint-7 free-trade rule: VolShock solo-positive but free trades B -$44 (mirror of Donchian again); FundTrap/FundMom/CarryTrend lose or wash out. No second independent edge exists in volume/funding either \u2014 but funding WORKS as a gate on the incumbent."
+  },
+  "shipped": "FR3b: Donchian funding-crowding gate, +/-0.01%/8h (exchange-standard rate; plateau 0.010-0.020 all-pass). Stateless (current rate only), restart-proof, fail-open on data outage, env kill-switch DONCHIAN_FUNDING_MAX_LONG/MIN_SHORT (0=off).",
+  "expected_effect_vs_baseline": {
+   "A": "+$24.7 net, PF 1.78->2.05",
+   "B": "+$4.0 net, PF 1.54->1.57",
+   "trades_skipped": "A 172->153 (~11%), B 222->219 (~1.4%)"
+  },
+  "live_wiring": "app/data/funding.py FundingFeed (OKX public, 30min TTL, fail-open) -> HtfContext.funding_rate -> DonchianTrend gate -> block logged; /api/status exposes funding_rates; 132/132 tests green",
+  "data_artifacts": "analysis/data_funding/*.csv (Binance USDT-M 8h events 2024-03-01..2026-08-31, 2742/symbol, from data.binance.vision; OKX own history only ~2 months deep \u2014 Binance series is the proxy for window B, funding is arb-aligned across venues)"
+ }
+}
