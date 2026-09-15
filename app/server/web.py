@@ -24,7 +24,7 @@ log = logging.getLogger("quant.web")
 _DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="fa" dir="rtl"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IMBA ALGO Engine — AriaX</title>
+<title>DonchianGuard v30 — AriaX</title>
 <style>
   body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#0d1117;
        color:#c9d1d9;margin:0;padding:24px}
@@ -50,7 +50,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   .mono{font-family:ui-monospace,Menlo,monospace;font-size:.78rem}
   .halo{color:#d29922;font-weight:600}
 </style></head><body>
-<h1>🚀 IMBA ALGO Engine — AriaX</h1>
+<h1>🛡️ DonchianGuard <span class="mono">v30</span> — AriaX</h1>
 <div class="sub" id="last">loading…</div>
 <div class="grid">
   <div class="card"><div class="label">Total Equity</div><div class="value" id="bal">—</div></div>
@@ -169,7 +169,9 @@ def create_app(state: EngineState, db: Database, settings=None, funding=None,
 
     @app.route("/health")
     def health():
-        return jsonify({"ok": True, "service": "imba-algo-engine"})
+        return jsonify({"ok": True, "service": "donchianguard",
+                        "name": getattr(settings, "bot_name", "DonchianGuard"),
+                        "version": getattr(settings, "bot_version", "30")})
 
     @app.route("/api/status")
     def api_status():
@@ -180,6 +182,8 @@ def create_app(state: EngineState, db: Database, settings=None, funding=None,
         snap["enabled_strategies"] = list(
             getattr(settings, "enabled_strategies", ()) or ())
         snap["max_same_side"] = getattr(settings, "max_same_side", 0)
+        snap["bot_name"] = getattr(settings, "bot_name", "DonchianGuard")
+        snap["bot_version"] = getattr(settings, "bot_version", "30")
         # v24 sprint 8: live funding rates feeding the Donchian crowding gate.
         snap["funding_rates"] = funding.snapshot() if funding is not None else {}
         return jsonify(snap)

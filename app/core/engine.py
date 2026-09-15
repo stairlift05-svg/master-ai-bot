@@ -102,7 +102,8 @@ class QuantEngine:
         if not self.settings.arlax_key or not self.settings.arlax_secret:
             raise ConfigError("ARIAX_KEY / ARIAX_SECRET missing (see .env.example)")
 
-        log.info("IMBA ALGO Engine starting | base=%s | symbols=%s",
+        log.info("%s v%s starting | base=%s | symbols=%s",
+                 self.settings.bot_name, self.settings.bot_version,
                  self.settings.arlax_base, list(self.settings.symbols))
 
         await self._health_check_with_retry()
@@ -624,7 +625,7 @@ class QuantEngine:
     async def _tg_dashboard(self) -> None:
         st = self.state.snapshot()
         await self.tg.send(
-            f"📊 <b>IMBA ALGO Engine</b>\n"
+            f"📊 <b>{self.settings.bot_name} v{self.settings.bot_version}</b>\n"
             f"Total ${st['balance']:.2f}\nFree ${st['free_balance']:.2f}\n"
             f"Pos {len(st['active_positions'])}/{self.settings.max_positions}\n"
             f"DD {st['current_dd']:.2f}% | "

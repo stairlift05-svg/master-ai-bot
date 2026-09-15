@@ -266,3 +266,18 @@ API behaviour.
 config validated at startup, live smoke checks against the exchange API.
 
 Signed off by the Chief Development Manager — 2026-08-27.
+
+## 2026-09-15 — v30: owner-directed rename to "DonchianGuard" (PR #33)
+
+The owner confirmed the sprint-8 changes are live and directed: give the bot
+a name distinct from the others, numbered version 30.
+
+- Identity constants in `app/config.py` (`BOT_NAME="DonchianGuard"`,
+  `BOT_VERSION="30"`, env-overridable) — research line stays v24-sprint.
+- Surfaces: dashboard title/header, `/health` (`service: donchianguard`,
+  `name`, `version`), `/api/status` (`bot_name`/`bot_version`), engine
+  startup log, Telegram dashboard header.
+- Deliberately unchanged: the GitHub repo name and the Render service name
+  (renaming either would break the deployment URL and existing wiring).
+- v30 = Donchian_Trend + guards: EMA200 regime, long-distance 1×ATR,
+  MAX_SAME_SIDE=4, funding-crowding gate ±0.01%/8h (sprint 8, live-verified).

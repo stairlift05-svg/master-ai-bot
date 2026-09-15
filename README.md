@@ -1,8 +1,14 @@
-# IMBA ALGO Engine — AriaX (v23)
+# 🛡️ DonchianGuard v30 — AriaX
 
-> **Renamed 2026-08-30 by owner directive** (formerly "Master Quant Engine").
-> Live strategy: IMBA ALGO final stack (`Imba_Fib`). Orders are sent for real
-> to the **AriaX testnet exchange** (`PAPER_MODE=false` on the deployment).
+> **Renamed 2026-09-15 by owner directive** (v30; formerly "IMBA ALGO Engine",
+> before that "Master Quant Engine"). Version numbering jumps to 30 by owner
+> decree; the internal research line remains v24 (sprints 1-8,
+> `analysis/v24_UPGRADE_PROGRAM.md`).
+> Live strategy: `Donchian_Trend` (dual-window validated) with the v30 guard
+> stack: EMA200 regime gate, long-distance gate, same-side exposure cap
+> (`MAX_SAME_SIDE=4`), and the funding-crowding gate (±0.01%/8h, sprint 8).
+> Orders are sent for real to the **AriaX testnet exchange**
+> (`PAPER_MODE=false` on the deployment).
 
 **موتور معاملاتی ماژولار برای صرافی آزمایشی AriaX** — بازطراحی کامل از نسخه تک‌فایلی v19.3 به یک سیستم ۱۰ ماژول حرفه‌ای با خودترمیمی، مدیریت ریسک سخت‌گیرانه و هارنس بک‌تست/استرس.
 
