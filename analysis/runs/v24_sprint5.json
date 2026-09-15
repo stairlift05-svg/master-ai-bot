@@ -1,0 +1,118 @@
+{
+ "F1 model2022 (sweep→FVG retest)": {
+  "A": {
+   "n": 0,
+   "wr": 0.0,
+   "pf": Infinity,
+   "net": 0.0,
+   "max_dd": 0.0
+  },
+  "B": {
+   "n": 0,
+   "wr": 0.0,
+   "pf": Infinity,
+   "net": 0.0,
+   "max_dd": 0.0
+  },
+  "solo_both_positive": false,
+  "beats_donchian_both": false
+ },
+ "F2 5★+trend+3R": {
+  "A": {
+   "n": 90,
+   "wr": 22.2,
+   "pf": 0.81,
+   "net": -18.93,
+   "max_dd": 3.34
+  },
+  "B": {
+   "n": 40,
+   "wr": 15.0,
+   "pf": 0.86,
+   "net": -5.05,
+   "max_dd": 1.13
+  },
+  "solo_both_positive": false,
+  "beats_donchian_both": false
+ },
+ "F3 killzone 5★": {
+  "A": {
+   "n": 105,
+   "wr": 39.0,
+   "pf": 0.78,
+   "net": -23.0,
+   "max_dd": 2.58
+  },
+  "B": {
+   "n": 45,
+   "wr": 46.7,
+   "pf": 1.45,
+   "net": 5.42,
+   "max_dd": 1.09
+  },
+  "solo_both_positive": false,
+  "beats_donchian_both": false
+ },
+ "F4 donchian×SMC-filter": {
+  "A": {
+   "n": 1,
+   "wr": 0.0,
+   "pf": 0.0,
+   "net": -1.42,
+   "max_dd": 0.0
+  },
+  "B": {
+   "n": 2,
+   "wr": 0.0,
+   "pf": 0.0,
+   "net": -2.99,
+   "max_dd": 0.13
+  },
+  "solo_both_positive": false,
+  "beats_donchian_both": false
+ },
+ "round2": {
+  "F1b model2022 no-EMA": {
+   "A": {
+    "n": 1,
+    "net": 2.64
+   },
+   "B": {
+    "n": 1,
+    "net": 1.49
+   },
+   "note": "statistically void — the strict sweep→displacement→retest sequence fires ~once per window"
+  },
+  "F3b KZ+5star+trend": {
+   "A": {
+    "n": 44,
+    "wr": 47.7,
+    "pf": 1.32,
+    "net": 7.78
+   },
+   "B": {
+    "n": 20,
+    "wr": 35.0,
+    "pf": 1.24,
+    "net": 1.01
+   },
+   "combo": {
+    "A": 180.28,
+    "B": 122.3
+   },
+   "note": "solo positive but tiny; combo improves A, degrades B — veto"
+  },
+  "F4b pool-breakout (EQH/EQL)": {
+   "A": {
+    "n": 3,
+    "net": 2.12
+   },
+   "B": {
+    "n": 5,
+    "net": 10.34
+   },
+   "note": "subset of Donchian signals — nearly never fires; void"
+  }
+ },
+ "verdict": "NO SMC combination qualifies. 8 fusion variants tested across two rounds (+ the 12 variants of v23.7/v23.8): every one is either negative on at least one window, dies after costs, fails the combo test, or has a void sample (n<6). The strongest single element found in 20+ tests: killzone session gating (window B PF 1.45) — but it fails window A. The only strategy that PROVES profitable on both windows remains Donchian_Trend (A +160/PF 1.74, B +127/PF 1.45)."
+}
